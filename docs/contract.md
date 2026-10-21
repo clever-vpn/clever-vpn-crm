@@ -7,7 +7,7 @@ Last updated: 2026-10-21
 - [`clever-vpn-docs/docs/contracts/crm-api.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/crm-api.md)
   —— 认证、`customers` 字段与可写性、激活码语义、错误码、限流、缺口清单。
 - [`clever-vpn-docs/docs/contracts/app-crm.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/app-crm.md)
-  —— 为什么 App 不直连 CRM。
+  —— App 是 CRM 的终端客户端：注册/付费/取码都在 App 内（`/api/app/v1`，⬜），许可仍只由 cf-api 签发。
 - [`clever-vpn-docs/docs/contracts/README.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/README.md)
   —— 状态图例与版本策略（`contract: 1`，只加不删）。
 
@@ -18,6 +18,7 @@ Last updated: 2026-10-21
 | 项 | 值 |
 |---|---|
 | 契约版本 | `CRM_CONTRACT_VERSION`（默认 `1`），由 `GET /__version` 回显 |
+| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 2` |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
 | 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
 | 可用的平台资源 | **只有 `customers`**（`/api/v1/customers` CRUD）；其余模块 403 |
