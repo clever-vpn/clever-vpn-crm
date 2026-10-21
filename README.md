@@ -42,7 +42,7 @@ npx wrangler deploy
 src/index.ts          Worker 入口（/health、/__version，其余待实现）
 src/db.ts             自迁移（schema 指纹）
 src/migrations.ts     迁移定义（随代码发布）
-docs/contract.md      CRM ⇄ cf-api 契约（草案）
+docs/contract.md      契约指针（正文在 clever-vpn-docs/docs/contracts/）
 docs/self-host.md     自托管部署指南
 ```
 

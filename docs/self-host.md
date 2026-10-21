@@ -81,4 +81,5 @@ pnpm install && npx wrangler deploy
 |---|---|
 | `D1_ERROR: no such table` | 首次请求还没触发迁移；访问一次 `/health` 之外的路径，或检查 `database_id` 是否正确 |
 | 调用 cf-api 返回 401 | `CF_API_TOKEN` 不是租户 token，或已失效 |
-| 激活码兑换失败 | 见 `docs/contract.md` §3：激活码需单次/可吊销等语义，当前仍在 cf-api 侧落地 |
+| 调用 cf-api 返回 403 | 访问了未开 `apiAccess` 的模块；当前只有 `customers` 可用 |
+| 激活码兑换失败 | 码就是 `customers.code`（16 位）；客户被冻结/过期会被 App 报 `CustomerFrozen`。语义见 `docs/contract.md` 指向的权威契约 |
