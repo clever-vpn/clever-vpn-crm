@@ -1,20 +1,24 @@
 # Clever VPN CRM
 
-> 开源的租户 CRM（White-label customer portal）—— **独立产品**，与 cf-api 平台解耦。
+> 开源的租户 CRM（White-label customer backend）—— **独立产品**，与 cf-api 平台解耦。
 
-终端用户在你的 CRM 里注册/登录/付费，CRM 通过**租户 API Token** 调 cf-api 完成：
+终端用户在 **App** 里注册/登录/付费；账号、订单与订阅由本 CRM 承载。CRM 通过**租户 API Token** 调 cf-api 完成：
 建账号 → 签发激活码 → 查询订阅与许可。App 拿到激活码后直接向 cf-api 换取设备许可，
-**不经过 CRM**。
+**许可不经过 CRM**。
 
 ```
-终端用户 ──注册/付费──▶ 本 CRM ──租户 API Token──▶ cf-api（SaaS 平台）
-   │                                                   ▲
-   └──下载 App──▶ clever-vpn-app ──激活码──▶ 许可 ─────┘
+终端用户 ──下载──▶ App ──注册/付费──▶ 本 CRM ──租户 API Token──▶ cf-api
+                    │                                              │
+                    │◀────────────── 激活码 ───────────────────────┘
+                    └──激活码──▶ cf-api ──▶ 设备许可 ──▶ 连接 VPN
 ```
+
+用户只面对一个 App，不需要知道 CRM / cf-api 的存在。
 
 ## 它不是什么
 
 - **不是** cf-api 的模块，cf-api 不认识 CRM；
+- **不是**面向终端用户的网站：没有 App 的品牌里，用户拿不到登录/收银台页面 —— 这些流程都在 App 内（见 `docs/contract.md` 指向的 `app-crm.md`）；
 - **不碰租户的钱**：支付走租户自己的商户号（支付适配器可插拔）；
 - **不存 cf-api 的客户数据**：只保存"终端用户 ↔ 激活码 ↔ 订阅状态"。
 
