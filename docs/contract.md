@@ -18,13 +18,14 @@ Last updated: 2026-10-21
 | 项 | 值 |
 |---|---|
 | 契约版本 | `CRM_CONTRACT_VERSION`（默认 `1`），由 `GET /__version` 回显 |
-| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 3` |
+| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 4` |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
 | 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
 | 可用的平台资源 | **只有 `customers`**（`/api/v1/customers` CRUD）；其余模块 403 |
 | 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
 | 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |
 | 换套餐 | 删旧客户 → 用**同一 `auth_id`** 建新客户（得到新 `code`）；流量余量/已用额度不继承 |
+| 支付通道 | 按构建：App Store = `apple_iap`、Play = `google_play`、官网下载 = `web_checkout`；商品/价格/退款由商店定义，CRM 只验证记账 |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
 | 控制参数 | `customers` 的 create/update 参数，由租户与 CRM 设定；平台只按它们判定能否使用 |
 | 计划 / 套餐 | **CRM 自己的概念**，平台没有；平台只看到 `licence_limit`（1–3）等参数 |
