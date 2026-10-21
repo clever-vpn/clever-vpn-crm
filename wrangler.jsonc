@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "clever-vpn-crm",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "clever-vpn-crm",
+      "database_id": "REPLACE_WITH_YOUR_D1_ID"
+    }
+  ],
+  // 由 wrangler secret put 提供（不要写进仓库）：
+  //   CF_API_TOKEN    租户 API Token（cv_api_…）
+  //   SESSION_SECRET  会话签名密钥
+  "vars": {
+    "CRM_TENANT_ID": "0",
+    "CF_API_BASE": "https://api.clever-vpn.org",
+    "CRM_CODE_VERSION": "dev",
+    "CRM_CONTRACT_VERSION": "1"
+  }
+}
