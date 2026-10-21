@@ -23,7 +23,7 @@ Last updated: 2026-10-21
 | 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
 | 可用的平台资源 | **只有 `customers`**（`/api/v1/customers` CRUD）；其余模块 403 |
 | 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
-| 设备额度 | `customers.licence_limit`（创建后固定；`0` = 不限） |
+| 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
 
 ## CRM 侧必须履行的义务
