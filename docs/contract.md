@@ -22,7 +22,7 @@ Last updated: 2026-10-21
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
 | 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
 | 可用的平台资源 | **只有 `customers`**（`/api/v1/customers` CRUD）；其余模块 403 |
-| 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销 |
+| 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，App 登录后自动取得 |
 | 设备额度 | `customers.licence_limit`（创建后固定；`0` = 不限） |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
 
@@ -35,6 +35,8 @@ Last updated: 2026-10-21
 3. **轮询兜底**：Webhook 尚不存在（⬜），默认 5 分钟按 `_updated_at` 增量拉取。
 4. **不可写字段**：`PATCH` 对白名单外字段**静默丢弃**（仍返回 200）⇒ 成功判据是
    HTTP 状态 + 返回行，不是"字段变了"。
+5. **激活码对终端用户不可见**：只经 `/api/app/v1/subscription` 交给已登录的 App；
+   不得出现在订单页/邮件/短信/客服模板里，日志只允许出现掩码尾号。
 
 ## 历史草案的修正（勿再按旧稿实现）
 
