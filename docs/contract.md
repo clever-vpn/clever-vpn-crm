@@ -1,74 +1,53 @@
-# CRM ⇄ cf-api 契约（草案 v0）
+# CRM ⇄ cf-api 契约（指针）
 
-> 状态：**草案**。cf-api 侧能力以实际实现为准，落地前需逐条核对（标记见"状态"列）。
-> 版本：`CRM_CONTRACT_VERSION=1`。兼容策略：**只加不删**；破坏性变更升版本并保留旧版本至少一个发布周期。
+Last updated: 2026-10-21
 
-## 0. 原则
+**契约正文不在本仓库。** 权威源：
 
-1. CRM 是**可选组件**：cf-api 不认识 CRM，只提供通用原语（租户 API Token、账号、激活码、许可）。
-2. CRM **只走公开接口**：托管形态与自托管形态使用同一套端点、同一个租户 Token，没有内部捷径。
-3. CRM **不碰资金**：支付由租户的支付服务商直连，CRM 只记录"已到账"事实。
-4. CRM **只存最小数据**：终端用户账号 + 激活码 + 订阅状态；cf-api 侧只存与许可相关的信息。
+- [`clever-vpn-docs/docs/contracts/crm-api.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/crm-api.md)
+  —— 认证、`customers` 字段与可写性、激活码语义、错误码、限流、缺口清单。
+- [`clever-vpn-docs/docs/contracts/app-crm.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/app-crm.md)
+  —— 为什么 App 不直连 CRM。
+- [`clever-vpn-docs/docs/contracts/README.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/README.md)
+  —— 状态图例与版本策略（`contract: 1`，只加不删）。
 
-## 1. 认证
+本仓库**不复制契约正文**：两处维护必然漂移。这里只记录"实现侧须知"。
 
-| 项 | 约定 | 状态 |
-|---|---|---|
-| 方案 | HTTP Header `Authorization: Bearer cv_api_<blob>`（租户 API Token） | ✅ cf-api 已有 `apiAuth` |
-| 作用域 | 仅租户自身的数据（网关按 token 内混淆的 tenantId 路由） | ✅ |
-| 轮换 | 支持轮换旧 token；旧 token 有失效窗口 | ⬜ 待确认 |
-| 权限最小集 | 账号读写、激活码签发、许可只读 | ⬜ 待实现（当前可能过宽） |
+## 实现侧须知
 
-## 2. 账号（终端用户，租户内）
+| 项 | 值 |
+|---|---|
+| 契约版本 | `CRM_CONTRACT_VERSION`（默认 `1`），由 `GET /__version` 回显 |
+| 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
+| 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
+| 可用的平台资源 | **只有 `customers`**（`/api/v1/customers` CRUD）；其余模块 403 |
+| 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销 |
+| 设备额度 | `customers.licence_limit`（创建后固定；`0` = 不限） |
+| 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
 
-| 能力 | 端点（拟） | 说明 | 状态 |
-|---|---|---|---|
-| 创建 | `POST /api/v2/accounts` | 只传最小字段：email、外部 id（CRM 侧主键） | ⬜ 核对是否允许 tenant 角色创建 |
-| 查询 | `GET /api/v2/accounts/{id}` | 用于对账 | ⬜ |
-| 更新 | `PATCH /api/v2/accounts/{id}` | 限额、备注等 | ⬜ |
+## CRM 侧必须履行的义务
 
-## 3. 激活码（**唯一的强耦合点**）
+1. **去重**：平台没有 `request_id`，`email` 也没有唯一约束 ⇒ 建号前先按
+   `filters[email][$eq]` 查；本地对 email 加唯一索引。
+2. **退避**：平台按租户限流 60 次/60 s，429 无 `Retry-After` ⇒ 令牌桶 + 指数退避，
+   4xx 不重试，401 告警（token 失效）。
+3. **轮询兜底**：Webhook 尚不存在（⬜），默认 5 分钟按 `_updated_at` 增量拉取。
+4. **不可写字段**：`PATCH` 对白名单外字段**静默丢弃**（仍返回 200）⇒ 成功判据是
+   HTTP 状态 + 返回行，不是"字段变了"。
 
-App 用激活码向 cf-api 换取设备许可，因此这条语义必须在 cf-api 侧定义清楚：
+## 历史草案的修正（勿再按旧稿实现）
 
-| 语义 | 要求 | 状态 |
-|---|---|---|
-| 生成 | 服务端生成，不可预测（非自增/非时间戳） | ⬜ |
-| 作用域 | 绑定租户（token → tenantId），跨租户不可用 | ✅ 反解含 tenantId |
-| 单次使用 | 首次兑换后标记 `used`，不可重复兑换 | ⬜ **待实现** |
-| 设备绑定 | 记录兑换时的设备标识；可解绑/换绑策略由租户配置 | ⬜ |
-| 有效期 | `expires_at`；过期不可兑换 | ⬜ |
-| 额度（可选） | 一码多设备 / 一台设备多码等策略 | ⬜ |
-| 吊销 | 退款/风控时可吊销未兑换的码 | ⬜ |
-| 幂等签发 | 同一 `request_id` 重复调用返回同一个码 | ⬜ |
-| 事件 | 兑换成功 → webhook 通知 CRM（可选） | ⬜ |
+旧版 `docs/contract.md` 曾假设：独立 `activation-codes` 资源、码单次使用、
+`/api/v2/accounts`、`/api/v2/platform/meta`、Webhook。核对 cf-api 实现后**均不成立**：
 
-接口（拟）：
+| 旧假设 | 实际情况 |
+|---|---|
+| `POST /api/v2/accounts` | 不存在；是 `/api/v1/customers` |
+| 独立签发激活码 + 吊销端点 | 不存在；码 = `customers.code`，随客户创建/删除 |
+| 码单次使用 | 不成立：一码多设备，额度由 `licence_limit` 控制，超限复用最旧 |
+| `GET /api/v2/licences` 可用 | 403（未开 `apiAccess`） |
+| Webhook + `X-CRM-Signature` | 未实现 |
+| `GET /platform/meta` 版本协商 | 未实现 |
 
-```
-POST /api/v2/activation-codes        { request_id, account_id, expires_at?, meta? }
-POST /api/v2/activation-codes/{code}/revoke
-GET  /api/v2/activation-codes?account_id=…
-```
+新增能力一律先改 `clever-vpn-docs` 的契约，再改这里。
 
-## 4. 订阅与许可（只读）
-
-| 能力 | 端点（拟） | 用途 | 状态 |
-|---|---|---|---|
-| 许可列表 | `GET /api/v2/licences?account_id=…` | CRM 展示"我的设备/有效期" | ⬜ 核对 |
-| 订阅状态 | `GET /api/v2/subscriptions?account_id=…` | 续费提醒 | ⬜ 可能需新增 |
-
-## 5. Webhook（cf-api → CRM）
-
-| 事件 | 载荷 | 签名 |
-|---|---|---|
-| `licence.expiring` | account_id、licence_id、expires_at | `X-CRM-Signature: sha256=…`（HMAC-SHA256，密钥由租户配置） |
-| `activation_code.redeemed` | code、account_id、device_id、at | 同上 |
-| `subscription.suspended` | account_id、reason | 同上 |
-
-要求：CRM 侧必须**幂等**处理（事件 id 去重）；cf-api 侧至少重试 3 次，指数退避。
-
-## 6. 版本协商
-
-`GET {CF_API_BASE}/api/v2/platform/meta`（拟）返回 `{ contract: 1, min_crm: "1.0" }`；
-CRM 启动时校验自己的 `CRM_CONTRACT_VERSION` 是否被支持，不支持则拒绝启动并给出提示。
