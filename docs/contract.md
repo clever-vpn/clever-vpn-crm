@@ -26,6 +26,7 @@ Last updated: 2026-10-21
 | 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
 | 控制参数 | `customers` 的 create/update 参数，由租户与 CRM 设定；平台只按它们判定能否使用 |
+| 计划 / 套餐 | **CRM 自己的概念**，平台没有；平台只看到 `licence_limit`（1–3）等参数 |
 
 ## CRM 侧必须履行的义务
 
