@@ -18,7 +18,7 @@ Last updated: 2026-10-21
 | 项 | 值 |
 |---|---|
 | 契约版本 | `CRM_CONTRACT_VERSION`（默认 `1`），由 `GET /__version` 回显 |
-| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 2` |
+| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 3` |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
 | 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
 | 可用的平台资源 | **只有 `customers`**（`/api/v1/customers` CRUD）；其余模块 403 |
@@ -44,8 +44,9 @@ Last updated: 2026-10-21
    HTTP 状态 + 返回行，不是"字段变了"。
 5. **激活码对终端用户不可见**：只经 `/api/app/v1/subscription` 交给已登录的 App；
    不得出现在订单页/邮件/短信/客服模板里，日志只允许出现掩码尾号。
-6. **登录态 = 两把 token**：登录/注册/刷新响应必须携带 `platform` 快照（= 激活码，用户不可见）；
-   登录不得因 cf-api 故障而失败；退出登录只清本地两把 token，**不**冻结客户。
+6. **登录态 = 两把 token**：登录成功时 `verify` 响应必须携带 `platform` 快照（= 激活码，用户不可见）；
+   无密码（邮箱验证码）、单个不透明 `session_token`（无硬过期，以撤销为准）。
+   登录不得因 cf-api 故障而失败；退出登录清本地两把 token，**不**冻结客户。
    报文与时序以 `app-crm.md` §2.6 为准，此处不复述。
 7. **控制参数由租户/CRM 设定**：平台不根据套餐/订单推断任何参数。具体值怎么得出
    （算法或人工）是 CRM 内部实现；写入走 `POST`/`PATCH`，平台只负责按值判定。
