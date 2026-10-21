@@ -22,7 +22,7 @@ Last updated: 2026-10-21
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
 | 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
 | 可用的平台资源 | **只有 `customers`**（`/api/v1/customers` CRUD）；其余模块 403 |
-| 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，App 登录后自动取得 |
+| 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
 | 设备额度 | `customers.licence_limit`（创建后固定；`0` = 不限） |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
 
@@ -37,6 +37,9 @@ Last updated: 2026-10-21
    HTTP 状态 + 返回行，不是"字段变了"。
 5. **激活码对终端用户不可见**：只经 `/api/app/v1/subscription` 交给已登录的 App；
    不得出现在订单页/邮件/短信/客服模板里，日志只允许出现掩码尾号。
+6. **登录态 = 两把 token**：`crm_token`（会话）+ `platform_token`（= 激活码，登录/注册/刷新响应携带）；
+   登录不得因 cf-api 故障而失败（快照取不到则 `platform:null, platform_status:"unknown"`）。
+   退出登录只清本地两把 token，**不**冻结客户。
 
 ## 历史草案的修正（勿再按旧稿实现）
 
