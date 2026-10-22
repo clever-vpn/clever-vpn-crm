@@ -10,11 +10,13 @@
 
 | 路径 | 内容 | 鉴权 |
 |---|---|---|
+| `/` | 品牌官网占位页（源文件 `site/index.html`，构建时复制到 assets 根） | 公开 |
 | `/admin/*` | 管理后台 SPA（React + Vite，产物 `web/dist/admin`） | Cookie 会话 |
 | `/api/admin/*` | 管理后台 API | Cookie 会话（`/bootstrap`、`/setup`、`/login*` 公开） |
 | `/api/app/v1/*` | App 接口（⬜ 待实现，契约在 `clever-vpn-docs`） | Bearer（另说） |
 
-`/` 目前 302 到 `/admin/`；品牌官网上线后 `/` 归官网、后台仍在 `/admin/`。
+官网目前是**占位页**：`/` 直接返回 `site/index.html`（不再 302 到 `/admin/`）。
+正式官网（价格 / 下载 / 条款 / 客服）待页面做完再替换同目录文件，路由不变。
 
 ## 2. 认证
 
@@ -112,8 +114,9 @@ console.log(`pbkdf2$sha256$50000$${b64(salt)}$${b64(bits)}`);' '新密码'
 ## 7. 开发
 
 ```bash
-npm run dev        # 构建 SPA + wrangler dev（:8788）
+npm run dev        # 构建官网 + SPA，再起 wrangler dev（:8788）
 npm run dev:web    # 只跑 vite（:5273，/api 代理到 8788）
+npm run build:site # 只把 site/ 复制到 web/dist/
 npm run typecheck  # Worker + web
 npm test           # 密码学/TOTP 单测
 ```
@@ -123,5 +126,5 @@ npm test           # 密码学/TOTP 单测
 ## 8. 尚未实现
 
 - 业务页面（客户 / 订单 / 套餐）：目前是占位卡片。
+- 官网正式内容（价格页 / 下载页 / 条款 / 隐私）：目前 `site/index.html` 只是占位。
 - App 接口 `/api/app/v1/*`（登录/套餐/下单/取码），契约见 `clever-vpn-docs`。
-- 品牌官网（`/`、`/pricing`、`/legal/*`）。

@@ -65,6 +65,7 @@ src/admin/            管理后台 API（认证 / 2FA / 会话 / 审计）
 src/db.ts             自迁移（schema 指纹）
 src/migrations.ts     迁移定义（随代码发布）
 web/                  管理后台 SPA（React + Vite，产物 web/dist/admin）
+site/                 品牌官网静态页（占位；构建时复制到 web/dist/ 根）
 docs/admin.md         管理后台说明（认证、初始化、恢复、API）
 docs/contract.md      契约指针（正文在 clever-vpn-docs/docs/contracts/）
 docs/self-host.md     自托管部署指南

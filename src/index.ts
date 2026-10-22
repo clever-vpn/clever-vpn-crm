@@ -55,7 +55,10 @@ export default {
     }
 
     if (url.pathname === "/") {
-      return Response.redirect(new URL("/admin/", url).toString(), 302);
+      // 官网占位页。assets 的 html_handling 设了 none，所以这里显式取 index.html。
+      return env.ASSETS.fetch(
+        new Request(new URL("/index.html", url).toString(), request),
+      );
     }
 
     const asset = await env.ASSETS.fetch(request);
