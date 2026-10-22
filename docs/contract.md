@@ -18,7 +18,8 @@ Last updated: 2026-10-21
 | 项 | 值 |
 |---|---|
 | 契约版本 | `CRM_CONTRACT_VERSION`（默认 `1`），由 `GET /__version` 回显 |
-| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 7` |
+| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 8` |
+| 套餐 | **租户自定义**（grant: days/traffic_gb/licence_limit + quota + speed + topup）；平台不识别套餐 |
 | 币种 | **单币种**，初始化时设定（默认 `CNY`），之后不可改；金额一律用最小单位整数（分） |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
 | 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
