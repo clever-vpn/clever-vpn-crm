@@ -8,70 +8,92 @@
 - 一个域名（可以稍后再配；先用 `*.workers.dev` 也能跑）
 - 一个 **cf-api 租户 API Token**（`cv_api_…`）——CRM 用它调平台接口
 
-## 1. 准备
+## 0. 为什么必须走 CI
 
-```bash
-git clone https://github.com/clever-vpn/clever-vpn-crm.git
-cd clever-vpn-crm
-pnpm install            # 或 npm install
-```
+**部署只有一条路径：GitHub Actions。** 不要在本地 `git clone` 后 build/deploy。
 
-## 2. 建库
+理由：租户大多是"不懂 Cloudflare 的运营者"，本地环境（Node 版本、wrangler 版本、
+Cloudflare 登录态）每次都能踩坑；而 CI 是**可复现、可审计、可升级**的：
+参数存在仓库里，谁点的、什么时候点的、部署了哪个 commit 都有记录。
 
-```bash
-npx wrangler login
-npx wrangler d1 create clever-vpn-crm
-```
+本地只用于开发：`npm run dev` 起一个 `wrangler dev`（端口 8788）。
 
-把输出的 `database_id` 填进 `wrangler.jsonc`（从 `wrangler.example.jsonc` 复制）。
+## 1. Fork
 
-## 3. 配置
+Fork `clever-vpn/clever-vpn-crm`。**建议设为 Private**（仓库里会出现你的租户参数），
+Private fork 的 Actions 消耗你自己的分钟数（Free 额度 2000 分钟/月，CRM 一次部署约
+1 分钟）。
 
-```bash
-npx wrangler secret put CF_API_TOKEN      # 租户 API Token
-npx wrangler secret put SESSION_SECRET    # 随便一串长随机值（会话签名）
-```
+## 2. 配置 Secrets / Variables
 
-编辑 `wrangler.jsonc` 的 `vars`：
+仓库 → **Settings → Secrets and variables → Actions**：
 
-| 变量 | 说明 |
+Secrets（加密，不可读回）：
+
+| 名称 | 内容 |
 |---|---|
-| `CRM_TENANT_ID` | 你在 cf-api 的租户 ID |
-| `CF_API_BASE` | 默认 `https://api.clever-vpn.org`，自建平台时改这里 |
-| `CRM_CODE_VERSION` | 可保持 `dev`（发布流水线会注入） |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token，权限：**Workers Scripts:Edit** + **D1:Edit**（+ Account Settings:Read） |
+| `CF_API_TOKEN` | cf-api 租户 API Token（`cv_api_…`） |
+| `SESSION_SECRET` | 随便一串 ≥32 字符的随机值（会话签名）；换掉 = 所有用户重新登录 |
 
-## 4. 部署
+Variables（明文）：
 
-```bash
-npx wrangler deploy
-```
+| 名称 | 必填 | 说明 |
+|---|---|---|
+| `CRM_TENANT_ID` | ✅ | 你在 cf-api 的租户 ID。**为空则 deploy 工作流整体跳过** |
+| `CLOUDFLARE_ACCOUNT_ID` | ✅ | Cloudflare 账号 ID |
+| `CF_API_BASE` | – | 默认 `https://api.clever-vpn.org`，自建平台时改这里 |
+| `D1_NAME` | – | 默认 `clever-vpn-crm` |
+| `WORKER_NAME` | – | 默认 `clever-vpn-crm` |
 
-首次访问任意业务路径时，Worker 会**自动建表**（schema 指纹），无需手工执行 SQL。
+> `CLOUDFLARE_API_TOKEN` 建议单独建一把、只给这个仓库用；它是"能改你 Cloudflare
+> 账号"的密钥，不要复用主账号 token。
+
+## 3. 跑一次 deploy
+
+Actions → **deploy** → **Run workflow**（`main` 分支）。
+
+工作流做的事（全部在 CI 里，你不需要本地执行任何命令）：
+
+1. `npm ci` → `npm run typecheck` → `npm test`；
+2. `wrangler d1 list` 找 `D1_NAME`，**不存在就 `wrangler d1 create`**（幂等）；
+3. `node scripts/render-config.mjs` 把 D1 id 与租户参数渲染进 `wrangler.ci.jsonc`；
+4. `wrangler deploy --config wrangler.ci.jsonc`；
+5. `wrangler secret put CF_API_TOKEN / SESSION_SECRET`；
+6. 在 run 的 Summary 里打印 Worker URL 与验证命令。
+
+因为第 4 步先于第 5 步，**首次部署后要再跑一次**（或等 secrets 生效后调用一次业务
+路径）。正常升级时 secrets 已存在，一次即可。
 
 验证：
 
 ```bash
-curl https://<your-worker>.workers.dev/health
-curl https://<your-worker>.workers.dev/__version
+curl -s https://<worker>.workers.dev/health      # {"status":"ok"}
+curl -s https://<worker>.workers.dev/__version   # code/contract/tenant
 ```
 
-## 5. 绑定域名（可选）
+`tenant` 必须等于你在 cf-api 的租户 ID；不等于是 Variables 没生效。
+
+首次访问任意业务路径时，Worker 会**自动建表**（schema 指纹），无需手工执行 SQL。
+
+
+## 4. 绑定域名（可选）
 
 在你自己的 Cloudflare zone 里给这个 Worker 添加 **Custom Domain**（不是 route），
 证书由 Cloudflare 自动签发。
 
-## 6. 升级
+## 5. 升级
 
-```bash
-git fetch --tags && git checkout vX.Y.Z
-pnpm install && npx wrangler deploy
-```
+同步上游仓库后 merge 到 `main`（或在 Actions 里对 `main` 重跑 **deploy**）。
+**不要**在本地 deploy：CI 会用同一套参数、同一份渲染逻辑重新部署。
 
-升级后第一个请求会自动把库迁移到新版本（迁移必须向后兼容；见 `src/migrations.ts` 顶部约束）。
+升级后第一个请求会自动把库迁移到新版本（迁移必须向后兼容；见 `src/migrations.ts`
+顶部约束）。
 
-## 7. 备份与迁移
+## 6. 备份与迁移
 
-- 快照：`npx wrangler d1 export clever-vpn-crm --remote --output backup.sql`
+- 快照（在本地可执行，只是只读导出）：
+  `npx wrangler d1 export clever-vpn-crm --remote --output backup.sql`
 - Cloudflare 控制台的 D1 页面有 **Time Travel**（Free 7 天 / Paid 30 天）可回滚
 - 想搬到我们的托管 CRM：把 `backup.sql` 交给我们导入即可（schema 同版本）
 
@@ -79,7 +101,26 @@ pnpm install && npx wrangler deploy
 
 | 现象 | 原因 |
 |---|---|
-| `D1_ERROR: no such table` | 首次请求还没触发迁移；访问一次 `/health` 之外的路径，或检查 `database_id` 是否正确 |
+| deploy 工作流一直 **skipped** | 没配 Variable `CRM_TENANT_ID`（空值即跳过） |
+| `Authentication error` / `Authentication failed` | `CLOUDFLARE_API_TOKEN` 缺 **D1:Edit** 或 **Workers Scripts:Edit** |
+| `A worker with this name already exists` | `WORKER_NAME` 被别的项目占用；换一个名字 |
+| 部署成功但 `/__version` 里 `tenant` 是 `0` | Variables 没配或工作流用了旧 run；重新 Run workflow |
+| 业务接口 401 / 502 | Worker secrets 没写入（首次部署需再跑一次，或检查 `CF_API_TOKEN`） |
+| `D1_ERROR: no such table` | 首次请求还没触发迁移；访问一次 `/health` 之外的路径，或检查 D1 是否绑到了正确的 `database_id` |
 | 调用 cf-api 返回 401 | `CF_API_TOKEN` 不是租户 token，或已失效 |
 | 调用 cf-api 返回 403 | 访问了未开 `apiAccess` 的模块；当前只有 `customers` 可用 |
 | 激活码兑换失败 | 码就是 `customers.code`（16 位）；客户被冻结/过期会被 App 报 `CustomerFrozen`。语义见 `docs/contract.md` 指向的权威契约 |
+
+## 附：不用 CI 的等价命令（仅排障用）
+
+CI 挂掉又急着上线时才这么干，事后请把参数补回 Variables，否则下次 CI 会盖掉：
+
+```bash
+npm ci
+npx wrangler d1 create clever-vpn-crm     # 已存在会报错，忽略
+D1_DATABASE_ID=<uuid> CRM_TENANT_ID=<id> node scripts/render-config.mjs
+npx wrangler deploy --config wrangler.ci.jsonc
+printf '%s' "$CF_API_TOKEN"   | npx wrangler secret put CF_API_TOKEN   --config wrangler.ci.jsonc
+printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET --config wrangler.ci.jsonc
+```
+

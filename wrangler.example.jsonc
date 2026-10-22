@@ -1,10 +1,9 @@
 {
-  // 自托管模板：复制为 wrangler.jsonc 后按注释填写。
-  //   cp wrangler.example.jsonc wrangler.jsonc
-  //   npx wrangler d1 create clever-vpn-crm     # 用返回的 database_id 替换下面
-  //   npx wrangler secret put CF_API_TOKEN
-  //   npx wrangler secret put SESSION_SECRET
-  //   npx wrangler deploy
+  // 仅供**本地开发**参考（wrangler dev 用；本地 D1 不需要真实 database_id）。
+  // 线上部署走 CI：fork → 配 Secrets/Variables → Actions「deploy」，
+  // 由 scripts/render-config.mjs 从 wrangler.jsonc 渲染 wrangler.ci.jsonc。
+  // 详见 docs/self-host.md。
+  //
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "clever-vpn-crm",
   "main": "src/index.ts",
