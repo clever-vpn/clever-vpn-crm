@@ -53,6 +53,44 @@ export const MIGRATIONS: Migration[] = [
          ON subscriptions (customer_id)`,
     ],
   },
+  {
+    id: "0002_admin",
+    statements: [
+      // 只有一个管理员账号：不做角色模型，需要多人时再加一列即可（additive）。
+      `CREATE TABLE IF NOT EXISTS admin_users (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         email TEXT NOT NULL UNIQUE,
+         password_hash TEXT NOT NULL,
+         totp_secret TEXT,
+         totp_enabled INTEGER NOT NULL DEFAULT 0,
+         failed_attempts INTEGER NOT NULL DEFAULT 0,
+         locked_until TEXT,
+         created_at TEXT NOT NULL,
+         updated_at TEXT NOT NULL
+       )`,
+      // id = sha256(token)；pending=1 表示"密码已过、还差 2FA"的 5 分钟挑战票。
+      `CREATE TABLE IF NOT EXISTS admin_sessions (
+         id TEXT PRIMARY KEY,
+         user_id INTEGER NOT NULL,
+         pending INTEGER NOT NULL DEFAULT 0,
+         created_at TEXT NOT NULL,
+         last_used_at TEXT NOT NULL,
+         ip TEXT,
+         user_agent TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_admin_sessions_user
+         ON admin_sessions (user_id)`,
+      `CREATE TABLE IF NOT EXISTS audit_log (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         at TEXT NOT NULL,
+         actor TEXT NOT NULL,
+         action TEXT NOT NULL,
+         target TEXT,
+         detail TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log (at)`,
+    ],
+  },
 ];
 
 /** schema 指纹：迁移 id 序列（顺序敏感） */

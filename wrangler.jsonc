@@ -3,6 +3,16 @@
   "name": "clever-vpn-crm",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
+  // 静态资源：管理后台 SPA（vite 产物，web/dist/admin）。
+  // 文件命中时由边缘直接返回、不执行 Worker；未命中才回到 Worker（/api/*、深链接回落 index.html）。
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    // 关掉自动斜杠/扩展名处理：SPA 深链接由 Worker 回落 index.html，
+    // 否则 /admin/settings 会被 307 成 /admin/（丢了路由）。
+    "html_handling": "none"
+  },
   "observability": {
     "enabled": true
   },
