@@ -5,8 +5,12 @@
 
 const encoder = new TextEncoder();
 
-/** 默认迭代次数。免费版 Workers 单请求 CPU 只有 10ms，可按需下调。 */
-export const DEFAULT_ITERATIONS = 100_000;
+/**
+ * 默认迭代次数。只用于管理员登录（全站唯一的密码），5 万次约 6ms：
+ * 免费版 Workers 单请求 CPU 只有 10ms，再高就可能超限。
+ * 付费想更硬：`wrangler secret put ADMIN_PBKDF2_ITERATIONS 210000`。
+ */
+export const DEFAULT_ITERATIONS = 50_000;
 export const MIN_ITERATIONS = 10_000;
 
 export function toBase64Url(bytes: Uint8Array): string {
