@@ -19,10 +19,12 @@
 ## 2. 认证
 
 - **一个账号**：`admin_users` 只有一行。需要多人时加 `role` 列即可（additive 迁移）。
-- **密码**：PBKDF2-HMAC-SHA256，默认 10 万次迭代，存储格式
+- **密码**：PBKDF2-HMAC-SHA256，默认 5 万次迭代，存储格式
   `pbkdf2$sha256$<iters>$<salt>$<hash>`（salt/hash 为 base64url）。
-  免费版 Workers 单请求 CPU 只有 10ms，登录若超时可下调：
-  `wrangler secret put ADMIN_PBKDF2_ITERATIONS`（最小 10000）。
+  全站只有管理员登录会付这个 CPU 代价（App 用户无密码）；5 万次约 6ms，
+  免费版 Workers 的单请求 CPU 就是 10ms。想要更硬：
+  `wrangler secret put ADMIN_PBKDF2_ITERATIONS`（如 210000，最小 10000）。
+  验证时按**存储里的迭代次数**计算，所以改默认值不会让旧密码失效。
 - **会话**：`admin_sessions` 存 token 的 sha256，Cookie 为
   `crm_admin`（`HttpOnly; Secure; SameSite=Lax`，30 天滑动）。
   与 App 的 `Bearer session_token` **完全分离**，互不影响。
@@ -76,9 +78,12 @@ const salt = crypto.getRandomValues(new Uint8Array(16));
 const b64 = (b) => Buffer.from(b).toString("base64url");
 const key = await crypto.subtle.importKey("raw", enc.encode(process.argv[1]), "PBKDF2", false, ["deriveBits"]);
 const bits = new Uint8Array(await crypto.subtle.deriveBits(
-  { name: "PBKDF2", hash: "SHA-256", salt, iterations: 100000 }, key, 256));
-console.log(`pbkdf2$sha256$100000$${b64(salt)}$${b64(bits)}`);' '新密码'
+  { name: "PBKDF2", hash: "SHA-256", salt, iterations: 50000 }, key, 256));
+console.log(`pbkdf2$sha256$50000$${b64(salt)}$${b64(bits)}`);' '新密码'
 ```
+
+> 备份文件（`wrangler d1 export`）里的 `password_hash` 属于敏感数据：
+> 按密码对待——不要进 git、不要发聊天工具、不要丢在公共网盘。
 
 ## 5. API 一览
 
