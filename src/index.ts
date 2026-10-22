@@ -1,27 +1,20 @@
 /**
  * Clever VPN CRM — Worker 入口
  *
- * 当前是**骨架**：只提供 `/health` 与 `/__version`，其余路径返回 501。
- * 业务接口（注册/登录/下单/发激活码）按 docs/contract.md 逐个落地。
+ * 三个面，同一个 Worker + 同一个 D1：
+ *   /                → 静态资源（管理后台 SPA）
+ *   /api/admin/*     → 管理后台 API（Cookie 会话）
+ *   /api/app/v1/*    → App 接口（待实现，契约见 app-crm.md）
  */
 
 import { ensureSchema } from "./db";
+import type { Env } from "./env";
+import { handleAdminApi } from "./admin/router";
 
-export interface Env {
-  DB: D1Database;
-  /** cf-api 租户 ID */
-  CRM_TENANT_ID?: string;
-  /** cf-api 基址（自托管/托管一致） */
-  CF_API_BASE?: string;
-  /** 租户 API Token（wrangler secret put CF_API_TOKEN） */
-  CF_API_TOKEN?: string;
-  /** 会话签名密钥（wrangler secret put SESSION_SECRET） */
-  SESSION_SECRET?: string;
-  /** 代码版本（发布时注入，用于 /__version 与托管侧版本核对） */
-  CRM_CODE_VERSION?: string;
-  /** 契约版本（与 cf-api 对齐的接口版本） */
-  CRM_CONTRACT_VERSION?: string;
-}
+export type { Env };
+
+/** 管理后台是 SPA：文件不存在时回落到 /admin/index.html */
+const ADMIN_INDEX = "/admin/index.html";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -46,16 +39,30 @@ export default {
       });
     }
 
-    // 任何业务路径都先确保库结构就绪（自迁移）
-    await ensureSchema(env.DB);
+    if (url.pathname.startsWith("/api/")) {
+      await ensureSchema(env.DB);
+      if (url.pathname.startsWith("/api/admin")) {
+        return handleAdminApi(request, env);
+      }
+      return json(
+        {
+          error: "not_implemented",
+          path: url.pathname,
+          hint: "App 接口按 docs/contract.md 实现（登录/套餐/下单/取码）",
+        },
+        501,
+      );
+    }
 
-    return json(
-      {
-        error: "not_implemented",
-        path: url.pathname,
-        hint: "按 docs/contract.md 实现（注册/登录/下单/激活码）",
-      },
-      501,
-    );
+    if (url.pathname === "/") {
+      return Response.redirect(new URL("/admin/", url).toString(), 302);
+    }
+
+    const asset = await env.ASSETS.fetch(request);
+    if (asset.status !== 404) return asset;
+    if (url.pathname.startsWith("/admin")) {
+      return env.ASSETS.fetch(new Request(new URL(ADMIN_INDEX, url).toString(), request));
+    }
+    return asset;
   },
 } satisfies ExportedHandler<Env>;

@@ -60,9 +60,12 @@
 ## 目录
 
 ```
-src/index.ts          Worker 入口（/health、/__version，其余待实现）
+src/index.ts          Worker 入口（/health、/__version、/api/* 路由）
+src/admin/            管理后台 API（认证 / 2FA / 会话 / 审计）
 src/db.ts             自迁移（schema 指纹）
 src/migrations.ts     迁移定义（随代码发布）
+web/                  管理后台 SPA（React + Vite，产物 web/dist/admin）
+docs/admin.md         管理后台说明（认证、初始化、恢复、API）
 docs/contract.md      契约指针（正文在 clever-vpn-docs/docs/contracts/）
 docs/self-host.md     自托管部署指南
 ```

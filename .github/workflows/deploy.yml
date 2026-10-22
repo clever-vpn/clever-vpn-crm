@@ -52,6 +52,9 @@ jobs:
           npm run typecheck
           npm test
 
+      - name: 构建管理后台（SPA）
+        run: npm run build:web
+
       - name: 确保 D1 存在
         id: d1
         run: |
@@ -95,6 +98,7 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${CF_API_TOKEN:-}" ]; then
@@ -105,6 +109,11 @@ jobs:
           fi
           printf '%s' "$CF_API_TOKEN"   | npx wrangler secret put CF_API_TOKEN   --config wrangler.ci.jsonc
           printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET --config wrangler.ci.jsonc
+          if [ -n "${SETUP_TOKEN:-}" ]; then
+            printf '%s' "$SETUP_TOKEN" | npx wrangler secret put SETUP_TOKEN --config wrangler.ci.jsonc
+          else
+            echo "::warning::未配置 SETUP_TOKEN，管理后台首次初始化会被禁用（见 docs/admin.md）"
+          fi
 
       - name: 摘要
         run: |

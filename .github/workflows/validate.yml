@@ -16,3 +16,5 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
+      - name: 构建管理后台（校验前端可编译）
+        run: npm run build:web

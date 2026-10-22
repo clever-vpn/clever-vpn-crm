@@ -41,6 +41,7 @@ Secrets（加密，不可读回）：
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API Token，权限：**Workers Scripts:Edit** + **D1:Edit**（+ Account Settings:Read） |
 | `CF_API_TOKEN` | cf-api 租户 API Token（`cv_api_…`） |
 | `SESSION_SECRET` | 随便一串 ≥32 字符的随机值（会话签名）；换掉 = 所有用户重新登录 |
+| `SETUP_TOKEN` | 管理后台首次初始化口令（`openssl rand -hex 24`）；不配则不能初始化管理员 |
 
 Variables（明文）：
 
@@ -79,6 +80,10 @@ curl -s https://<worker>.workers.dev/__version   # code/contract/tenant
 ```
 
 `tenant` 必须等于你在 cf-api 的租户 ID；不等于是 Variables 没生效。
+
+建管理员：打开 `https://<worker>.workers.dev/admin/`，用 `SETUP_TOKEN` + 邮箱 + 密码（≥12 位）
+创建唯一的管理员账号；之后可自行开启 TOTP 两步验证。若忘记密码/丢失 2FA，见
+[`docs/admin.md`](admin.md) §4（用 Cloudflare 账号直接改 D1）。
 
 首次访问任意业务路径时，Worker 会**自动建表**（schema 指纹），无需手工执行 SQL。
 
