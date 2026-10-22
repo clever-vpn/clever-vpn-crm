@@ -24,17 +24,32 @@
 - **不碰租户的钱**：支付走租户自己的商户号（支付适配器可插拔）；
 - **不存 cf-api 的客户数据**：只保存"终端用户 ↔ 激活码 ↔ 订阅状态"。
 
-## 自托管（Workers Free 即可）
+## 自托管（fork + CI，Workers Free 即可）
 
-```bash
-pnpm install
-npx wrangler d1 create clever-vpn-crm          # 记下 database_id
-cp wrangler.example.jsonc wrangler.jsonc       # 填入 database_id
-npx wrangler secret put CF_API_TOKEN           # 租户 API Token（cv_api_…）
-npx wrangler deploy
-```
+**部署只走 GitHub Actions，不在本地 build / deploy。**
 
-首次请求时 Worker 会**自动建表/迁移**（schema 指纹），无需手工执行 SQL。
+1. Fork 本仓库。
+2. Settings → Secrets and variables → Actions 里配：
+
+| 类型 | 名称 | 说明 |
+|---|---|---|
+| Secret | `CLOUDFLARE_API_TOKEN` | Workers Scripts:Edit + D1:Edit |
+| Secret | `CF_API_TOKEN` | cf-api 租户 token（`cv_api_…`） |
+| Secret | `SESSION_SECRET` | 随便一串长随机值（会话签名） |
+| Variable | `CRM_TENANT_ID` | 你在 cf-api 的租户 ID（**必填**，为空则跳过部署） |
+| Variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
+| Variable | `D1_NAME` / `WORKER_NAME` / `CF_API_BASE` | 可选，有默认值 |
+
+3. Actions → **deploy** → Run workflow。首次会自动 `wrangler d1 create`，
+   并用 `scripts/render-config.mjs` 把参数渲染进 `wrangler.ci.jsonc` 再部署。
+4. 打开输出的 `https://<worker>.workers.dev/__version` 核对 `tenant` / `code`。
+
+升级 = 同步上游后 merge 到 `main`，工作流自动重部；首个请求会**自动迁移表结构**
+（schema 指纹），无需手工执行 SQL。
+
+本地只用于开发：`npm run dev`（或工作区任务 `crm: dev`），**不要本地 deploy**。
+
+详细步骤与排障见 [`docs/self-host.md`](docs/self-host.md)。
 
 ## 托管形态
 

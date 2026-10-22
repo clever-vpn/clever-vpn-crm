@@ -1,0 +1,127 @@
+# 部署（CI 唯一路径）
+#
+# 自托管租户的用法：fork → 配 Secrets/Variables → 点 Run workflow。
+# 不要求在本地 clone / 安装 / deploy；本地只用于开发调试（npm run dev）。
+#
+# 需要的配置（Settings → Secrets and variables → Actions）：
+#   Secrets:   CLOUDFLARE_API_TOKEN（Workers Scripts:Edit + D1:Edit）
+#              CF_API_TOKEN（cf-api 租户 token，cv_api_…）
+#              SESSION_SECRET（随机长串）
+#   Variables: CRM_TENANT_ID（必填；为空则本工作流整体跳过）
+#              CLOUDFLARE_ACCOUNT_ID
+#              D1_NAME / WORKER_NAME / CF_API_BASE（可选，有默认值）
+name: deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-crm
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # 上游仓库 / 未配置租户的 fork：直接跳过，不制造红叉
+    if: ${{ vars.CRM_TENANT_ID != '' }}
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ${{ vars.WORKER_NAME || 'clever-vpn-crm' }}
+      D1_NAME: ${{ vars.D1_NAME || 'clever-vpn-crm' }}
+      CRM_TENANT_ID: ${{ vars.CRM_TENANT_ID }}
+      CF_API_BASE: ${{ vars.CF_API_BASE || 'https://api.clever-vpn.org' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 检查（typecheck + test）
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          npm test
+
+      - name: 确保 D1 存在
+        id: d1
+        run: |
+          set -euo pipefail
+          find_d1() {
+            npx wrangler d1 list --json | node -e '
+              let s = "";
+              process.stdin.on("data", (d) => (s += d)).on("end", () => {
+                const start = s.indexOf("[");
+                const rows = start >= 0 ? JSON.parse(s.slice(start)) : [];
+                const hit = rows.find((r) => r.name === process.env.D1_NAME);
+                process.stdout.write(hit ? hit.uuid : "");
+              });
+            '
+          }
+
+          ID="$(find_d1)"
+          if [ -z "$ID" ]; then
+            echo "D1「${D1_NAME}」不存在，创建…"
+            npx wrangler d1 create "$D1_NAME"
+            ID="$(find_d1)"
+          fi
+          if [ -z "$ID" ]; then
+            echo "::error::无法解析 D1 database_id（检查 CLOUDFLARE_API_TOKEN 是否有 D1:Edit）"
+            exit 1
+          fi
+          echo "D1_ID=$ID" >> "$GITHUB_OUTPUT"
+          echo "D1 database_id = $ID"
+
+      - name: 渲染部署配置
+        env:
+          D1_DATABASE_ID: ${{ steps.d1.outputs.D1_ID }}
+        run: node scripts/render-config.mjs
+
+      - name: 部署
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config wrangler.ci.jsonc 2>&1 | tee /tmp/deploy.log
+
+      - name: 写入 Worker secrets
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CF_API_TOKEN:-}" ]; then
+            echo "::error::缺少 secret CF_API_TOKEN（cf-api 租户 token）"; exit 1
+          fi
+          if [ -z "${SESSION_SECRET:-}" ]; then
+            echo "::error::缺少 secret SESSION_SECRET"; exit 1
+          fi
+          printf '%s' "$CF_API_TOKEN"   | npx wrangler secret put CF_API_TOKEN   --config wrangler.ci.jsonc
+          printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET --config wrangler.ci.jsonc
+
+      - name: 摘要
+        run: |
+          set -euo pipefail
+          URL="$(grep -aEo 'https://[A-Za-z0-9._-]+\.workers\.dev' /tmp/deploy.log | head -1 || true)"
+          {
+            echo "## CRM 已部署"
+            echo ""
+            echo "- Worker: \`${WORKER_NAME}\`"
+            echo "- 租户: \`${CRM_TENANT_ID}\`"
+            echo "- 平台: ${CF_API_BASE}"
+            if [ -n "$URL" ]; then
+              echo "- URL: $URL"
+              echo ""
+              echo '```'
+              echo "curl -s ${URL}/health"
+              echo "curl -s ${URL}/__version"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
