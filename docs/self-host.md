@@ -1,5 +1,11 @@
 # 自托管指南
 
+> 🤖 **用 agent 自动实施**：本仓库内置 skill `.github/skills/white-label-crm/SKILL.md`。
+> 在 fork 里对 Copilot 说「按 white-label-crm skill 部署」，它会带你配完
+> Secrets/Variables、跑 `deploy` 工作流并用 `/__version` 验收。
+>
+> **保证边界**：只保证缺省配置（只改 GitHub 里的 Secrets/Variables）下的部署正确。
+
 > 目标：租户用自己的 Cloudflare 账号，把 CRM 跑在自己的域名下。**Workers Free 即可启动**（D1 免费额度：5 GB 存储、500 万行读/天、10 万行写/天）。
 
 ## 前置
