@@ -34,6 +34,18 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export interface Me {
   email: string;
   totp_enabled: boolean;
+  /** 服务端是否真的配好了发信（EMAIL/RESEND_API_KEY + EMAIL_FROM） */
+  mail_ready: boolean;
+}
+
+export interface Bootstrap {
+  needs_setup: boolean;
+  setup_configured: boolean;
+  /** 可用的登录方式；没有的能力前端就不显示 */
+  methods: Array<"password" | "email">;
+  mail_ready: boolean;
+  /** 开发环境：验证码直接在响应里回显 */
+  dev_email_echo: boolean;
 }
 
 export interface SessionInfo {
@@ -116,17 +128,29 @@ export interface Quote {
 }
 
 export const api = {
-  bootstrap: () =>
-    call<{ needs_setup: boolean; setup_configured: boolean }>("GET", "/bootstrap"),
+  bootstrap: () => call<Bootstrap>("GET", "/bootstrap"),
   setup: (token: string, email: string, password: string) =>
     call<{ ok: true; email: string }>("POST", "/setup", { token, email, password }),
   login: (email: string, password: string) =>
     call<{ ok?: true; totp_required?: boolean }>("POST", "/login", { email, password }),
   loginTotp: (code: string) => call<{ ok: true }>("POST", "/login/totp", { code }),
+  /** 邮箱验证码登录：第一步发码（开发环境会把 code 带回来） */
+  loginEmailStart: (email: string) =>
+    call<{ ok: true; cooldown: number; code?: string; dev?: boolean }>("POST", "/login/email/start", { email }),
+  /** 邮箱验证码登录：第二步换会话 */
+  loginEmailVerify: (email: string, code: string) =>
+    call<{ ok?: true; totp_required?: boolean }>("POST", "/login/email/verify", { email, code }),
   logout: () => call<{ ok: true }>("POST", "/logout"),
   me: () => call<Me>("GET", "/me"),
   changePassword: (current: string, next: string) =>
     call<{ ok: true }>("POST", "/password", { current, next }),
+  /** 改密的第二种再认证：给当前邮箱发码 */
+  sendPasswordCode: () =>
+    call<{ ok: true; cooldown: number; code?: string; dev?: boolean }>("POST", "/password/send-code"),
+  changePasswordWithCode: (code: string, next: string) =>
+    call<{ ok: true }>("POST", "/password", { code, next }),
+  /** 发一封测试邮件：验证「配了」≠「能发」 */
+  testMail: () => call<{ ok: true; dev: boolean }>("POST", "/mail/test"),
   sessions: () => call<{ sessions: SessionInfo[] }>("GET", "/sessions"),
   revokeSession: (sid: string) => call<{ ok: true }>("DELETE", `/sessions/${sid}`),
   enrollTotp: () => call<{ secret: string; uri: string }>("POST", "/2fa/enroll"),

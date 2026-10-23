@@ -42,6 +42,7 @@ Secrets（加密，不可读回）：
 | `CF_API_TOKEN` | cf-api 租户 API Token（`cv_api_…`） |
 | `SESSION_SECRET` | 随便一串 ≥32 字符的随机值（会话签名）；换掉 = 所有用户重新登录 |
 | `SETUP_TOKEN` | 管理后台首次初始化口令（`openssl rand -hex 24`）；不配则不能初始化管理员 |
+| `RESEND_API_KEY` | 发信服务商 API key（与 `EMAIL` 绑定二选一，见下方"邮件"一节） |
 
 Variables（明文）：
 
@@ -52,9 +53,29 @@ Variables（明文）：
 | `CF_API_BASE` | – | 默认 `https://api.clever-vpn.org`，自建平台时改这里 |
 | `D1_NAME` | – | 默认 `clever-vpn-crm` |
 | `WORKER_NAME` | – | 默认 `clever-vpn-crm` |
+| `EMAIL_FROM` | – | 发信人地址（如 `noreply@your-domain.com`，域名需验证）；**与传输一起才算"邮件就绪"** |
 
 > `CLOUDFLARE_API_TOKEN` 建议单独建一把、只给这个仓库用；它是"能改你 Cloudflare
 > 账号"的密钥，不要复用主账号 token。
+
+## 2.5 邮件（App 登录的前提）
+
+**App 是无密码登录（只有邮箱验证码）⇒ 没配邮件，用户就无法注册/登录。**
+所以这一节实际上不是可选项：
+
+| 事项 | 配了 | 没配 |
+|---|---|---|
+| App 用户登录 | ✅ | ❌ `503 email_unavailable` |
+| 管理后台登录 | 密码 **或** 邮箱验证码 | 只有密码 |
+| 忘记后台密码 | 邮箱验证码自助重置 | 用 Cloudflare 账号进 D1 重置（`docs/admin.md` §4） |
+
+两种传输二选一（**不需要额外开关，配置即生效**）：
+
+1. **Cloudflare Email Service**：`wrangler.jsonc` 加 `send_email` 绑定，并设 `EMAIL_FROM`；
+2. **Resend**：设 `RESEND_API_KEY`（secret）+ `EMAIL_FROM`。
+
+配置完打开 **设置 → 邮件发送 → 发送测试邮件** 验一下——
+"配了 binding"不等于"能发"（域名未验证、额度耗尽都会失败）。
 
 ## 3. 跑一次 deploy
 

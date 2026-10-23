@@ -33,6 +33,13 @@ export function randomBytes(length: number): Uint8Array {
   return bytes;
 }
 
+/** 6 位数字验证码（无模偏差处理对 10^6 的余数足够均匀，用于一次性短码） */
+export function generateNumericCode(digits = 6): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  const n = ((bytes[0]! << 24) >>> 0) + (bytes[1]! << 16) + (bytes[2]! << 8) + bytes[3]!;
+  return String(n % 10 ** digits).padStart(digits, "0");
+}
+
 /** 会话 token / CSRF 值：32 字节随机数 */
 export function randomToken(length = 32): string {
   return toBase64Url(randomBytes(length));

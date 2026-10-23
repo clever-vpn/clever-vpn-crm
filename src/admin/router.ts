@@ -18,8 +18,10 @@ import {
   verifyPassword,
   verifyTotp,
 } from "./crypto";
+import { consumeCode, issueCode } from "./email-code";
 import { handleAdminPlans } from "./plans";
 import { handleAdminSubscriptions } from "./subscriptions";
+import { emailCodeAvailable, mailReady, sendMail } from "../mail";
 
 const SESSION_COOKIE = "crm_admin";
 const PENDING_COOKIE = "crm_admin_pending";
@@ -168,7 +170,14 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
   // ── 公开：是否需要初始化 ────────────────────────────────────────────
   if (method === "GET" && path === "/bootstrap") {
     const admin = await loadAdmin(env);
-    return json({ needs_setup: admin === null, setup_configured: Boolean(env.SETUP_TOKEN) });
+    return json({
+      needs_setup: admin === null,
+      setup_configured: Boolean(env.SETUP_TOKEN),
+      // 前端据此决定显示哪些登录方式：**没有的能力不显示**，而不是显示了再报错
+      methods: emailCodeAvailable(env) ? ["password", "email"] : ["password"],
+      mail_ready: mailReady(env),
+      dev_email_echo: emailCodeAvailable(env) && !mailReady(env),
+    });
   }
 
   // ── 公开：首次初始化（一次性 SETUP_TOKEN） ──────────────────────────
@@ -255,6 +264,77 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
     );
   }
 
+  // ── 公开：邮箱验证码登录（第一步：发码）────────────────────────────
+  // 恒定响应：不泄露"这个邮箱是不是管理员"；只有匹配才真的发信。
+  if (method === "POST" && path === "/login/email/start") {
+    const admin = await loadAdmin(env);
+    if (!admin) return fail(409, "needs_setup");
+    if (!emailCodeAvailable(env)) {
+      return fail(503, "email_unavailable", "未配置邮件发送，请使用密码登录");
+    }
+    const body = await readBody(request);
+    const email = str(body.email).toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(400, "invalid_email");
+
+    if (email !== admin.email.toLowerCase()) return json({ ok: true, cooldown: 60 });
+
+    const issued = await issueCode(env, email, "admin_login");
+    if (!issued.ok) return fail(502, "email_send_failed", "验证码发送失败，请改用密码登录");
+    return json({ ok: true, cooldown: 60, ...(issued.code ? { code: issued.code, dev: true } : {}) });
+  }
+
+  // ── 公开：邮箱验证码登录（第二步：换会话）────────────────────────
+  if (method === "POST" && path === "/login/email/verify") {
+    const admin = await loadAdmin(env);
+    if (!admin) return fail(409, "needs_setup");
+    const body = await readBody(request);
+    const email = str(body.email).toLowerCase();
+    const code = str(body.code);
+
+    if (admin.locked_until && Date.parse(admin.locked_until) > Date.now()) {
+      return fail(429, "locked", "尝试次数过多，请稍后再试");
+    }
+
+    const ok =
+      email === admin.email.toLowerCase() && (await consumeCode(env, email, "admin_login", code));
+    if (!ok) {
+      // 与密码登录共用同一套锁定计数，避免邮箱入口成为爆破入口
+      const failed = admin.failed_attempts + 1;
+      const lockedUntil = failed >= MAX_FAILED ? new Date(Date.now() + LOCK_MS).toISOString() : null;
+      await env.DB.prepare(
+        `UPDATE admin_users SET failed_attempts = ?, locked_until = ?, updated_at = ? WHERE id = ?`,
+      )
+        .bind(failed, lockedUntil, new Date().toISOString(), admin.id)
+        .run();
+      await audit(env, email || "anon", "login_email_failed", null, { failed });
+      return fail(401, "invalid_code", "验证码不正确或已过期");
+    }
+
+    await env.DB.prepare(
+      `UPDATE admin_users SET failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE id = ?`,
+    )
+      .bind(new Date().toISOString(), admin.id)
+      .run();
+
+    // 开了 TOTP 就必须还要第二步 —— 否则邮箱认证会成为绕过 2FA 的后门
+    if (admin.totp_enabled) {
+      const pending = await createSession(env, request, admin.id, true);
+      return json(
+        { totp_required: true },
+        200,
+        { "Set-Cookie": setCookie(PENDING_COOKIE, pending, PENDING_TTL_MS / 1000) },
+      );
+    }
+
+    const session = await createSession(env, request, admin.id, false);
+    await audit(env, admin.email, "login", null, { via: "email" });
+    return json(
+      { ok: true },
+      200,
+      { "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000) },
+    );
+  }
+
   // ── 公开：2FA 第二步 ───────────────────────────────────────────────
   if (method === "POST" && path === "/login/totp") {
     const admin = await loadAdmin(env);
@@ -298,7 +378,26 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
   if (subsResponse) return subsResponse;
 
   if (method === "GET" && path === "/me") {
-    return json({ email: admin.email, totp_enabled: Boolean(admin.totp_enabled) });
+    return json({
+      email: admin.email,
+      totp_enabled: Boolean(admin.totp_enabled),
+      mail_ready: mailReady(env),
+    });
+  }
+
+  // ── 发一封测试邮件：验证"配了"≠"能发" ─────────────────────────
+  if (method === "POST" && path === "/mail/test") {
+    if (!mailReady(env)) {
+      return fail(503, "email_unavailable", "未配置 EMAIL/RESEND_API_KEY 或 EMAIL_FROM");
+    }
+    const result = await sendMail(env, {
+      to: admin.email,
+      subject: "[CRM] 测试邮件",
+      text: `这封邮件来自 Clever VPN CRM。看到它说明发信配置可用（${new Date().toISOString()}）。`,
+    });
+    await audit(env, admin.email, "mail_test", null, { ok: result.ok, error: result.error ?? null });
+    if (!result.ok) return fail(502, "email_send_failed", result.error ?? "发送失败");
+    return json({ ok: true, dev: Boolean(result.dev) });
   }
 
   if (method === "POST" && path === "/logout") {
@@ -307,13 +406,29 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
     return json({ ok: true }, 200, { "Set-Cookie": clearCookie(SESSION_COOKIE) });
   }
 
+  // 改密的第二种再认证：给当前绑定邮箱发码（必须有会话才能调）
+  if (method === "POST" && path === "/password/send-code") {
+    if (!emailCodeAvailable(env)) {
+      return fail(503, "email_unavailable", "未配置邮件发送，请使用当前密码修改");
+    }
+    const issued = await issueCode(env, admin.email.toLowerCase(), "admin_password");
+    if (!issued.ok) return fail(502, "email_send_failed", "验证码发送失败");
+    return json({ ok: true, cooldown: 60, ...(issued.code ? { code: issued.code, dev: true } : {}) });
+  }
+
   if (method === "POST" && path === "/password") {
     const body = await readBody(request);
     const current = str(body.current);
+    const code = str(body.code);
     const next = str(body.next);
-    if (!(await verifyPassword(current, admin.password_hash))) {
-      return fail(401, "invalid_password");
+
+    // 再认证：当前密码 **或** 邮箱验证码（两者都证明"是你"，但不能都没有）
+    let verified = false;
+    if (current) verified = await verifyPassword(current, admin.password_hash);
+    else if (code) {
+      verified = await consumeCode(env, admin.email.toLowerCase(), "admin_password", code);
     }
+    if (!verified) return fail(401, "invalid_credential", "当前密码或验证码不正确");
     if (next.length < 12) return fail(400, "weak_password");
     const iterations = Number(env.ADMIN_PBKDF2_ITERATIONS ?? DEFAULT_ITERATIONS);
     await env.DB.prepare(`UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?`)

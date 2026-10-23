@@ -29,5 +29,8 @@ export default defineConfig({
     allowedHosts: ["crm.clever-vpn.org", "localhost", "127.0.0.1"],
     // 绕开 Caddy 直连 http://localhost:5181/admin/ 时也能调接口（同源代理）
     proxy: { "/api": "http://127.0.0.1:8788" },
+    // `npm run build:web` 会重写 web/dist；不忽略的话每次构建都会触发整页 reload，
+    // 而且 emptyOutDir 删目录会让 watcher 失准（实测 HMR 就此静默失效）。
+    watch: { ignored: ["**/dist/**", "**/node_modules/**"] },
   },
 });
