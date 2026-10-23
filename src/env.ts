@@ -33,8 +33,10 @@ export interface Env {
    * 为空时**不返回任何 CORS 头**（同源部署不需要）。
    */
   APP_ORIGINS?: string;
-  /** 可选：Cloudflare Email Service 绑定（本地开发没有，验证码走回显/日志） */
+  /** 可选：Cloudflare Email Service 绑定（未配置时用 RESEND_API_KEY） */
   EMAIL?: { send(options: Record<string, unknown>): Promise<unknown> };
-  /** 发信人（Email Service 要求域名已验证） */
+  /** 可选：Resend API key（HTTP 发信，与 EMAIL 绑定二选一） */
+  RESEND_API_KEY?: string;
+  /** 发信人（域名需已验证）；与上面任一项同时存在才算“邮件已就绪” */
   EMAIL_FROM?: string;
 }

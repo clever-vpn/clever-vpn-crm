@@ -21,7 +21,8 @@ export default function Settings({
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <PasswordCard />
+      <MailCard me={me} />
+      <PasswordCard mailReady={me.mail_ready} />
       <TotpCard me={me} onMeChanged={onMeChanged} />
       <SessionsCard />
       <AuditCard />
@@ -29,20 +30,47 @@ export default function Settings({
   );
 }
 
-function PasswordCard() {
+function PasswordCard({ mailReady }: { mailReady: boolean }) {
+  const [mode, setMode] = useState<"password" | "email">("password");
   const [current, setCurrent] = useState("");
+  const [code, setCode] = useState("");
   const [next, setNext] = useState("");
+  const [cooldown, setCooldown] = useState(0);
   const [state, setState] = useState<{ kind: "idle" | "ok" | "error"; text: string }>({
     kind: "idle",
     text: "",
   });
 
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [cooldown]);
+
+  async function sendCode() {
+    setState({ kind: "idle", text: "" });
+    try {
+      const res = await api.sendPasswordCode();
+      setCooldown(res.cooldown ?? 60);
+      setState(
+        res.code
+          ? { kind: "ok", text: `开发环境回显验证码：${res.code}（已自动填入）` }
+          : { kind: "ok", text: "验证码已发送到你的邮箱" },
+      );
+      if (res.code) setCode(res.code);
+    } catch (err) {
+      setState({ kind: "error", text: message(err, "发送失败") });
+    }
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setState({ kind: "idle", text: "" });
     try {
-      await api.changePassword(current, next);
+      if (mode === "password") await api.changePassword(current, next);
+      else await api.changePasswordWithCode(code, next);
       setCurrent("");
+      setCode("");
       setNext("");
       setState({ kind: "ok", text: "密码已更新，其它设备已退出登录" });
     } catch (err) {
@@ -53,18 +81,65 @@ function PasswordCard() {
   return (
     <form className="card" onSubmit={submit}>
       <h3>修改密码</h3>
-      <p className="hint">修改后其它设备的会话会被吊销。</p>
-      <div className="field">
-        <label htmlFor="current">当前密码</label>
-        <input
-          id="current"
-          type="password"
-          autoComplete="current-password"
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-          required
-        />
-      </div>
+      <p className="hint">
+        修改后其它设备的会话会被吊销。
+        {mailReady
+          ? "可以用当前密码，也可以改用邮箱验证码（忘了旧密码时用这个）。"
+          : "当前未配置邮件，只能用当前密码修改；忘了密码请按 docs/admin.md 用 D1 重置。"}
+      </p>
+
+      {mailReady && (
+        <div className="actions" style={{ marginBottom: 12 }}>
+          <button
+            type="button"
+            className={mode === "password" ? "primary" : undefined}
+            onClick={() => setMode("password")}
+          >
+            用当前密码
+          </button>
+          <button
+            type="button"
+            className={mode === "email" ? "primary" : undefined}
+            onClick={() => setMode("email")}
+          >
+            用邮箱验证码
+          </button>
+        </div>
+      )}
+
+      {mode === "password" ? (
+        <div className="field">
+          <label htmlFor="current">当前密码</label>
+          <input
+            id="current"
+            type="password"
+            autoComplete="current-password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            required
+          />
+        </div>
+      ) : (
+        <>
+          <div className="field">
+            <label htmlFor="code">邮箱验证码</label>
+            <div className="actions">
+              <input
+                id="code"
+                inputMode="numeric"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                required
+              />
+              <button type="button" onClick={sendCode} disabled={cooldown > 0}>
+                {cooldown > 0 ? `${cooldown}s` : "发送验证码"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
       <div className="field">
         <label htmlFor="next">新密码（至少 12 位）</label>
         <input
@@ -78,9 +153,7 @@ function PasswordCard() {
         />
       </div>
       {state.kind !== "idle" && (
-        <div className={`notice ${state.kind === "ok" ? "ok" : "error"}`}>
-          {state.text}
-        </div>
+        <div className={`notice ${state.kind === "ok" ? "ok" : "error"}`}>{state.text}</div>
       )}
       <div className="actions" style={{ marginTop: 12 }}>
         <button className="primary" type="submit">
@@ -88,6 +161,53 @@ function PasswordCard() {
         </button>
       </div>
     </form>
+  );
+}
+
+/** 邮件发信状态 —— 「配了」不等于「能发」，所以给一个真的发一封的按钮 */
+function MailCard({ me }: { me: Me }) {
+  const [state, setState] = useState<{ kind: "idle" | "ok" | "error"; text: string }>({
+    kind: "idle",
+    text: "",
+  });
+
+  async function test() {
+    setState({ kind: "idle", text: "" });
+    try {
+      const res = await api.testMail();
+      setState({
+        kind: "ok",
+        text: res.dev ? "开发环境不发信（已打日志）" : "测试邮件已发送，请查收",
+      });
+    } catch (err) {
+      setState({ kind: "error", text: message(err, "发送失败") });
+    }
+  }
+
+  return (
+    <div className="card">
+      <h3>邮件发送</h3>
+      <p className="hint">
+        App 是无密码登录，**发信是硬依赖**：没配好邮件，用户就无法注册/登录；
+        管理后台也只剩密码登录。
+      </p>
+      <div className="actions">
+        <span className={`tag ${me.mail_ready ? "tag-active" : "tag-draft"}`}>
+          {me.mail_ready ? "已配置" : "未配置"}
+        </span>
+        <button type="button" onClick={test} disabled={!me.mail_ready}>
+          发送测试邮件
+        </button>
+      </div>
+      {state.kind !== "idle" && (
+        <div className={`notice ${state.kind === "ok" ? "ok" : "error"}`}>{state.text}</div>
+      )}
+      {!me.mail_ready && (
+        <p className="hint" style={{ marginTop: 8 }}>
+          配置方式：`EMAIL` 绑定或 `RESEND_API_KEY`，并且设 `EMAIL_FROM`（域名需验证）。
+        </p>
+      )}
+    </div>
   );
 }
 

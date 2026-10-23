@@ -30,9 +30,15 @@
 - **会话**：`admin_sessions` 存 token 的 sha256，Cookie 为
   `crm_admin`（`HttpOnly; Secure; SameSite=Lax`，30 天滑动）。
   与 App 的 `Bearer session_token` **完全分离**，互不影响。
+- **登录方式**：**密码**（永远可用）+ **邮箱验证码**（服务端配了发信才出现）。
+  能力由 `GET /api/admin/bootstrap` 的 `methods` 上报，前端**不显示不可用的方式**。
+  开发环境（`ENVIRONMENT != production`）验证码直接回显，不需要配邮件。
 - **2FA（可选）**：TOTP（RFC 6238，SHA1/6 位/30 秒），绑定返回 secret 与
   `otpauth://` 链接（手动输入到认证器）。开启后登录分两步：密码 → `crm_admin_pending`
   （5 分钟挑战）→ 6 位验证码。
+  **邮箱验证码登录也必须过这一步** —— 否则邮箱认证就成了绕过 2FA 的后门。
+- **改密码**：可以用当前密码，也可以改用**发到当前绑定邮箱的验证码**（忘了旧密码时用）。
+  改邮箱只能靠当前密码（验证码不能改邮箱，否则验证码=全权）。
 - **CSRF**：所有写操作要求请求头 `x-crm-request: 1`（跨源请求无法静默携带自定义头，
   且本 Worker 不对 `/api/admin` 返回 CORS 头）。
 - **限流 / 锁定**：同一账号连续 5 次密码错误锁定 15 分钟（429）。
@@ -53,6 +59,10 @@
 
 > 只要 Cloudflare 账号在手，一切都能找回来。**故意不提供 `/recover` 端点**：
 > 少一个可被攻击的入口。
+>
+> 顺序：① 配了邮件 → 后台「邮箱验证码登录」自助回来；
+> ② 邮件没配 / 邮箱也进不去 / 2FA 丢失 → **走下面的 D1 重置**（这一条永远有效，
+> 因为它不依赖任何一个外部服务）。
 
 忘记密码 / 丢失 2FA / 账号被锁，在 D1 上执行（本地或 Dashboard 都行）：
 
@@ -67,7 +77,7 @@ UPDATE admin_users SET totp_enabled = 0, totp_secret = NULL;
 --    见下方命令；把输出整串贴到下面
 UPDATE admin_users SET password_hash = '<pbkdf2$sha256$...>';
 
--- 4) 踢掉所有会话（可选）
+-- 4) 踢掉所有会话（**必做**：重置的意义之一就是让旧登录态失效）
 DELETE FROM admin_sessions;
 ```
 

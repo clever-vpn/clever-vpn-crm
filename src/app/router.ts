@@ -17,7 +17,9 @@
  * 未实现（下一步）：下单 `/orders`、支付回调、`/orders/iap`、取码与 cf-api 落账。
  */
 
-import { randomToken, sha256Hex, timingSafeEqual } from "../admin/crypto";
+import { randomToken, sha256Hex } from "../admin/crypto";
+import { consumeCode, issueCode } from "../admin/email-code";
+import { emailCodeAvailable } from "../mail";
 import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
 import { currentMainSubscription } from "../subscriptions/store";
@@ -28,9 +30,6 @@ import type { CurrentSubscription } from "../plans/quote";
 import type { Subscription } from "../plans/subscription";
 
 const APP_CONTRACT = 10;
-const CODE_TTL_MS = 10 * 60 * 1000;
-const CODE_COOLDOWN_MS = 60 * 1000;
-const CODE_MAX_ATTEMPTS = 5;
 /** 会话不做硬过期（契约 §2.6），这里只在活跃度上留痕 */
 const SESSION_TOUCH_MS = 5 * 60 * 1000;
 
@@ -43,11 +42,6 @@ function json(body: unknown, status = 200, extra?: HeadersInit): Response {
 
 const err = (status: number, code: string, message?: string): Response =>
   json({ error: { code, ...(message ? { message } : {}) } }, status);
-
-/** 非 production 才回显验证码（与 cf-api / cf-dashboard 同一做法） */
-function isDev(env: Env): boolean {
-  return (env.ENVIRONMENT ?? "development") !== "production";
-}
 
 // ---- CORS（契约 §3）----
 
@@ -86,12 +80,6 @@ function normalizeEmail(raw: unknown): string {
 }
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-function generateCode(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(4));
-  const n = ((bytes[0]! << 24) >>> 0) + (bytes[1]! << 16) + (bytes[2]! << 8) + bytes[3]!;
-  return String(n % 1_000_000).padStart(6, "0");
-}
 
 interface CustomerRow {
   id: number;
@@ -214,7 +202,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
       app_contract: APP_CONTRACT,
       crm_version: env.CRM_CODE_VERSION ?? "dev",
       currency: "CNY",
-      features: ["passwordless", "plan_kinds", "upgrade_quote"],
+      // email_code = 这台 CRM 能不能发验证码（开发环境恒为 true，因为直接回显）
+      features: [
+        ...(emailCodeAvailable(env) ? ["passwordless", "email_code"] : []),
+        "plan_kinds",
+        "upgrade_quote",
+      ],
       min_app: "2.0.0",
     });
   }
@@ -225,36 +218,15 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const email = normalizeEmail(body.email);
     if (!EMAIL_RE.test(email)) return err(400, "invalid_request", "邮箱格式不对");
 
-    const now = Date.now();
-    const existing = await env.DB.prepare(
-      `SELECT sent_at FROM email_codes WHERE email = ?`,
-    ).bind(email).first<{ sent_at: string }>();
-    if (existing && now - Date.parse(existing.sent_at) < CODE_COOLDOWN_MS) {
-      return json({ ok: true, cooldown: 60 }); // 恒定响应，不泄露是否已发过
+    // 没配邮件 = App 根本不能登录，必须明确报出来（而不是 500 / 静默）
+    if (!emailCodeAvailable(env)) {
+      return err(503, "email_unavailable", "服务端未配置邮件发送，暂不可注册/登录");
     }
 
-    const code = generateCode();
-    const nowIso = new Date(now).toISOString();
-    await env.DB.prepare(
-      `INSERT INTO email_codes (email, code_hash, purpose, sent_at, expires_at, attempts)
-       VALUES (?, ?, 'login', ?, ?, 0)
-       ON CONFLICT(email) DO UPDATE SET
-         code_hash = excluded.code_hash, sent_at = excluded.sent_at,
-         expires_at = excluded.expires_at, attempts = 0`,
-    )
-      .bind(email, await sha256Hex(`${email}:${code}`), nowIso, new Date(now + CODE_TTL_MS).toISOString())
-      .run();
-
-    // 本地/开发环境：不发信，把码打到日志并回显（cf-api 的做法）
-    if (isDev(env)) {
-      console.log(`[send-code] ${email} => ${code}`);
-      return json({ ok: true, cooldown: 60, code, dev: true });
-    }
-    if (!env.EMAIL) return err(503, "email_unavailable", "邮件服务未配置");
-    await sendCodeEmail(env, email, code).catch((e: unknown) => {
-      console.error("[send-code] 发送失败", e);
-    });
-    return json({ ok: true, cooldown: 60 });
+    const issued = await issueCode(env, email, "login");
+    if (!issued.ok) return err(502, "email_send_failed", "验证码发送失败，请稍后再试");
+    // 恒定响应：冷却中/已发送都是同一句话
+    return json({ ok: true, cooldown: 60, ...(issued.code ? { code: issued.code, dev: true } : {}) });
   }
 
   // ── 验证码换 session ──
@@ -264,23 +236,9 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const code = typeof body.code === "string" ? body.code.trim() : "";
     if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return err(400, "invalid_request");
 
-    const row = await env.DB.prepare(
-      `SELECT code_hash, expires_at, attempts FROM email_codes WHERE email = ?`,
-    ).bind(email).first<{ code_hash: string; expires_at: string; attempts: number }>();
-    if (!row) return err(400, "invalid_code", "验证码不对或已过期");
-    if (Date.parse(row.expires_at) <= Date.now() || row.attempts >= CODE_MAX_ATTEMPTS) {
+    if (!(await consumeCode(env, email, "login", code))) {
       return err(400, "invalid_code", "验证码不对或已过期");
     }
-
-    const expected = await sha256Hex(`${email}:${code}`);
-    if (!timingSafeEqual(expected, row.code_hash)) {
-      await env.DB.prepare(`UPDATE email_codes SET attempts = attempts + 1 WHERE email = ?`)
-        .bind(email).run();
-      return err(400, "invalid_code", "验证码不对或已过期");
-    }
-
-    // 一次性
-    await env.DB.prepare(`DELETE FROM email_codes WHERE email = ?`).bind(email).run();
 
     const existing = await findCustomer(env, email);
     const customerId = existing?.id ?? (await createCustomer(env, email));
@@ -386,14 +344,3 @@ async function route(request: Request, env: Env, path: string, method: string): 
   return err(404, "not_found", `未知接口：${method} ${path}`);
 }
 
-async function sendCodeEmail(env: Env, email: string, code: string): Promise<void> {
-  const from = env.EMAIL_FROM ?? "noreply@example.com";
-  await env.EMAIL!.send({
-    to: email,
-    from: { email: from, name: "Clever VPN" },
-    subject: `验证码: ${code}`,
-    text: `您的验证码是 ${code}，10 分钟内有效。`,
-    html: `<p>您的验证码是 <b style="font-size:24px;letter-spacing:6px">${code}</b></p>
-           <p>10 分钟内有效。</p>`,
-  });
-}
