@@ -13,7 +13,12 @@
     "deploy": "wrangler deploy",
     "build": "npm run build:web && wrangler deploy --dry-run --outdir dist",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:migrations": "node scripts/migrations-check.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:reset": "bash scripts/reset-db.sh",
+    "db:migrate:local": "wrangler d1 migrations apply clever-vpn-crm --local",
+    "db:migrate:remote": "wrangler d1 migrations apply clever-vpn-crm --remote"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5",

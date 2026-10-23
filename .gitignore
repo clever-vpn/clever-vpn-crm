@@ -14,3 +14,6 @@ wrangler.ci.jsonc
 
 # UI 框架对比原型（本地临时目录，不提交）
 prototype/
+
+# dev 迁移链（scripts/reset-db.sh 生成，生产链在 migrations/）
+migrations-dev/

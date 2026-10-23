@@ -89,6 +89,16 @@ jobs:
           D1_DATABASE_ID: ${{ steps.d1.outputs.D1_ID }}
         run: node scripts/render-config.mjs
 
+      # 先迁移、再部署：迁移失败就别切流量。
+      # 迁移文件在 `migrations/`（drizzle-kit 生成），wrangler 用 `d1_migrations`
+      # 表记录已应用项，重复执行是安全的。
+      # ⚠️ 数据库一旦建过表（老库）而 `d1_migrations` 为空，0000_baseline 会重复建表失败，
+      #    处理方式见 docs/schema.md §4。
+      - name: 应用数据库迁移
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations apply DB --remote --config wrangler.ci.jsonc
+
       - name: 部署
         run: |
           set -euo pipefail

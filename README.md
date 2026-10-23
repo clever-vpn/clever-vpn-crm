@@ -44,8 +44,8 @@
    并用 `scripts/render-config.mjs` 把参数渲染进 `wrangler.ci.jsonc` 再部署。
 4. 打开输出的 `https://<worker>.workers.dev/__version` 核对 `tenant` / `code`。
 
-升级 = 同步上游后 merge 到 `main`，工作流自动重部；首个请求会**自动迁移表结构**
-（schema 指纹），无需手工执行 SQL。
+部署与**数据库迁移**都由 GitHub Actions 执行（deploy 工作流先 `wrangler d1 migrations apply`
+再部署），无需手工执行 SQL。
 
 本地只用于开发：`npm run dev`（或工作区任务 `crm: dev`），**不要本地 deploy**。
 
@@ -62,8 +62,10 @@
 ```
 src/index.ts          Worker 入口（/health、/__version、/api/* 路由）
 src/admin/            管理后台 API（认证 / 2FA / 会话 / 审计）
-src/db.ts             自迁移（schema 指纹）
-src/migrations.ts     迁移定义（随代码发布）
+src/db.ts             数据库就绪探测（迁移由 CI 执行）
+src/db/schema.ts      Drizzle schema（表结构的唯一来源）
+migrations/           生产迁移链（drizzle-kit 生成，CI 应用）
+migrations-dev/       开发迁移链（reset 脚本生成，不入库）
 web/                  管理后台 SPA（React + Vite，产物 web/dist/admin）
 site/                 品牌官网静态页（占位；构建时复制到 web/dist/ 根）
 docs/admin.md         管理后台说明（认证、初始化、恢复、API）

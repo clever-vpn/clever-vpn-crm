@@ -69,6 +69,9 @@ function setString(jsKey, replacement) {
 setString("name", value("WORKER_NAME"));
 setString("database_name", value("D1_NAME"));
 setString("database_id", value("D1_DATABASE_ID"));
+// 本地模板指向 migrations-dev（reset 脚本生成的临时链）；
+// CI 用生产链，必须在渲染时改回来。
+setString("migrations_dir", "migrations");
 setString("CRM_TENANT_ID", value("CRM_TENANT_ID"));
 setString("CF_API_BASE", value("CF_API_BASE"));
 setString("CRM_CODE_VERSION", value("CRM_CODE_VERSION"));
