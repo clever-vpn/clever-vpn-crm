@@ -21,4 +21,20 @@ export interface Env {
   CRM_CODE_VERSION?: string;
   /** 契约版本（与 cf-api 对齐的接口版本） */
   CRM_CONTRACT_VERSION?: string;
+
+  /**
+   * 运行环境。`production` 以外会**把验证码直接回显给客户端**
+   * （与 cf-api/cf-dashboard 一致的本地联调做法）；生产环境绝不回显。
+   */
+  ENVIRONMENT?: string;
+  /**
+   * App 端跨域白名单（逗号分隔，精确匹配 Origin）：
+   * 例如 `https://app-web.clever-vpn.org,http://localhost:5180`。
+   * 为空时**不返回任何 CORS 头**（同源部署不需要）。
+   */
+  APP_ORIGINS?: string;
+  /** 可选：Cloudflare Email Service 绑定（本地开发没有，验证码走回显/日志） */
+  EMAIL?: { send(options: Record<string, unknown>): Promise<unknown> };
+  /** 发信人（Email Service 要求域名已验证） */
+  EMAIL_FROM?: string;
 }
