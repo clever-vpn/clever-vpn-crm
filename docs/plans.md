@@ -74,6 +74,50 @@ plans (id, name, kind, price_minor, currency, licence_limit,
 - `line_ids`：空数组 = 不限线路。它只是**展示层过滤**（App 与 `/api/v3/key-lines` 取交集），
   不是权限边界——真要做「这个套餐不能连那条线路」得改 cf-api。
 
+### 4.1 商店商品 ID（`channels` + `store_product_id`）
+
+一个套餐可以在多个渠道卖，`channels` 列出渠道，`store_product_id` 存各商店的商品 ID：
+
+```jsonc
+{
+  "channels": ["web_checkout", "apple_iap", "google_play"],
+  "store_product_id": { "apple": "vpn.period.100g.month", "google": "vpn_period_100g_month" }
+}
+```
+
+| 渠道 | 在哪卖 | 需要商品 ID |
+|---|---|---|
+| `web_checkout` | 自有收银台（`payment_channels` 决定具体支付方式） | 不需要 |
+| `apple_iap` | App 内购买（App Store） | 需要 `apple` |
+| `google_play` | App 内购买（Google Play） | 需要 `google` |
+
+**ID 由我们定义，平台不会自动生成。** 流程是：
+
+1. 先到 App Store Connect / Play Console 把商品建好；
+2. 把建好的 ID **原样抄进**这里（`validatePlan` 会校验：选了哪个商店通道就必须填对应的键）；
+3. 发布前确认商品在商店侧是**可购买状态**（Apple `Ready to Submit` 之后还需随版本提交；
+   Play 的 base plan 必须**激活**，否则客户端查不到）。
+
+两者**不能通用**——是不同的商品注册表，同一个字符串在两边没有任何关联：
+
+| | Apple | Google |
+|---|---|---|
+| 创建位置 | App 内购买项目 | 订阅（含 base plan / offer） |
+| 唯一性 | 本 App 内唯一 | 本 App 内唯一 |
+| 允许字符 | 惯例用反向域名：`vpn.period.100g.month` | 只能**小写字母/数字/`.`/`_`**，不能有连字符 |
+| 能否改名 | **不能**（只能新建） | **不能**（只能停用后新建） |
+| 升降级 | 同一 Subscription Group 内由系统接管 | 同一订阅下的 base plan / offer 由系统接管 |
+
+三条实践结论：
+
+- **起名一次到位**（`vpn.period.100g.month` 这类「规格」命名，别把价格写进去），
+  因为两端都不能改名。
+- 只在一边建了商品、另一边也填了同样的字符串 ⇒ 用户在缺的那一端购买会拿到
+  「商品不存在」，且报错发生在客户端，后台看不到。
+- 交易标识（Apple `transactionId`、Google `purchaseToken` / `GPA.…`）是**付款时平台生成的**，
+  不进这张表，落 `orders.external_id` 用于对账；回调里**以服务端查到的商品 ID 为准**，
+  不信客户端上报，否则改本地包就能买任意套餐。
+
 ## 5. 后台入口
 
 | 方法 | 路径 | 说明 |
