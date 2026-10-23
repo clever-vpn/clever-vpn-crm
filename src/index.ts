@@ -9,6 +9,7 @@
 
 import { ensureSchema } from "./db";
 import type { Env } from "./env";
+import { handleAppApi } from "./app/router";
 import { handleAdminApi } from "./admin/router";
 import { runSettlement } from "./subscriptions/store";
 
@@ -43,6 +44,9 @@ export default {
       await ensureSchema(env.DB);
       if (url.pathname.startsWith("/api/admin")) {
         return handleAdminApi(request, env);
+      }
+      if (url.pathname.startsWith("/api/app/v1")) {
+        return handleAppApi(request, env);
       }
       return json(
         {

@@ -178,6 +178,33 @@ export const MIGRATIONS: Migration[] = [
          ON subscription_changes (customer_id, id)`,
     ],
   },
+  {
+    id: "0005_app_auth",
+    statements: [
+      // 邮箱验证码：只存**哈希**，一次一用；按 email 建索引做冷却/次数校验。
+      `CREATE TABLE IF NOT EXISTS email_codes (
+         email TEXT PRIMARY KEY,
+         code_hash TEXT NOT NULL,
+         purpose TEXT NOT NULL DEFAULT 'login',
+         sent_at TEXT NOT NULL,
+         expires_at TEXT NOT NULL,
+         attempts INTEGER NOT NULL DEFAULT 0
+       )`,
+      // App 会话：`id` = sha256(token)，明文只存在于客户端安全存储。
+      `CREATE TABLE IF NOT EXISTS app_sessions (
+         id TEXT PRIMARY KEY,
+         customer_id INTEGER NOT NULL,
+         created_at TEXT NOT NULL,
+         last_used_at TEXT NOT NULL,
+         revoked_at TEXT,
+         app_id TEXT,
+         ip TEXT,
+         user_agent TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_app_sessions_customer
+         ON app_sessions (customer_id)`,
+    ],
+  },
 ];
 
 /** schema 指纹：迁移 id 序列（顺序敏感） */

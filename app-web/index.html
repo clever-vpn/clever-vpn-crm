@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>app-web · 本地模拟 App</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --surface:#fff; --border:#e3e6ea; --text:#16191d; --dim:#6b7480;
+    --brand:#2563eb; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --radius:10px;
+    --font:-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:var(--font); background:var(--bg); color:var(--text); font-size:14px; line-height:1.55; }
+  header { background:var(--surface); border-bottom:1px solid var(--border); padding:12px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; }
+  header .tag { font-size:12px; color:var(--dim); border:1px solid var(--border); border-radius:999px; padding:1px 8px; }
+  header input { font: inherit; padding:6px 8px; border:1px solid var(--border); border-radius:8px; width:280px; }
+  main { max-width:880px; margin:20px auto; padding:0 16px; display:grid; gap:16px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; }
+  .card h2 { font-size:14px; margin:0 0 10px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  input, button { font: inherit; }
+  input[type=email], input[type=text] { padding:8px 10px; border:1px solid var(--border); border-radius:8px; min-width:220px; }
+  button { padding:8px 14px; border-radius:8px; border:1px solid transparent; background:var(--brand); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.ghost { background:transparent; color:var(--text); border-color:var(--border); }
+  .hint { color:var(--dim); font-size:12px; }
+  .devcode { background:#fffbeb; border:1px dashed var(--warn); color:var(--warn); border-radius:8px; padding:10px; font-family:ui-monospace, Menlo, monospace; }
+  .plans { display:grid; gap:10px; }
+  .plan { border:1px solid var(--border); border-radius:var(--radius); padding:12px; display:grid; gap:6px; }
+  .plan.disabled { opacity:.55; }
+  .plan .name { font-weight:600; }
+  .plan .meta { color:var(--dim); font-size:12px; }
+  .price { font-size:18px; font-weight:600; }
+  .badge { font-size:12px; border-radius:999px; padding:1px 8px; border:1px solid var(--border); color:var(--dim); }
+  pre { background:#0f172a; color:#e2e8f0; padding:12px; border-radius:8px; overflow:auto; font-size:12px; margin:0; }
+  .kv { display:grid; grid-template-columns:120px 1fr; gap:4px 12px; font-size:13px; }
+  .kv dt { color:var(--dim); }
+  .kv dd { margin:0; }
+  .err { background:#fef2f2; color:var(--bad); border:1px solid #fecaca; border-radius:8px; padding:10px; }
+  .ok { background:#f0fdf4; color:var(--ok); border:1px solid #bbf7d0; border-radius:8px; padding:10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>app-web</h1><span class="tag">本地模拟 App（不部署）</span>
+  <label class="hint">CRM 源：
+    <input id="base" type="text" value="https://crm.clever-vpn.org" />
+  </label>
+  <span id="who" class="hint"></span>
+  <button id="logout" class="ghost" hidden>退出登录</button>
+</header>
+
+<main>
+  <div id="flash"></div>
+
+  <section class="card" id="login-card">
+    <h2>1 · 邮箱验证码登录</h2>
+    <p class="hint">本地开发环境（<code>ENVIRONMENT != production</code>）CRM 会把验证码直接回显，复制到下面即可。</p>
+    <div class="row">
+      <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
+      <button id="send">发送验证码</button>
+    </div>
+    <div id="devcode" class="devcode" hidden></div>
+    <div class="row" style="margin-top:10px">
+      <input id="code" type="text" placeholder="6 位验证码" inputmode="numeric" maxlength="6" style="width:140px" />
+      <button id="verify">登录</button>
+    </div>
+  </section>
+
+  <section class="card" id="plans-card" hidden>
+    <h2>2 · 套餐（<code>purchasable</code> / <code>reason</code> 全部由 CRM 给）</h2>
+    <div id="plans" class="plans"></div>
+  </section>
+
+  <section class="card" id="quote-card" hidden>
+    <h2>3 · 换购报价 <code>POST /upgrade/quote</code></h2>
+    <pre id="quote"></pre>
+  </section>
+
+  <section class="card" id="me-card" hidden>
+    <h2>4 · 当前状态</h2>
+    <dl id="me" class="kv"></dl>
+    <p class="hint" style="margin:10px 0 0">session_token 存在 sessionStorage，刷新页面即失效（模拟 App 每次启动登录）。</p>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { token: sessionStorage.getItem('app_session') || '' };
+const base = () => $('base').value.replace(/\/+$/, '');
+
+function flash(kind, text) {
+  $('flash').innerHTML = text ? `<div class="${kind}">${text}</div>` : '';
+}
+function show(id, on) { $(id).hidden = !on; }
+
+async function call(method, path, body) {
+  const res = await fetch(`${base()}/api/app/v1${path}`, {
+    method,
+    headers: {
+      ...(body ? { 'content-type': 'application/json' } : {}),
+      ...(state.token ? { authorization: `Bearer ${state.token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error?.message || data?.error?.code || `HTTP ${res.status}`);
+  return data;
+}
+
+const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
+const kindName = { period: '周期套餐', traffic: '流量套餐', addon: '加购包' };
+const quotaText = (p) =>
+  p.kind === 'period'
+    ? (p.monthly_quota_gb === null ? '不限量' : `${p.monthly_quota_gb} GB / 月`)
+    : `${p.traffic_gb} GB`;
+
+function renderPlans(plans) {
+  const box = $('plans');
+  box.innerHTML = '';
+  if (!plans.length) { box.innerHTML = '<p class="hint">还没有已上架的套餐（先在 /admin/plans 里发布一个）。</p>'; return; }
+  for (const p of plans) {
+    const el = document.createElement('div');
+    el.className = 'plan' + (p.purchasable ? '' : ' disabled');
+    el.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <span class="name">${p.name}</span>
+        <span class="price">${yuan(p.price_minor)}</span>
+      </div>
+      <div class="row" style="gap:6px">
+        <span class="badge">${kindName[p.kind] ?? p.kind}</span>
+        <span class="badge">${quotaText(p)}</span>
+        <span class="badge">${p.kind === 'period' ? p.term_days + ' 天' : (p.validity_days ? p.validity_days + ' 天' : '永久')}</span>
+        <span class="badge">${p.licence_limit} 台设备</span>
+      </div>
+      <div class="meta">${p.purchasable ? '可购买' : '不可购买：' + (p.reason ?? '')}</div>
+      ${p.purchasable ? `<div class="row"><button class="ghost" data-plan="${p.plan_id}">查看换购报价</button></div>` : ''}
+    `;
+    box.appendChild(el);
+  }
+  box.querySelectorAll('button[data-plan]').forEach((btn) => {
+    btn.addEventListener('click', () => quote(btn.dataset.plan));
+  });
+}
+
+async function quote(planId) {
+  try {
+    const q = await call('POST', '/upgrade/quote', { to_plan_id: planId });
+    show('quote-card', true);
+    $('quote').textContent = JSON.stringify(q, null, 2);
+  } catch (e) { flash('err', e.message); }
+}
+
+async function loadMe() {
+  if (!state.token) { show('me-card', false); show('plans-card', false); return; }
+  try {
+    const me = await call('GET', '/me');
+    state.me = me;
+    $('who').textContent = `${me.user.email}`;
+    $('logout').hidden = false;
+    show('login-card', false);
+    show('me-card', true);
+    $('me').innerHTML = Object.entries({
+      用户: `${me.user.id} · ${me.user.email}`,
+      订阅状态: me.subscription.status,
+      订阅类型: me.subscription.kind ?? '—',
+      套餐: me.subscription.plan_id ?? '—',
+      到期: me.subscription.expires_at ?? '—',
+      剩余额度: me.subscription.unlimited ? '不限量' : (me.subscription.remaining_gb ?? '—'),
+      设备数: me.subscription.licence_limit ?? '—',
+    }).map(([k, v]) => `<dt>${k}</dt><dd>${String(v)}</dd>`).join('');
+    const plans = await call('GET', '/plans');
+    show('plans-card', true);
+    renderPlans(plans);
+  } catch (e) {
+    flash('err', e.message);
+    if (/unauthorized/i.test(e.message) || /401/.test(e.message)) doLogout();
+  }
+}
+
+function doLogout() {
+  state.token = '';
+  state.me = null;
+  sessionStorage.removeItem('app_session');
+  $('who').textContent = '';
+  $('logout').hidden = true;
+  show('login-card', true); show('plans-card', false); show('me-card', false); show('quote-card', false);
+}
+
+$('send').addEventListener('click', async () => {
+  flash('', '');
+  const email = $('email').value.trim();
+  if (!email) return flash('err', '先填邮箱');
+  $('send').disabled = true;
+  try {
+    const r = await call('POST', '/auth/send-code', { email });
+    if (r.code) {
+      $('devcode').hidden = false;
+      $('devcode').textContent = `开发环境回显验证码：${r.code}（10 分钟内有效，直接复制到下面）`;
+      $('code').value = r.code;
+    } else {
+      $('devcode').hidden = true;
+      flash('ok', '验证码已发送，请查收邮件');
+    }
+  } catch (e) {
+    flash('err', e.message);
+  } finally {
+    $('send').disabled = false;
+  }
+});
+
+$('verify').addEventListener('click', async () => {
+  flash('', '');
+  const email = $('email').value.trim();
+  const code = $('code').value.trim();
+  try {
+    const r = await call('POST', '/auth/verify', { email, code, appId: 'app-web-local' });
+    state.token = r.session_token;
+    sessionStorage.setItem('app_session', r.session_token);
+    flash('ok', '登录成功');
+    await loadMe();
+  } catch (e) {
+    flash('err', e.message);
+  }
+});
+
+$('logout').addEventListener('click', async () => {
+  await call('POST', '/auth/logout').catch(() => {});
+  doLogout();
+});
+
+loadMe();
+</script>
+</body>
+</html>
