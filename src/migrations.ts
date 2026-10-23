@@ -91,6 +91,39 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log (at)`,
     ],
   },
+  {
+    id: "0003_plans",
+    statements: [
+      // 套餐是 CRM 的**唯一销售资产**：能不能买、多少钱、怎么落账，全在这里。
+      // 一行 = 一个可售商品；改价/换规则请新建一行并用 supersedes_id 指向旧行
+      // （active 行不可原地修改，保证历史订单可追溯）。
+      `CREATE TABLE IF NOT EXISTS plans (
+         id TEXT PRIMARY KEY,
+         name TEXT NOT NULL,
+         kind TEXT NOT NULL,
+         price_minor INTEGER NOT NULL,
+         currency TEXT NOT NULL,
+         licence_limit INTEGER NOT NULL,
+         term_days INTEGER,
+         monthly_quota_gb REAL,
+         traffic_gb REAL,
+         validity_days INTEGER,
+         allow_addons INTEGER NOT NULL DEFAULT 0,
+         line_ids TEXT NOT NULL DEFAULT '[]',
+         up_mbps INTEGER,
+         down_mbps INTEGER,
+         channels TEXT NOT NULL DEFAULT '[]',
+         store_product_id TEXT NOT NULL DEFAULT '{}',
+         sort_order INTEGER NOT NULL DEFAULT 0,
+         status TEXT NOT NULL DEFAULT 'draft',
+         supersedes_id TEXT,
+         retired_at TEXT,
+         created_at TEXT NOT NULL,
+         updated_at TEXT NOT NULL
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_plans_status ON plans (status, sort_order)`,
+    ],
+  },
 ];
 
 /** schema 指纹：迁移 id 序列（顺序敏感） */

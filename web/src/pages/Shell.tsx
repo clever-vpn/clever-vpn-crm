@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Me } from "../api";
+import Plans from "./Plans";
 import Settings from "./Settings";
 
 interface NavItem {
@@ -32,7 +33,6 @@ function usePathname(): [string, (href: string) => void] {
 const PLACEHOLDERS: Record<string, string> = {
   "/admin/customers": "客户列表 / 详情 / 时间线 / 改控制参数",
   "/admin/orders": "订单状态机 / 退款 / 人工补单 / 对账",
-  "/admin/plans": "套餐与价格（映射 cf-api 控制参数）",
 };
 
 export default function Shell({
@@ -85,6 +85,8 @@ export default function Shell({
         <div className="content">
           {path === "/admin/settings" ? (
             <Settings me={me} onMeChanged={onMeChanged} />
+          ) : path === "/admin/plans" ? (
+            <Plans />
           ) : path === "/admin/" ? (
             <div className="card">
               <h3>概览</h3>

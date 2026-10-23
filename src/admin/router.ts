@@ -18,6 +18,7 @@ import {
   verifyPassword,
   verifyTotp,
 } from "./crypto";
+import { handleAdminPlans } from "./plans";
 
 const SESSION_COOKIE = "crm_admin";
 const PENDING_COOKIE = "crm_admin_pending";
@@ -286,6 +287,10 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
   await env.DB.prepare(`UPDATE admin_sessions SET last_used_at = ? WHERE id = ?`)
     .bind(new Date().toISOString(), session.id)
     .run();
+
+  // ── 套餐设计器（销售策略的唯一写入口）──────────────────────────────
+  const plansResponse = await handleAdminPlans(request, env, admin.email);
+  if (plansResponse) return plansResponse;
 
   if (method === "GET" && path === "/me") {
     return json({ email: admin.email, totp_enabled: Boolean(admin.totp_enabled) });

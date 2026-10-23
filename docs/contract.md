@@ -1,6 +1,6 @@
 # CRM ⇄ cf-api 契约（指针）
 
-Last updated: 2026-10-21
+Last updated: 2026-10-23
 
 **契约正文不在本仓库。** 权威源：
 
@@ -18,13 +18,13 @@ Last updated: 2026-10-21
 | 项 | 值 |
 |---|---|
 | 契约版本 | `CRM_CONTRACT_VERSION`（默认 `1`），由 `GET /__version` 回显 |
-| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 9` |
+| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 10` |
 | 客服 / 官网 | `GET /support` 免登录；官网游客结账先邮箱验证（`checkout_token`），**不引入网页登录态** |
-| 套餐 | **租户自定义**（grant: days/traffic_gb/licence_limit + quota + speed + topup）；平台不识别套餐 |
+| 套餐 | **`kind` 三选一**（`period` / `traffic` / `addon`），见 [plans.md](plans.md)；**销售策略全在 CRM**，App 只渲染 |
 | 币种 | **单币种**，初始化时设定（默认 `CNY`），之后不可改；金额一律用最小单位整数（分） |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
 | 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
-| 可用的平台资源 | **只有 `customers`**（`/api/v1/customers` CRUD）；其余模块 403 |
+| 可用的平台资源 | **`customers`（读写）+ `lines`（只读，字段白名单，不暴露 `upstream`）** |
 | 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
 | 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |
 | 换套餐 | 删旧客户 → 用**同一 `auth_id`** 建新客户（得到新 `code`）；流量余量/已用额度不继承 |

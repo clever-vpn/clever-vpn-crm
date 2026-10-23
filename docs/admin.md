@@ -104,6 +104,7 @@ console.log(`pbkdf2$sha256$50000$${b64(salt)}$${b64(bits)}`);' '新密码'
 | POST | `/api/admin/2fa/activate` | `{code}` 启用 |
 | POST | `/api/admin/2fa/disable` | `{password}` 关闭 |
 | GET | `/api/admin/audit?limit=50` | 审计日志（最多 200 条） |
+| * | `/api/admin/plans*` | 套餐设计器（CRUD / 发布 / 下线 / 克隆 / 预览），见 [plans.md](plans.md)  |
 
 ## 6. 审计
 
