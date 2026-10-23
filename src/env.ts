@@ -39,4 +39,15 @@ export interface Env {
   RESEND_API_KEY?: string;
   /** 发信人（域名需已验证）；与上面任一项同时存在才算“邮件已就绪” */
   EMAIL_FROM?: string;
+
+  /**
+   * Turnstile site key（公开值，可写在 wrangler vars 里）。
+   * 下发到 `/api/admin/bootstrap`，前端据此决定渲染不渲染挂件。
+   */
+  TURNSTILE_SITE_KEY?: string;
+  /**
+   * Turnstile secret（`wrangler secret put TURNSTILE_SECRET`）。
+   * **未配置 = 不做人机校验**：本地开发和不想开自托管的租户都不受影响。
+   */
+  TURNSTILE_SECRET?: string;
 }

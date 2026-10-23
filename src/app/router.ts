@@ -23,6 +23,7 @@ import { emailCodeAvailable } from "../mail";
 import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
 import { currentMainSubscription } from "../subscriptions/store";
+import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
 import type { Env } from "../env";
 import type { Plan, PlanRow } from "../plans/model";
@@ -209,6 +210,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
         "upgrade_quote",
       ],
       min_app: "2.0.0",
+      // 有 site key 才渲染 Turnstile 挂件；App 发码时要带上 turnstile_token
+      turnstile_site_key: turnstileEnabled(env) ? (env.TURNSTILE_SITE_KEY ?? null) : null,
     });
   }
 
@@ -221,6 +224,16 @@ async function route(request: Request, env: Env, path: string, method: string): 
     // 没配邮件 = App 根本不能登录，必须明确报出来（而不是 500 / 静默）
     if (!emailCodeAvailable(env)) {
       return err(503, "email_unavailable", "服务端未配置邮件发送，暂不可注册/登录");
+    }
+
+    // 发码是最贵的公开入口（真花钱），配了 secret 就一定要过人机校验
+    if (turnstileEnabled(env)) {
+      const check = await verifyTurnstile(
+        env,
+        typeof body.turnstile_token === "string" ? body.turnstile_token : "",
+        clientIp(request),
+      );
+      if (!check.ok) return err(400, "turnstile_failed", "人机校验未通过，请重试");
     }
 
     const issued = await issueCode(env, email, "login");

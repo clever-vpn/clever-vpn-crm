@@ -22,6 +22,7 @@ import { consumeCode, issueCode } from "./email-code";
 import { handleAdminPlans } from "./plans";
 import { handleAdminSubscriptions } from "./subscriptions";
 import { emailCodeAvailable, mailReady, sendMail } from "../mail";
+import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
 const SESSION_COOKIE = "crm_admin";
 const PENDING_COOKIE = "crm_admin_pending";
@@ -160,6 +161,22 @@ function csrfOk(request: Request): boolean {
   return request.headers.get("x-crm-request") === "1";
 }
 
+/**
+ * 公开入口的人机校验。返回 null = 通过（包含"没配 secret 所以跳过"）。
+ * 只用在 setup / login / 发验证码这种**能花钱或能枚举**的地方。
+ */
+async function turnstileGuard(
+  request: Request,
+  env: Env,
+  body: Record<string, unknown>,
+): Promise<Response | null> {
+  if (!turnstileEnabled(env)) return null;
+  const result = await verifyTurnstile(env, str(body.turnstile_token), clientIp(request));
+  if (result.ok) return null;
+  await audit(env, "anon", "turnstile_failed", null, { codes: result.codes });
+  return fail(400, "turnstile_failed", "人机校验未通过，请刷新页面后重试");
+}
+
 export async function handleAdminApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/admin/, "") || "/";
@@ -177,6 +194,8 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
       methods: emailCodeAvailable(env) ? ["password", "email"] : ["password"],
       mail_ready: mailReady(env),
       dev_email_echo: emailCodeAvailable(env) && !mailReady(env),
+      // 没配 secret ⇒ 不下发 site key ⇒ 前端不渲染挂件（服务端也不校验）
+      turnstile_site_key: turnstileEnabled(env) ? (env.TURNSTILE_SITE_KEY ?? null) : null,
     });
   }
 
@@ -185,6 +204,8 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
     if (!env.SETUP_TOKEN) return fail(503, "setup_disabled", "SETUP_TOKEN 未配置");
     if (await loadAdmin(env)) return fail(409, "already_initialized");
     const body = await readBody(request);
+    const guarded = await turnstileGuard(request, env, body);
+    if (guarded) return guarded;
     const token = str(body.token);
     const email = str(body.email).toLowerCase();
     const password = str(body.password);
@@ -218,6 +239,8 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
     const admin = await loadAdmin(env);
     if (!admin) return fail(409, "needs_setup");
     const body = await readBody(request);
+    const guarded = await turnstileGuard(request, env, body);
+    if (guarded) return guarded;
     const email = str(body.email).toLowerCase();
     const password = str(body.password);
 
@@ -273,6 +296,8 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
       return fail(503, "email_unavailable", "未配置邮件发送，请使用密码登录");
     }
     const body = await readBody(request);
+    const guarded = await turnstileGuard(request, env, body);
+    if (guarded) return guarded;
     const email = str(body.email).toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(400, "invalid_email");
 

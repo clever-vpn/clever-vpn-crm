@@ -1,6 +1,6 @@
 # 管理后台
 
-> Last updated: 2026-10-22 — 契约/接口变更请同步本文件与 `docs/contract.md`。
+> Last updated: 2026-10-23 — 契约/接口变更请同步本文件与 `docs/contract.md`。
 
 定位：**单个管理员账号**的租户运营控制台。不是 SaaS 后台，不做多租户、不做角色模型。
 
@@ -42,6 +42,15 @@
 - **CSRF**：所有写操作要求请求头 `x-crm-request: 1`（跨源请求无法静默携带自定义头，
   且本 Worker 不对 `/api/admin` 返回 CORS 头）。
 - **限流 / 锁定**：同一账号连续 5 次密码错误锁定 15 分钟（429）。
+- **人机校验（Cloudflare Turnstile，可选）**：**配了才生效**。
+  - `TURNSTILE_SITE_KEY`（公开值，可放 `vars`）→ 通过 `/api/admin/bootstrap`
+    的 `turnstile_site_key` 下发给前端；为 `null` 时前端**不渲染挂件**。
+  - `TURNSTILE_SECRET`（`wrangler secret put TURNSTILE_SECRET`）→ 服务端校验。
+    **未配置 = 完全不校验**，本地开发与不想开的自托管租户都不受影响。
+  - 校验点：`/setup`、`/login`、`/login/email/start`、App 的 `/api/app/v1/auth/send-code`
+    （都是"公开且能花钱或能枚举"的入口）。已登录后的接口不校验。
+  - 只配 `TURNSTILE_SECRET` 不配 `TURNSTILE_SITE_KEY` 会让登录**必然失败**
+    （服务端要校验、前端又拿不到 site key）——两个一起配。
 
 ## 3. 首次初始化
 
