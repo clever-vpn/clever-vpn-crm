@@ -19,6 +19,7 @@ import {
   verifyTotp,
 } from "./crypto";
 import { handleAdminPlans } from "./plans";
+import { handleAdminSubscriptions } from "./subscriptions";
 
 const SESSION_COOKIE = "crm_admin";
 const PENDING_COOKIE = "crm_admin_pending";
@@ -291,6 +292,10 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
   // ── 套餐设计器（销售策略的唯一写入口）──────────────────────────────
   const plansResponse = await handleAdminPlans(request, env, admin.email);
   if (plansResponse) return plansResponse;
+
+  // ── 订阅与结算（手工开通 / 跑结算）──────────────────────────────────
+  const subsResponse = await handleAdminSubscriptions(request, env, admin.email);
+  if (subsResponse) return subsResponse;
 
   if (method === "GET" && path === "/me") {
     return json({ email: admin.email, totp_enabled: Boolean(admin.totp_enabled) });

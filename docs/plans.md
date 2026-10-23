@@ -87,10 +87,37 @@ plans (id, name, kind, price_minor, currency, licence_limit,
 
 `preview` 调的是服务端同一份计算，用来回答「这个套餐发布后，用户实际被写成什么」。
 
-## 6. 待办
+## 6. 订阅与结算（已实现）
 
-- [ ] `period` 每小时的幂等结算（按购买锚点重置 `traffic_balance`，含加购包抵扣）
-- [ ] `platform_subscriptions` 表（记 `paid_minor` / `anchors` / 加购包余额），报价要用
-- [ ] `POST /api/app/v1/upgrade/quote`（对外版报价）
-- [ ] 创建/换购时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数）
-- [ ] 读 cf-api `lines` 填充套餐的线路选择器
+`platform_subscriptions` 一行 = 一次成交的**规则快照**（`paid_minor`、`quota_gb`、`term_days`、
+`anchor_day`、`balance_gb`）；之后改套餐不影响已经卖出去的订阅。
+
+结算不变量：
+
+$$R = P + B, \qquad B' = \min(B, R), \qquad R' = P + B'$$
+
+`R` = 平台余额、`P` = 本月额度、`B` = 加购包余额。等价于"按已用量扣包"，但**不需要记录已用量**。
+
+- 触发：`crons = ["17 * * * *"]`（`src/index.ts` 的 `scheduled`），幂等——`settle()` 只看 `last_settled_at`。
+- 漏跑几个月：只结算一次并把锚点推到最近一期，**不重放**（中间用量已经滚进 R 了，重放等于凭空发额度）。
+- 平台写入失败：`last_settled_at` 不动，下一小时自动重试（不会出现"CRM 以为重置了、平台还是旧余额"）。
+- 本地试跑：`POST /api/admin/subscriptions/settle {"dry_run": true}` —— 默认就是 dry-run，
+  打印"会写成什么"而不写库。
+
+## 7. 后台补充端点
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/admin/customers` | 客户列表（本地联调用；正式由 App 登录创建） |
+| POST | `/api/admin/customers` | `{email, display_name?}` 建客户 |
+| GET | `/api/admin/subscriptions?customer_id=` | 某客户的订阅历史 |
+| POST | `/api/admin/subscriptions` | `{customer_id, plan_id, paid_minor?, now?}` **手工开通**（本地/补单） |
+| POST | `/api/admin/subscriptions/settle` | `{customer_id?, dry_run?}` 跑结算（默认 dry-run） |
+
+## 8. 待办
+
+- [ ] 对外 `POST /api/app/v1/upgrade/quote`（复用 `quotePurchase()`）
+- [ ] 下单/换购时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数 + 存 `platform_customer_id`/`code`）
+- [ ] App 端登录（邮箱验证码 + `session_token`）与 `/plans`（带 `purchasable`/`reason`）
+- [ ] 读 cf-api `lines` 填充线路选择器
+- [ ] 支付（网页收银台 + 商店内购）
