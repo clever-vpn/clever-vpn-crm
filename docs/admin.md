@@ -141,7 +141,7 @@ npm run dev        # 构建官网 + SPA，再起 wrangler dev（:8788）
 npm run dev:web    # 只跑 vite（:5273，/api 代理到 8788）
 npm run build:site # 只把 site/ 复制到 web/dist/
 npm run typecheck  # Worker + web
-npm test           # 密码学/TOTP 单测
+npm test           # 单测（Node）+ 集成测试（workerd），见 local-dev.md §6.1
 ```
 
 本地没有 `SETUP_TOKEN` 时可临时用 `wrangler dev --var SETUP_TOKEN:dev`。
