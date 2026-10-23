@@ -109,7 +109,15 @@ export const appSessions = sqliteTable(
 // ─────────────────────────────────────────────────────────────
 
 /**
- * 套餐 = 可售商品定义（**会改价、会下线，所以订单/订阅都存快照**）。
+ * 套餐 = 可售商品定义 —— **可变目录**（目录可以改，成交事实不能改）。
+ *
+ * 改价 / 改权益直接改这一行即可，**历史不会受污染**，因为事实已经各自冻结：
+ *   - `orders.plan_snapshot`：下单瞬间的完整套餐定义；
+ *   - `platform_subscriptions.*`：订阅的权益参数与实付价。
+ * 所以这里**不需要版本链 / 克隆**：`plan_id` 长期稳定，收入统计可直接 `GROUP BY plan_id`。
+ *
+ * `status`：`draft` 未上架 / `active` 在售 / `retired` 已下架。
+ * retirement **只影响能否再卖**，不影响已售（订阅用自己的快照）。
  *
  * `visibility`：`public` 上架可见；`hidden` 仅后台可见 —— **礼品包就是 price=0 的
  * hidden 套餐**（见 domain.md §5），不要为"赠送"再造一个概念。
@@ -152,7 +160,6 @@ export const plans = sqliteTable(
     status: text("status").notNull().default("draft"),
     /** public | hidden */
     visibility: text("visibility").notNull().default("public"),
-    supersedes_id: text("supersedes_id"),
     retired_at: text("retired_at"),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),

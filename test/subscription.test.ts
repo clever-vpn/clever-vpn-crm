@@ -47,7 +47,6 @@ function makePlan(over: Partial<Plan> = {}): Plan {
     store_product_id: {},
     sort_order: 0,
     status: "active",
-    supersedes_id: null,
     retired_at: null,
     ...over,
   };

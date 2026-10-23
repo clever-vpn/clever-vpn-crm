@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import {
   addDaysIso,
   applyAddon,
+  applyPlanPatch,
   planToControlParams,
   rowToPlan,
   validatePlan,
@@ -42,7 +43,6 @@ function makePlan(over: Partial<Plan> = {}): Plan {
     store_product_id: {},
     sort_order: 0,
     status: "active",
-    supersedes_id: null,
     retired_at: null,
     ...over,
   };
@@ -320,11 +320,54 @@ describe("rowToPlan", () => {
       term_days: 30, monthly_quota_gb: 10, traffic_gb: null, validity_days: null, allow_addons: 1,
       line_ids: "[1,2]", up_mbps: null, down_mbps: null,
       channels: "not-json", store_product_id: "{}", sort_order: 0, status: "active",
-      supersedes_id: null, retired_at: null,
+      retired_at: null,
     };
     const plan = rowToPlan(row);
     expect(plan.line_ids).toEqual([1, 2]);
     expect(plan.channels).toEqual([]);
     expect(plan.allow_addons).toBe(true);
+  });
+});
+
+describe("applyPlanPatch（可变目录的合并规则）", () => {
+  it("在售套餐可以直接改价，状态不变", () => {
+    const result = applyPlanPatch(makePlan({ status: "active" }), { price_minor: 1800 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.price_minor).toBe(1800);
+    expect(result.plan.status).toBe("active");
+    // 没提到的字段原样保留（PATCH 是局部更新）
+    expect(result.plan.monthly_quota_gb).toBe(100);
+    expect(result.plan.channels).toEqual([{ channel: "web_checkout", methods: ["alipay"] }]);
+  });
+
+  it("不能通过 PATCH 把 status 改成 draft（状态机只能走 publish/retire）", () => {
+    const result = applyPlanPatch(makePlan({ status: "active" }), { status: "draft" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.status).toBe("active");
+  });
+
+  it("不能通过 PATCH 改 id（订单与订阅都指着它）", () => {
+    const result = applyPlanPatch(makePlan(), { id: "hijacked" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.id).toBe("p_30d_100g_1d");
+  });
+
+  it("已下架套餐改内容时保留 retired_at（不会被合并顺手清掉）", () => {
+    const retiredAt = "2026-10-01T00:00:00.000Z";
+    const result = applyPlanPatch(makePlan({ status: "retired", retired_at: retiredAt }), { name: "改名" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.status).toBe("retired");
+    expect(result.plan.retired_at).toBe(retiredAt);
+  });
+
+  it("合并后仍要过完整校验（清空 channels 会被拒）", () => {
+    const result = applyPlanPatch(makePlan(), { channels: [] });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.join()).toContain("至少选一个支付通道");
   });
 });

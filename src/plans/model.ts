@@ -55,7 +55,6 @@ export interface Plan {
   store_product_id: { apple?: string; google?: string };
   sort_order: number;
   status: PlanStatus;
-  supersedes_id: string | null;
   retired_at: string | null;
 }
 
@@ -195,11 +194,54 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
       store_product_id,
       sort_order: int(input.sort_order) ?? 0,
       status: (input.status as PlanStatus) ?? "draft",
-      supersedes_id: typeof input.supersedes_id === "string" && input.supersedes_id.trim()
-        ? input.supersedes_id.trim()
-        : null,
       retired_at: null,
     },
+  };
+}
+
+/** 把 `Plan` 摊平成校验函数能吃的形状（PATCH 合并用；字段必须齐全） */
+export function planToFields(plan: Plan): Record<string, unknown> {
+  return {
+    id: plan.id,
+    name: plan.name,
+    kind: plan.kind,
+    price_minor: plan.price_minor,
+    currency: plan.currency,
+    licence_limit: plan.licence_limit,
+    term_days: plan.term_days,
+    monthly_quota_gb: plan.monthly_quota_gb,
+    traffic_gb: plan.traffic_gb,
+    validity_days: plan.validity_days,
+    allow_addons: plan.allow_addons,
+    line_ids: plan.line_ids,
+    up_mbps: plan.up_mbps,
+    down_mbps: plan.down_mbps,
+    channels: plan.channels,
+    store_product_id: plan.store_product_id,
+    sort_order: plan.sort_order,
+    status: plan.status,
+  };
+}
+
+/**
+ * `PATCH /api/admin/plans/:id` 的合并规则（**受保护字段写在代码里，不靠调用方自觉**）：
+ *
+ * - `id` 不可改：订单与订阅都指着它；
+ * - `status` / `retired_at` 只能由 `publish` / `retire` 改，不能用一次 PATCH 绕过状态机；
+ * - 其余字段允许任意改 —— `plans` 是可变目录，历史由订单/订阅各自的快照保证。
+ */
+export function applyPlanPatch(current: Plan, patch: Record<string, unknown>): ValidationResult {
+  const merged = {
+    ...planToFields(current),
+    ...patch,
+    id: current.id,
+    status: current.status,
+  };
+  const result = validatePlan(merged);
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    plan: { ...result.plan, status: current.status, retired_at: current.retired_at },
   };
 }
 
@@ -277,7 +319,6 @@ export interface PlanRow {
   store_product_id: string;
   sort_order: number;
   status: string;
-  supersedes_id: string | null;
   retired_at: string | null;
 }
 
@@ -310,7 +351,6 @@ export function rowToPlan(row: PlanRow): Plan {
     store_product_id: parseJson<Record<string, string>>(row.store_product_id, {}) as Plan["store_product_id"],
     sort_order: row.sort_order,
     status: row.status as PlanStatus,
-    supersedes_id: row.supersedes_id,
     retired_at: row.retired_at,
   };
 }
