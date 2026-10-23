@@ -122,7 +122,24 @@ curl -s -H "Cookie: crm_admin=<token>" -H 'x-crm-request: 1' -H 'content-type: a
 `/api/app/v1/*` 只对 `APP_ORIGINS` 里的**精确 Origin** 回 CORS 头（`wrangler.jsonc`）：
 `https://app-web.clever-vpn.org, http://localhost:5180`。为空则不下发任何 CORS 头。
 
-## 6. 常见问题
+## 6. 数据库（本地）
+
+本地 D1 用**开发迁移链**（`migrations-dev/`，gitignore 的产物），随改随重置：
+
+```bash
+npm run db:reset      # 停 dev → 删本地 D1 → 从 schema.ts 重建全量 DDL + dev 种子 → apply
+npm run db:migrate:local   # 只 apply（不清库）
+```
+
+重置后直接可用：管理员 `ops@example.com` / `crm-admin-2026`，另有 4 个套餐
+（含一个 0 元隐藏的礼品包）、2 个客户、1 个订阅、2 张订单。
+
+改了 `src/db/schema.ts` 之后：
+
+- 开发想看效果 → `npm run db:reset`（开发链自动重生成）；
+- 要发布 → `npm run db:generate` 生成**生产链**迁移并提交（`npm run check:migrations` 会拦住漏提交）。
+
+## 7. 常见问题
 
 | 现象 | 原因 / 处理 |
 |---|---|

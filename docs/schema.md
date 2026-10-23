@@ -3,7 +3,7 @@
 Last updated: 2026-10-23
 
 > 设计依据：[`domain.md`](domain.md)（六条不变量）。改表先改那边，再改本文件，最后改 schema。
-> 实现：`src/db/schema.ts`；迁移产物：`migrations/*.sql`。
+> 实现：`src/db/schema.ts`；生产迁移：`migrations/`；开发链：`migrations-dev/`（gitignore）。
 
 ## 0. 约定
 
@@ -17,25 +17,46 @@ Last updated: 2026-10-23
 | 系统列 | 前缀 `_` | 沿用 cf-api 习惯（如 `_fsm_status`） |
 | 索引 | `idx_<表>_<用途>` | 统一命名便于排查慢查询 |
 
-## 1. 工具链
+## 1. 工具链与两套迁移目录
 
 ```bash
-npm run db:generate      # drizzle-kit generate → migrations/*.sql
+npm run db:generate     # drizzle-kit generate → migrations/（生产链）
+npm run db:reset        # 重建 dev 链 + 重置本地库 + 应用（开发日常用这个）
+npm run db:migrate:local  # 应用 dev 链（不清库）
+npm run check:migrations  # 迁移链自检（结构 / 不可变 / 漂移）
 ```
 
+| 目录 | 用途 | 入库 | 谁生成 / 谁应用 |
+|---|---|---|---|
+| `migrations/` | **生产链**：追加式、不可变的历史 | ✅ | `drizzle-kit generate` → CI 应用 |
+| `migrations-dev/` | **开发链**：全量 schema + dev 种子 | ❌（gitignore） | `scripts/reset-db.sh` 每次重建 |
+
+两套是**同一份 schema**的两种形态：生产链是"从零到今的每一步"，开发链是"现在长什么样"。
+开发时可以随便重置，因为 dev 链每次都从 `src/db/schema.ts` 重新生成。
+
 - `drizzle.config.ts`：`dialect: sqlite`、`schema: ./src/db/schema.ts`、`out: ./migrations`。
-- **不手写 SQL**：所有 DDL 由 schema 生成，保证代码与库一致。
+- **不手写 SQL**：所有 DDL 由 schema 生成。
 - `migrations/meta/` 是 drizzle 的快照链，**必须提交**，否则下次生成会全量重建。
+- `wrangler.jsonc` 里 `migrations_dir` = `migrations-dev`（本地）；CI 渲染配置时
+  改回 `migrations`（`scripts/render-config.mjs`），所以部署永远用生产链。
 
-### 应用方式（与 cf-api 的差异）
+### 应用方式
 
-cf-api 用 `wrangler d1 migrations apply`（`migrations_dir`）。CRM **不能**这么做：
-托管模式下 Worker 是按 release 字节上传到 dispatch namespace，没有 CLI 可跑，
-所以迁移必须随代码走、由 Worker 启动时自应用（现有 `src/db.ts` 的机制）。
-两种方式的差异只在前端入口，不改 SQL 本身。
+| 环境 | 谁执行 | 命令 |
+|---|---|---|
+| 本地开发 | 你 | `npm run db:reset`（或 `db:migrate:local`） |
+| 线上/自托管 | **GitHub Actions** | deploy.yml 里的「应用数据库迁移」步骤：`wrangler d1 migrations apply DB --remote`，**在 `wrangler deploy` 之前** |
 
-> ⏳ 待办：把现有 `src/migrations.ts`（手写 SQL）替换为「导入 drizzle 生成的
-> SQL + `_migrations` 记录表」的加载器。这一步单独 PR，避免与建表混在一起。
+Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测：核心表不存在就报错，
+提示去跑迁移）。理由：部署唯一路径是 CI，迁移失败要在 CI 里红叉，而不是等用户访问时 500。
+
+### dev 种子
+
+`scripts/reset-db.sh` 里的 `dev_seed()` 维护，重置后直接可用：
+
+- 管理员：`ops@example.com` / `crm-admin-2026`
+- 套餐：周期 / 流量 / 加量 + 一个礼品包（`price=0` 且 `visibility=hidden`）
+- 2 个客户、1 个订阅、1 张购买单 + 1 张 0 元赠单
 
 ## 2. 表清单
 
@@ -85,16 +106,19 @@ source: purchase（自助） | gift（赠送） | manual（后台补单）
 
 ## 4. 升级路径（重要）
 
-`0000_baseline.sql` 是 `CREATE TABLE`（无 `IF NOT EXISTS`），因为它是给**全新库**用的。
-已存在的库（本地 dev、任何已部署的租户）**只应执行 0001**。
+- **全新库**：`wrangler d1 migrations apply` 会按顺序跑完所有迁移。
+- **已存在的老库**（`d1_migrations` 为空但表已存在）：`0000_baseline.sql` 会重复建表失败。
+  处置方式（一次性）：
 
-落地加载器时的规则：
+  ```bash
+  # 以远程库为例；本地库去掉 --remote
+  npx wrangler d1 execute clever-vpn-crm --remote --command \
+    "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL);
+     INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0000_baseline.sql');"
+  ```
 
-1. 建 `_migrations(id TEXT PRIMARY KEY, applied_at TEXT)` 记录表；
-2. 若 `_migrations` 为空 **且** 探测到 `admin_users` 已存在 → 说明是老库，
-   把 `0000_baseline` **标记为已应用**（不执行），只跑后续迁移；
-3. 全新库 → 按顺序全部执行；
-4. 每条迁移执行后写入 `_migrations`，天然只跑一次（不依赖 `IF NOT EXISTS`）。
+  之后正常 `migrations apply`，只会跑增量。
+- **本地库**：直接 `npm run db:reset`（删 `.wrangler/state/v3/d1` 重建），不需要上面的手工步骤。
 
 ## 5. 已知取舍
 

@@ -25,7 +25,9 @@
     {
       "binding": "DB",
       "database_name": "clever-vpn-crm",
-      "database_id": "REPLACE_WITH_YOUR_D1_ID"
+      "database_id": "REPLACE_WITH_YOUR_D1_ID",
+      // 迁移由 CI 应用（见 .github/workflows/deploy.yml）
+      "migrations_dir": "migrations-dev"
     }
   ],
   // 由 wrangler secret put 提供（不要写进仓库）：

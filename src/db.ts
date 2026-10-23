@@ -1,57 +1,47 @@
 /**
- * 自迁移：Worker 首次请求时按 schema 指纹校准库结构。
+ * 数据库就绪校验（**不执行迁移**）
  *
- * 与 cf-api 的 TenantDO 同一套思路（`[tenant:N] schema init (hash)`）：
- *   - 控制面（托管）或租户（自托管）只需要"建一个空库"；
- *   - 代码升级后，任一新实例的首个请求会把库迁移到与代码一致的版本；
- *   - 迁移失败不缓存，下次请求重试（失败可观测，不会静默半迁移）。
+ * 迁移由 CI 执行：`.github/workflows/deploy.yml` 在 `wrangler deploy` 之前跑
+ * `wrangler d1 migrations apply --remote`；本地开发跑 `npm run db:migrate:local`。
  *
- * 注意：`CREATE TABLE IF NOT EXISTS` 保证重跑安全；迁移内容一旦发布不可修改。
+ * 为什么不在 Worker 里自迁移：
+ *   - 部署的唯一路径是 GitHub Actions，迁移放在那里才能"先迁移、再切流量"；
+ *   - 冷启动跑 DDL 既慢又危险（一次超时就是半迁移状态）；
+ *   - 迁移失败应该在 CI 里红叉，而不是等用户访问时才 500。
+ *
+ * 这里只做一次**只读探测**：核心表不存在 ⇒ 迁移没跑，给出能照做的报错。
  */
 
-import { MIGRATIONS, schemaFingerprint } from "./migrations";
+/** 核心表：只要它不存在，说明这个库根本没迁移过 */
+const PROBE_TABLE = "admin_users";
 
-const META_TABLE = "_meta";
-const SCHEMA_KEY = "schema_version";
-
-/** isolate 级缓存：同一实例只校验一次 */
+/** isolate 级缓存：同一实例只探测一次 */
 let ready: Promise<void> | null = null;
 
 export function ensureSchema(db: D1Database): Promise<void> {
   if (!ready) {
-    ready = migrate(db).catch((e: unknown) => {
-      ready = null; // 失败不缓存，下次请求重试
+    ready = probe(db).catch((e: unknown) => {
+      ready = null; // 失败不缓存：迁移补上后不必等实例回收
       throw e;
     });
   }
   return ready;
 }
 
-async function migrate(db: D1Database): Promise<void> {
-  await db
-    .prepare(`CREATE TABLE IF NOT EXISTS ${META_TABLE} (k TEXT PRIMARY KEY, v TEXT NOT NULL)`)
-    .run();
-
-  const expected = schemaFingerprint();
+async function probe(db: D1Database): Promise<void> {
   const row = await db
-    .prepare(`SELECT v FROM ${META_TABLE} WHERE k = ?`)
-    .bind(SCHEMA_KEY)
-    .first<{ v: string }>();
-  if (row?.v === expected) return;
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .bind(PROBE_TABLE)
+    .first<{ name: string }>();
 
-  for (const migration of MIGRATIONS) {
-    for (const statement of migration.statements) {
-      await db.prepare(statement).run();
-    }
-  }
+  if (row) return;
 
-  await db
-    .prepare(
-      `INSERT INTO ${META_TABLE} (k, v) VALUES (?, ?)
-       ON CONFLICT(k) DO UPDATE SET v = excluded.v`,
-    )
-    .bind(SCHEMA_KEY, expected)
-    .run();
+  throw new Error(
+    `数据库未初始化：缺少表 ${PROBE_TABLE}。\n` +
+      `  本地开发：npm run db:migrate:local\n` +
+      `  线上部署：由 deploy 工作流自动执行（wrangler d1 migrations apply --remote）\n` +
+      `  详见 docs/schema.md §4`,
+  );
 }
 
 /** 仅测试用：重置 isolate 缓存 */

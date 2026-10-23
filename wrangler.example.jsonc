@@ -16,7 +16,9 @@
       // 自托管只有一个库：1 Worker + 1 D1
       "binding": "DB",
       "database_name": "clever-vpn-crm",
-      "database_id": "REPLACE_WITH_YOUR_D1_ID"
+      "database_id": "REPLACE_WITH_YOUR_D1_ID",
+      // 迁移由 CI 应用（见 .github/workflows/deploy.yml）
+      "migrations_dir": "migrations-dev"
     }
   ],
   "vars": {

@@ -106,7 +106,8 @@ curl -s https://<worker>.workers.dev/__version   # code/contract/tenant
 创建唯一的管理员账号；之后可自行开启 TOTP 两步验证。若忘记密码/丢失 2FA，见
 [`docs/admin.md`](admin.md) §4（用 Cloudflare 账号直接改 D1）。
 
-首次访问任意业务路径时，Worker 会**自动建表**（schema 指纹），无需手工执行 SQL。
+建表由 deploy 工作流里的 `wrangler d1 migrations apply --remote` 完成（先迁移、再部署），
+无需手工执行 SQL。
 
 
 ## 4. 绑定域名（可选）
@@ -119,7 +120,7 @@ curl -s https://<worker>.workers.dev/__version   # code/contract/tenant
 同步上游仓库后 merge 到 `main`（或在 Actions 里对 `main` 重跑 **deploy**）。
 **不要**在本地 deploy：CI 会用同一套参数、同一份渲染逻辑重新部署。
 
-升级后第一个请求会自动把库迁移到新版本（迁移必须向后兼容；见 `src/migrations.ts`
+升级时工作流会先应用增量迁移（迁移必须向后兼容；见 `migrations/`
 顶部约束）。
 
 ## 6. 备份与迁移
