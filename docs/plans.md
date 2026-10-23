@@ -65,12 +65,19 @@ $$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应�
 plans (id, name, kind, price_minor, currency, licence_limit,
        term_days, monthly_quota_gb, traffic_gb, validity_days, allow_addons,
        line_ids JSON, up_mbps, down_mbps, channels JSON, store_product_id JSON,
-       sort_order, status, supersedes_id, retired_at, created_at, updated_at)
+       sort_order, status, visibility, retired_at, created_at, updated_at)
 ```
 
-- `status`：`draft` → `active` → `retired`。
-- **`active` 的行不可原地修改**（历史订单要能追溯当时的规则）。
-  改价/改内容：`POST /plans/:id/clone` 生成 `supersedes_id` 指向旧行的新草稿 → 发布 → 下线旧行。
+`plans` 是**可变目录**，不是不可变的历史表：
+
+- `status`：`draft`（未上架）→ `active`（在售）→ `retired`（已下架）。
+- **任何状态都能原地改**（`PATCH /api/admin/plans/:id`）。改价、改额度、改线路直接改这一行，
+  **只影响之后的新购买**；已卖出的订阅用自己的快照（`platform_subscriptions`），不受影响。
+- 历史为什么安全：成交事实各自冻结 —— `orders.plan_snapshot`（下单瞬间的完整套餐定义）
+  与订阅行上的权益列。`plan_id` 因此**长期稳定**，收入统计可以直接 `GROUP BY plan_id`。
+- `id` 不可改（订单与订阅都指着它）；`status` / `retired_at` 只能由 `publish` / `retire` 改，
+  不能用一次 `PATCH` 绕过状态机。
+- `retire` **只断绝「还能再卖」**，不会让老用户掉线，也不影响他们换购（换购报价读订阅快照）。
 - `line_ids`：空数组 = 不限线路。它只是**展示层过滤**（App 与 `/api/v3/key-lines` 取交集），
   不是权限边界——真要做「这个套餐不能连那条线路」得改 cf-api。
 
@@ -122,12 +129,11 @@ plans (id, name, kind, price_minor, currency, licence_limit,
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/admin/plans` | 全部套餐（含历史版本） |
+| GET | `/api/admin/plans` | 全部套餐（含已下架） |
 | POST | `/api/admin/plans` | 新建（一律 `draft`） |
-| PATCH | `/api/admin/plans/:id` | 只能改草稿 |
-| POST | `/api/admin/plans/:id/clone` | 克隆为下一版本草稿 |
-| POST | `/api/admin/plans/:id/publish` | 发布 |
-| POST | `/api/admin/plans/:id/retire` | 下线 |
+| PATCH | `/api/admin/plans/:id` | 修改（**任何状态**；不能改 `id`/`status`） |
+| POST | `/api/admin/plans/:id/publish` | 发布（`draft` → `active`） |
+| POST | `/api/admin/plans/:id/retire` | 下架（→ `retired`，只影响能否再卖） |
 | POST | `/api/admin/plans/preview` | **干跑**：返回落账控制参数 + 换购报价，不写库 |
 
 `preview` 调的是服务端同一份计算，用来回答「这个套餐发布后，用户实际被写成什么」。

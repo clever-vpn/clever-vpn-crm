@@ -18,7 +18,7 @@
  *   node scripts/migrations-check.mjs --force   # B 段降级为告警
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = process.cwd();
@@ -125,13 +125,18 @@ function checkDrift() {
         `    请运行 npm run db:generate 并提交产物。`,
     );
   }
-  // 还原现场：删掉本次生成的产物、恢复 journal
-  fresh.forEach((f) => unlinkSync(join(ROOT, PROD_DIR, f)));
-  git(["checkout", "--", join(PROD_DIR, "meta")], true);
+  // 还原现场：**只删本次 generate 新产出的东西**（含它的 snapshot），journal 用内存原文写回。
+  // 千万别用 `git clean -fd migrations` —— 那会连开发者还没来得及 `git add` 的合法迁移一起删掉
+  // （本项目实测踩过：刚生成的迁移被静默删除，check 还报"正常"）。
+  fresh.forEach((f) => {
+    unlinkSync(join(ROOT, PROD_DIR, f));
+    const snap = join(ROOT, PROD_DIR, "meta", `${f.slice(0, 4)}_snapshot.json`);
+    if (existsSync(snap)) unlinkSync(snap);
+  });
+  writeFileSync(join(ROOT, PROD_DIR, "meta", "_journal.json"), journalBefore);
   if (readFileSync(join(ROOT, PROD_DIR, "meta", "_journal.json"), "utf8") !== journalBefore) {
     notes.push("[C] journal 未能自动还原，请检查 git status");
   }
-  git(["clean", "-fdq", PROD_DIR], true);
 }
 
 if (LIST_ONLY) {
