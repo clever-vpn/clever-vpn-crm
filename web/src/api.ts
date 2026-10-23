@@ -46,6 +46,8 @@ export interface Bootstrap {
   mail_ready: boolean;
   /** 开发环境：验证码直接在响应里回显 */
   dev_email_echo: boolean;
+  /** 服务端开了 Turnstile 才下发；null = 不渲染挂件 */
+  turnstile_site_key: string | null;
 }
 
 export interface SessionInfo {
@@ -129,14 +131,27 @@ export interface Quote {
 
 export const api = {
   bootstrap: () => call<Bootstrap>("GET", "/bootstrap"),
-  setup: (token: string, email: string, password: string) =>
-    call<{ ok: true; email: string }>("POST", "/setup", { token, email, password }),
-  login: (email: string, password: string) =>
-    call<{ ok?: true; totp_required?: boolean }>("POST", "/login", { email, password }),
+  setup: (token: string, email: string, password: string, turnstileToken?: string) =>
+    call<{ ok: true; email: string }>("POST", "/setup", {
+      token,
+      email,
+      password,
+      turnstile_token: turnstileToken,
+    }),
+  login: (email: string, password: string, turnstileToken?: string) =>
+    call<{ ok?: true; totp_required?: boolean }>("POST", "/login", {
+      email,
+      password,
+      turnstile_token: turnstileToken,
+    }),
   loginTotp: (code: string) => call<{ ok: true }>("POST", "/login/totp", { code }),
   /** 邮箱验证码登录：第一步发码（开发环境会把 code 带回来） */
-  loginEmailStart: (email: string) =>
-    call<{ ok: true; cooldown: number; code?: string; dev?: boolean }>("POST", "/login/email/start", { email }),
+  loginEmailStart: (email: string, turnstileToken?: string) =>
+    call<{ ok: true; cooldown: number; code?: string; dev?: boolean }>(
+      "POST",
+      "/login/email/start",
+      { email, turnstile_token: turnstileToken },
+    ),
   /** 邮箱验证码登录：第二步换会话 */
   loginEmailVerify: (email: string, code: string) =>
     call<{ ok?: true; totp_required?: boolean }>("POST", "/login/email/verify", { email, code }),

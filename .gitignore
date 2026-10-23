@@ -11,3 +11,6 @@ dist/
 
 # CI 渲染产物（scripts/render-config.mjs 生成）
 wrangler.ci.jsonc
+
+# UI 框架对比原型（本地临时目录，不提交）
+prototype/

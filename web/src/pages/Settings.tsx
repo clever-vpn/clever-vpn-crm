@@ -349,37 +349,39 @@ function SessionsCard() {
       {sessions.length === 0 ? (
         <div className="empty">暂无数据</div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>会话</th>
-              <th>最近活跃</th>
-              <th>IP</th>
-              <th>客户端</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map((session) => (
-              <tr key={session.sid}>
-                <td>
-                  <code>{session.sid}</code>
-                  {session.current ? " （当前）" : ""}
-                </td>
-                <td>{new Date(session.last_used_at).toLocaleString()}</td>
-                <td>{session.ip ?? "—"}</td>
-                <td>{session.user_agent ?? "—"}</td>
-                <td>
-                  {!session.current && (
-                    <button className="danger" onClick={() => revoke(session.sid)}>
-                      踢出
-                    </button>
-                  )}
-                </td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>会话</th>
+                <th>最近活跃</th>
+                <th>IP</th>
+                <th>客户端</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sessions.map((session) => (
+                <tr key={session.sid}>
+                  <td>
+                    <code>{session.sid}</code>
+                    {session.current ? " （当前）" : ""}
+                  </td>
+                  <td>{new Date(session.last_used_at).toLocaleString()}</td>
+                  <td>{session.ip ?? "—"}</td>
+                  <td>{session.user_agent ?? "—"}</td>
+                  <td>
+                    {!session.current && (
+                      <button className="danger" onClick={() => revoke(session.sid)}>
+                        踢出
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -402,30 +404,32 @@ function AuditCard() {
       {entries.length === 0 ? (
         <div className="empty">暂无数据</div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>时间</th>
-              <th>操作者</th>
-              <th>动作</th>
-              <th>详情</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((entry, index) => (
-              <tr key={`${entry.at}-${index}`}>
-                <td>{new Date(entry.at).toLocaleString()}</td>
-                <td>{entry.actor}</td>
-                <td>
-                  <code>{entry.action}</code>
-                </td>
-                <td>
-                  {entry.target ? <code>{entry.target}</code> : null} {entry.detail ?? ""}
-                </td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>操作者</th>
+                <th>动作</th>
+                <th>详情</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {entries.map((entry, index) => (
+                <tr key={`${entry.at}-${index}`}>
+                  <td>{new Date(entry.at).toLocaleString()}</td>
+                  <td>{entry.actor}</td>
+                  <td>
+                    <code>{entry.action}</code>
+                  </td>
+                  <td>
+                    {entry.target ? <code>{entry.target}</code> : null} {entry.detail ?? ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
