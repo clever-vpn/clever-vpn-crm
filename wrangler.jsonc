@@ -16,6 +16,11 @@
   "observability": {
     "enabled": true
   },
+  // 每小时跑一次周期套餐的额度重置（幂等；`settle()` 只看 last_settled_at 判断是否到期）。
+  // 分钟数挑 17 避开整点高峰。
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",

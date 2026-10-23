@@ -124,6 +124,60 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_plans_status ON plans (status, sort_order)`,
     ],
   },
+  {
+    id: "0004_subscriptions",
+    statements: [
+      // 一个用户同时只有一个主订阅（period / traffic）；addon 是附加物，单独一行但不占主位。
+      // 这一行是**销售事实**：卖出去的那一刻冻结的规则快照 + 实付价，后续改价不影响它。
+      `CREATE TABLE IF NOT EXISTS platform_subscriptions (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         customer_id INTEGER NOT NULL,
+         plan_id TEXT NOT NULL,
+         kind TEXT NOT NULL,
+         status TEXT NOT NULL DEFAULT 'active',
+         paid_minor INTEGER NOT NULL,
+         currency TEXT NOT NULL,
+         licence_limit INTEGER NOT NULL,
+         term_days INTEGER,
+         quota_gb REAL,
+         traffic_total_gb REAL,
+         validity_days INTEGER,
+         allow_addons INTEGER NOT NULL DEFAULT 0,
+         line_ids TEXT NOT NULL DEFAULT '[]',
+         started_at TEXT NOT NULL,
+         expires_at TEXT,
+         anchor_day INTEGER,
+         balance_gb REAL,
+         remaining_gb REAL,
+         last_settled_at TEXT,
+         platform_customer_id INTEGER,
+         code TEXT,
+         created_at TEXT NOT NULL,
+         updated_at TEXT NOT NULL
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_subs_customer
+         ON platform_subscriptions (customer_id, status)`,
+      `CREATE INDEX IF NOT EXISTS idx_subs_due
+         ON platform_subscriptions (kind, status, last_settled_at)`,
+      // 换购/结算台账：每一笔权益变化都留痕，客服对账只查这张表。
+      `CREATE TABLE IF NOT EXISTS subscription_changes (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         at TEXT NOT NULL,
+         customer_id INTEGER NOT NULL,
+         from_subscription_id INTEGER,
+         to_subscription_id INTEGER,
+         action TEXT NOT NULL,
+         paid_minor INTEGER,
+         residual_minor INTEGER,
+         payable_minor INTEGER,
+         balance_before REAL,
+         balance_after REAL,
+         detail TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_changes_customer
+         ON subscription_changes (customer_id, id)`,
+    ],
+  },
 ];
 
 /** schema 指纹：迁移 id 序列（顺序敏感） */
