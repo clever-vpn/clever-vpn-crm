@@ -98,9 +98,13 @@ function checkImmutable() {
   if (!diff) return;
   for (const line of diff.split("\n").filter(Boolean)) {
     const [status, file] = line.split("\t");
-    if (status === "M" || status === "D") {
-      (FORCE ? notes : problems).push(`[B] 已提交的迁移被${status === "M" ? "修改" : "删除"}：${file}（生产库已 apply，请新增一条迁移）`);
-    }
+    if (status !== "M" && status !== "D") continue;
+    // `meta/` 是记账（journal + 每个迁移的 snapshot），**新增迁移时必然被改**，
+    // 不能算"篡改历史"。真正要守的是 `.sql` 本身：改了它就等于改已 apply 的 DDL。
+    if (file.includes("/meta/")) continue;
+    (FORCE ? notes : problems).push(
+      `[B] 已提交的迁移被${status === "M" ? "修改" : "删除"}：${file}（生产库已 apply，请新增一条迁移）`,
+    );
   }
 }
 
