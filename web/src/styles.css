@@ -320,3 +320,67 @@ button.ghost {
   color: var(--text);
   border: 1px solid var(--border);
 }
+
+/* ── 窄窗口适配（后台在 <900px 也要能用）────────────────────────── */
+/* 表格：内容比容器宽时**横向滚动**，绝不逐字换行（"周 期 套 餐" 那种就是灾难） */
+.table-wrap {
+  overflow-x: auto;
+}
+.table-wrap table {
+  min-width: 780px;
+}
+/* 第一列（套餐名 + ID）给足宽度，否则中文会逐字折行 */
+.table-wrap td:first-child {
+  min-width: 200px;
+}
+.table-wrap td:not(.wrap),
+.table-wrap th {
+  white-space: nowrap;
+}
+
+@media (max-width: 1000px) {
+  .layout {
+    grid-template-columns: 176px 1fr;
+  }
+  .content {
+    padding: 14px;
+  }
+}
+
+@media (max-width: 760px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .brand {
+    padding: 0;
+    white-space: nowrap;
+  }
+  .brand small {
+    display: none;
+  }
+  .nav {
+    flex-direction: row;
+    gap: 2px;
+  }
+  .nav a {
+    white-space: nowrap;
+    padding: 6px 10px;
+  }
+  .sidebar footer {
+    margin: 0 0 0 auto;
+    padding: 0 4px;
+    white-space: nowrap;
+  }
+  .topbar {
+    padding: 0 14px;
+  }
+}

@@ -149,6 +149,7 @@ export default function Plans() {
         {plans.length === 0 ? (
           <div className="empty">还没有套餐。先建一个草稿，发布后 App 才会展示。</div>
         ) : (
+          <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
@@ -165,7 +166,7 @@ export default function Plans() {
             <tbody>
               {plans.map((plan) => (
                 <tr key={plan.plan_id}>
-                  <td>
+                  <td className="wrap">
                     <strong>{plan.name}</strong>
                     <div className="mono">{plan.plan_id}</div>
                   </td>
@@ -207,6 +208,7 @@ export default function Plans() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
