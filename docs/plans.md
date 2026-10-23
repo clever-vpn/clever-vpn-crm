@@ -1,0 +1,96 @@
+# 套餐模型与换购规则
+
+Last updated: 2026-10-23
+
+> 权威契约在 [`clever-vpn-docs` `app-crm.md` §2.4.7 / §2.4.8](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/app-crm.md)。
+> 本文只讲**本仓库怎么实现**，不复制契约正文。
+
+## 一句话
+
+**所有销售策略都在 CRM，App 里没有一行价格或资格判断。**
+改价、上下架、换规则 = 改 `plans` 表 + 重新发布，**App 不用发版**。
+
+## 1. 只有三种套餐
+
+| `kind` | 卖给谁 | 落到 cf-api |
+|---|---|---|
+| `period` | 主订阅：按时间，含月度额度 | `expire_date = today + term_days`；**`quota = NULL`**；`traffic_balance = monthly_quota_gb` |
+| `traffic` | 主订阅：一次性流量 | `expire_date = today + validity_days`（空=永久）；**`quota = NULL`**；`traffic_balance = traffic_gb` |
+| `addon` | 附加包：只能挂 `period` | `traffic_balance += traffic_gb`，不动到期日 |
+
+不允许租户自由拼「时长 × 流量 × 设备 × 速率 × 叠加」——组合维度一多，
+「这单到底怎么算」就会变成客服问题，App 也没法稳定渲染。要卖 3 个月就建一个 `term_days=90` 的套餐。
+
+### 为什么 `quota` 恒为 `NULL`
+
+平台的月度重置边界是**记账自然月**：10 号买的用户永远拿不到完整的 30 天额度，
+和「每月 100GB」这句话对不上。所以重置权收归 CRM，按**每个用户的购买锚点**结算
+（`traffic_balance` 是唯一账本）。代价是要跑一个每小时一次的幂等结算任务（⬜ 待实现）。
+
+`traffic_balance = NULL` 就是**不限量**：cf-api 对 `NULL` 直接不计费
+（`packages/tenant/src/modules/customers/bandwidth.ts:263`），不需要额外标志位。
+
+## 2. 一个用户同时只有一个主订阅
+
+| 当前状态 | 买 `period` | 买 `traffic` | 买 `addon` |
+|---|---|---|---|
+| 无主订阅 / 已到期 / 流量用尽 | ✅ | ✅ | ❌ |
+| `period` 生效中 | ✅ 续费或升档 | ❌ | ✅（`allow_addons` 且非不限量） |
+| `traffic` 生效中 | ❌ | ✅ 换更大包 | ❌ |
+
+- **不支持降档**：换购后应付 < 0 一律拒绝（否则等于返现）。
+- **不跨 `kind` 换购**：想要另一种，等当前订阅结束再买。
+- 同档续费也走换购 —— 残值直接抵扣，等于「提前续费不亏」，不需要单独的续费规则。
+
+## 3. 残值换购（唯一升级规则）
+
+$$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应付} = \text{新套餐价} - \text{残值}$$
+
+| `kind` | 剩余比例 | 精度 |
+|---|---|---|
+| `period` | `剩余小时 / (term_days × 24)` | 按**小时** |
+| `traffic` | `剩余 GB / traffic_gb` | 按 GB |
+
+- **实付价**，不是目录价（促销价买的不按原价折）。用目录价折算会被促销套利。
+- 新订阅**从今天起算**，剩余时间不叠加。
+- 加购包余额**原样搬过去**，不折算。
+- 商店通道（`apple_iap` / `google_play`）的升级由商店自己做 proration，不参与残值换购。
+
+实现：`src/plans/quote.ts`（纯函数，39 个单测在 `test/plans.test.ts`）。
+
+## 4. 数据模型
+
+```sql
+plans (id, name, kind, price_minor, currency, licence_limit,
+       term_days, monthly_quota_gb, traffic_gb, validity_days, allow_addons,
+       line_ids JSON, up_mbps, down_mbps, channels JSON, store_product_id JSON,
+       sort_order, status, supersedes_id, retired_at, created_at, updated_at)
+```
+
+- `status`：`draft` → `active` → `retired`。
+- **`active` 的行不可原地修改**（历史订单要能追溯当时的规则）。
+  改价/改内容：`POST /plans/:id/clone` 生成 `supersedes_id` 指向旧行的新草稿 → 发布 → 下线旧行。
+- `line_ids`：空数组 = 不限线路。它只是**展示层过滤**（App 与 `/api/v3/key-lines` 取交集），
+  不是权限边界——真要做「这个套餐不能连那条线路」得改 cf-api。
+
+## 5. 后台入口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/admin/plans` | 全部套餐（含历史版本） |
+| POST | `/api/admin/plans` | 新建（一律 `draft`） |
+| PATCH | `/api/admin/plans/:id` | 只能改草稿 |
+| POST | `/api/admin/plans/:id/clone` | 克隆为下一版本草稿 |
+| POST | `/api/admin/plans/:id/publish` | 发布 |
+| POST | `/api/admin/plans/:id/retire` | 下线 |
+| POST | `/api/admin/plans/preview` | **干跑**：返回落账控制参数 + 换购报价，不写库 |
+
+`preview` 调的是服务端同一份计算，用来回答「这个套餐发布后，用户实际被写成什么」。
+
+## 6. 待办
+
+- [ ] `period` 每小时的幂等结算（按购买锚点重置 `traffic_balance`，含加购包抵扣）
+- [ ] `platform_subscriptions` 表（记 `paid_minor` / `anchors` / 加购包余额），报价要用
+- [ ] `POST /api/app/v1/upgrade/quote`（对外版报价）
+- [ ] 创建/换购时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数）
+- [ ] 读 cf-api `lines` 填充套餐的线路选择器

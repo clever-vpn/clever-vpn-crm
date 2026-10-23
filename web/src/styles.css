@@ -247,3 +247,76 @@ code {
   text-align: center;
   font-size: 13px;
 }
+
+/* ── 套餐设计器 ─────────────────────────────────────────────────── */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.row.between {
+  justify-content: space-between;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.grid label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--dim);
+  word-break: break-all;
+}
+.preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow: auto;
+  max-height: 320px;
+  color: var(--text);
+}
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+.tag-draft {
+  color: var(--warn);
+  border-color: color-mix(in oklab, var(--warn) 35%, var(--border));
+}
+.tag-active {
+  color: var(--ok);
+  border-color: color-mix(in oklab, var(--ok) 35%, var(--border));
+}
+.tag-retired {
+  color: var(--dim);
+}
+button.ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
