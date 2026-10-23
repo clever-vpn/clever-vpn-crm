@@ -7,9 +7,14 @@ Last updated: 2026-10-23
 
 ```
 浏览器 ──https──▶ Caddy (:443)
-                    ├── crm.clever-vpn.org      → 127.0.0.1:8788  (wrangler dev，CRM Worker)
-                    └── app-web.clever-vpn.org  → 127.0.0.1:5180  (node scripts/dev-app-web.mjs)
+                    ├── crm.clever-vpn.org/admin*     → localhost:5181  (Vite dev，HMR)
+                    ├── crm.clever-vpn.org/<其余>      → 127.0.0.1:8788  (wrangler dev，CRM Worker)
+                    └── app-web.clever-vpn.org        → 127.0.0.1:5180  (node scripts/dev-app-web.mjs)
 ```
+
+**管理后台为什么指向 dev server**：后台是 SPA，改一行代码不该走「`build:web` → 重启 wrangler」。
+Caddy 在**同一个域名**下按路径分流：`/admin*` 交给 Vite（HMR），`/api/*` 等仍打到真 Worker
+——所以会话 Cookie、`x-crm-request` CSRF、错误信封全都是真环境，而且同源、不需要 CORS。
 
 ## 1. 一次性准备
 
@@ -46,13 +51,21 @@ SETUP_TOKEN=dev-setup-token-1234      # 首次 /api/admin/setup 用
 ## 2. 起服务（两个终端）
 
 ```bash
-# 终端 A：CRM（wrangler dev 绑 IPv4，端口 8788）
-npm run build:web            # 先出管理后台产物
+# 终端 A：管理后台 dev server（Vite，HMR，5181）
+npm run dev:web
+
+# 终端 B：CRM Worker（wrangler dev，8788）—— 接口与品牌官网
+npm run build:web            # 只在没产物时需要跑一次（assets 目录必须存在）
 ./node_modules/.bin/wrangler dev --port 8788 --test-scheduled
 
-# 终端 B：app-web 模拟端（纯静态，端口 5180）
+# 终端 C：app-web 模拟端（纯静态，5180）
 npm run dev:app-web
 ```
+
+- **改 `web/` 里的界面代码 → 浏览器直接热更新**，不用重新构建、不用重启 wrangler。
+- 改了 `src/`（Worker 逻辑）→ wrangler 自己会重载，刷新页面即可。
+- 想看**编译后的产物**（验证「build 之后也没问题」）：`npm run build:web` 后直接开
+  <http://127.0.0.1:8788/admin/> —— 绕过 Caddy，走 Worker 的 assets。
 
 - **不要用 `npx wrangler`**：会提示安装 `wrangler@4.152.0` 并卡在 `Ok to proceed?`。
 - 别把 wrangler 输出接给 `head`（SIGPIPE 会把服务打死）；要留日志就 `> /tmp/crm-dev.log 2>&1 &`。
@@ -61,7 +74,8 @@ npm run dev:app-web
 
 | 地址 | 用途 |
 |---|---|
-| <https://crm.clever-vpn.org/admin/> | 管理后台（首次进 `/admin/` 用 `SETUP_TOKEN` 初始化管理员） |
+| <https://crm.clever-vpn.org/admin/> | 管理后台（**Vite dev server**；首次进用 `SETUP_TOKEN` 初始化管理员） |
+| <http://127.0.0.1:8788/admin/> | 管理后台**编译产物**（对比用，走 Worker assets） |
 | <https://crm.clever-vpn.org/admin/plans> | 套餐设计器 |
 | <https://app-web.clever-vpn.org/> | App 模拟端：登录 → 套餐列表 → 换购报价 |
 
