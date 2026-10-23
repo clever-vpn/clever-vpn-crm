@@ -20,6 +20,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.7.0",
+    "drizzle-kit": "^0.31.11",
     "typescript": "^5",
     "vite": "^6.4.5",
     "vitest": "^3",
@@ -29,6 +30,7 @@
     "@ant-design/icons": "^5.6.1",
     "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "antd": "^5.29.3",
+    "drizzle-orm": "^0.45.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   }
