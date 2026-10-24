@@ -485,3 +485,85 @@ describe("续订：同一套餐再买一次", () => {
     expect(change?.expires_after).toBe(after?.expires_at);
   });
 });
+
+describe("升级：换成别的套餐（残值抵扣）", () => {
+  const UPGRADE_PLAN = "pay_plan_200g";
+
+  beforeAll(async () => {
+    await env.DB.prepare(
+      `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
+         monthly_quota_gb, traffic_gb, validity_days, allow_addons, line_ids, sales_channels,
+         store_product_id, sort_order, status, visibility, created_at, updated_at)
+       VALUES (?, '月付 · 200GB 测试', 'period', 4000, 'CNY', 3, 30, 200, NULL, NULL, 0,
+         '[]', '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 9, 'active', 'public', ?, ?)`,
+    )
+      .bind(UPGRADE_PLAN, now(), now())
+      .run();
+  });
+
+  it("应付 = 新价 − 残值，且订单金额就是应付；升级后还是同一行", async () => {
+    // 先保证有一份 pay_plan_30d 生效中
+    const created = await call("/api/app/v1/orders", {
+      method: "POST",
+      token: TOKEN,
+      body: { plan_id: "pay_plan_30d", payment_method: "alipay" },
+    });
+    const base = (await created.json()) as { pay_url: string };
+    await worker.default.fetch(new Request(`${base.pay_url}/paid`, { method: "POST" }));
+
+    const before = await env.DB.prepare(
+      `SELECT s.id, s.plan_id, s.paid_minor FROM platform_subscriptions s
+         JOIN customers c ON c.id = s.customer_id WHERE c.email = ?`,
+    )
+      .bind(PAYER)
+      .first<{ id: number; plan_id: string; paid_minor: number }>();
+    expect(before?.plan_id).toBe("pay_plan_30d");
+
+    // /plans 会告诉 App：这是 upgrade，应付多少
+    const list = await call("/api/app/v1/plans", { token: TOKEN });
+    const plans = (await list.json()) as {
+      plan_id: string;
+      action: string;
+      payable_minor: number | null;
+      residual_minor: number | null;
+    }[];
+    const up = plans.find((p) => p.plan_id === UPGRADE_PLAN);
+    expect(up?.action).toBe("upgrade");
+    expect(up?.payable_minor).toBeGreaterThan(0);
+    expect(up?.payable_minor).toBeLessThan(4000); // 抵掉了残值
+
+    const ordered = await call("/api/app/v1/orders", {
+      method: "POST",
+      token: TOKEN,
+      body: { plan_id: UPGRADE_PLAN, payment_method: "alipay" },
+    });
+    expect(ordered.status).toBe(201);
+    const order = (await ordered.json()) as { order_code: string; pay_url: string; amount_minor: number };
+    // 收的钱必须是应付，不是目录价 4000
+    expect(order.amount_minor).toBe(up?.payable_minor);
+
+    await worker.default.fetch(new Request(`${order.pay_url}/paid`, { method: "POST" }));
+
+    const after = await env.DB.prepare(
+      `SELECT s.id, s.plan_id, s.paid_minor FROM platform_subscriptions s
+         JOIN customers c ON c.id = s.customer_id WHERE c.email = ?`,
+    )
+      .bind(PAYER)
+      .first<{ id: number; plan_id: string; paid_minor: number }>();
+
+    expect(after?.id).toBe(before?.id); // 同一行
+    expect(after?.plan_id).toBe(UPGRADE_PLAN);
+    expect(after?.paid_minor).toBe(order.amount_minor);
+
+    const change = await env.DB.prepare(
+      `SELECT action, plan_before, plan_after, residual_minor FROM subscription_changes
+        WHERE detail LIKE ? ORDER BY id DESC LIMIT 1`,
+    )
+      .bind(`%${order.order_code}%`)
+      .first<{ action: string; plan_before: string; plan_after: string; residual_minor: number }>();
+    expect(change?.action).toBe("upgrade");
+    expect(change?.plan_before).toBe("pay_plan_30d");
+    expect(change?.plan_after).toBe(UPGRADE_PLAN);
+    expect(change?.residual_minor).toBe(4000 - (up?.payable_minor ?? 0));
+  });
+});

@@ -52,6 +52,11 @@ export interface CreateChargeInput {
   plan: Plan;
   /** 用户选的支付方式（alipay / wechat / …） */
   method: string;
+  /**
+   * 应付金额（最小单位）。**不传就按套餐目录价**；
+   * 升级时必须传 `quote.payable_minor`（新价 − 残值），否则会按原价收钱。
+   */
+  amountMinor?: number;
   /** 本站 origin（拼 pay_url 与 notify_url 用） */
   origin: string;
   clientIp?: string;
@@ -111,7 +116,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
     return { ok: false, status: 400, code: "gateway_misconfigured", message: "该支付网关的映射配置无效" };
   }
 
-  const amountMinor = input.plan.price_minor;
+  const amountMinor = input.amountMinor ?? input.plan.price_minor;
   const currency = input.plan.currency;
   const orderCode = newOrderCode(now);
   const expiresAt = new Date(now.getTime() + ORDER_TTL_MINUTES * 60_000).toISOString();

@@ -24,6 +24,7 @@ import { listLiveGateways, visibleMethods } from "../payments/gateways";
 import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
+import { statusOf } from "../plans/subscription";
 import { customerSubscription } from "../subscriptions/store";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
@@ -170,11 +171,12 @@ function toQuoteInput(sub: Subscription): CurrentSubscription {
 
 function subscriptionView(sub: Subscription | null): Record<string, unknown> {
   if (!sub) return { status: "none" };
-  const now = Date.now();
-  const expired = sub.expires_at !== null && Date.parse(sub.expires_at) <= now;
+  const state = statusOf(sub);
   const unlimited = sub.kind === "period" && sub.quota_gb === null;
   return {
-    status: expired ? "expired" : "active",
+    status: state.status,
+    // 不能用的原因（到期 / 冻结 / 用完）—— App 必须说清是哪一种
+    status_reason: state.reason,
     kind: sub.kind,
     plan_id: sub.plan_id,
     expires_at: sub.expires_at,
@@ -319,6 +321,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
         ...planForClient(plan),
         purchasable: quote.allowed,
         reason: quote.reason,
+        // App 不做任何判断：按 action 渲染 购买 / 续订 / 升级 按钮
+        action: quote.action,
+        payable_minor: quote.payable_minor,
+        residual_minor: quote.residual_minor,
+        // 续订 / 升级之后的新到期日（"续订后有效期至…"）
+        next_expires_at: quote.allowed ? quote.expires_at : null,
       };
     });
     return json(items);
@@ -401,6 +409,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
       customerEmail: customer.email,
       plan,
       method: paymentMethod,
+      // 升级按"新价 − 残值"收钱；新购/续订就是目录价
+      amountMinor: quote.payable_minor ?? plan.price_minor,
       origin: new URL(request.url).origin,
       clientIp: clientIp(request),
     });

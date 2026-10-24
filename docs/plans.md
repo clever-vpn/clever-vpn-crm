@@ -63,7 +63,9 @@ $$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应�
 - **加购包余额原样搬过去**，不折算（它是 GB，不是钱）。
 - 商店通道（`apple_iap` / `google_play`）的升级由商店自己做 proration，不参与残值抵扣。
 
-实现：`src/plans/quote.ts`（纯函数，39 个单测在 `test/plans.test.ts`）。
+实现：`src/plans/quote.ts`（纯函数，37 个单测在 `test/plans.test.ts`）。
+App 只读 `/plans` 里的 `action`(`buy`/`renewal`/`upgrade`/`addon`/`blocked`) 与
+`payable_minor` 渲染按钮，**不做任何计算**。
 
 ## 4. 数据模型
 
