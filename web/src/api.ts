@@ -187,7 +187,60 @@ export const api = {
       "/plans/preview",
       { plan, current },
     ),
+  // ── 支付网关 ──
+  gateways: () => call<GatewaysResponse>("GET", "/gateways"),
+  createGateway: (input: GatewayDraft) =>
+    call<{ gateway: GatewayView }>("POST", "/gateways", input),
+  updateGateway: (id: number, input: Partial<GatewayDraft>) =>
+    call<{ gateway: GatewayView }>("PATCH", `/gateways/${id}`, input),
+  publishGateway: (id: number) =>
+    call<{ gateway: GatewayView }>("POST", `/gateways/${id}/publish`),
+  disableGateway: (id: number) =>
+    call<{ gateway: GatewayView }>("POST", `/gateways/${id}/disable`),
 };
+
+
+/** 支付网关（服务端**从不回显密钥**，只回 `has_secret`） */
+export interface GatewayView {
+  id: number;
+  driver: string;
+  name: string;
+  endpoint: string | null;
+  merchant_id: string | null;
+  has_secret: boolean;
+  methods: string[];
+  mapping: unknown;
+  priority: number;
+  status: "draft" | "live" | "disabled";
+  currency: string;
+  allowed_emails: string[];
+  last_test_order_id: number | null;
+  last_ok_at: string | null;
+  last_error: string | null;
+}
+
+export interface GatewayDraft {
+  driver: string;
+  name: string;
+  endpoint?: string | null;
+  merchant_id?: string | null;
+  /** 明文密钥：只有传了才会更新；留空 = 不改 */
+  secret?: string;
+  clear_secret?: boolean;
+  methods: string[];
+  priority?: number;
+  currency?: string;
+  allowed_emails?: string[];
+  mapping?: unknown;
+}
+
+export interface GatewaysResponse {
+  gateways: GatewayView[];
+  mock_enabled: boolean;
+  secret_key_ready: boolean;
+  drivers: { driver: string; methods: string[] }[];
+  all_methods: string[];
+}
 
 /** 与服务端 `CurrentSubscription` 对齐（仅预览用） */
 export interface CurrentSubscriptionInput {

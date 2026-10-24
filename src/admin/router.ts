@@ -20,6 +20,7 @@ import {
 } from "./crypto";
 import { consumeCode, issueCode } from "./email-code";
 import { handleAdminPlans } from "./plans";
+import { handleAdminGateways } from "./gateways";
 import { handleAdminSubscriptions } from "./subscriptions";
 import { emailCodeAvailable, mailReady, sendMail } from "../mail";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
@@ -397,6 +398,10 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
   // ── 套餐设计器（销售策略的唯一写入口）──────────────────────────────
   const plansResponse = await handleAdminPlans(request, env, admin.email);
   if (plansResponse) return plansResponse;
+
+  // ── 支付网关（唯一能创建网关的地方）────────────────────────────────
+  const gatewaysResponse = await handleAdminGateways(request, env, admin.email);
+  if (gatewaysResponse) return gatewaysResponse;
 
   // ── 订阅与结算（手工开通 / 跑结算）──────────────────────────────────
   const subsResponse = await handleAdminSubscriptions(request, env, admin.email);

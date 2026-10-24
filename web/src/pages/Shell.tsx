@@ -12,6 +12,7 @@ import {
 } from "antd";
 import {
   AppstoreOutlined,
+  CreditCardOutlined,
   DashboardOutlined,
   FileTextOutlined,
   LogoutOutlined,
@@ -20,6 +21,7 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { api, type Me } from "../api";
+import Gateways from "./Gateways";
 import Plans from "./Plans";
 import Settings from "./Settings";
 
@@ -30,12 +32,13 @@ interface NavItem {
   icon: React.ReactNode;
 }
 
-/** 侧栏只放这五项：少而稳，不往里堆二级菜单 */
+/** 侧栏只放这六项：少而稳，不往里堆二级菜单 */
 const NAV: NavItem[] = [
   { key: "/admin/", href: "/admin/", label: "概览", icon: <DashboardOutlined /> },
   { key: "/admin/customers", href: "/admin/customers", label: "客户", icon: <TeamOutlined /> },
   { key: "/admin/orders", href: "/admin/orders", label: "订单", icon: <FileTextOutlined /> },
   { key: "/admin/plans", href: "/admin/plans", label: "套餐", icon: <AppstoreOutlined /> },
+  { key: "/admin/gateways", href: "/admin/gateways", label: "支付", icon: <CreditCardOutlined /> },
   { key: "/admin/settings", href: "/admin/settings", label: "设置", icon: <SettingOutlined /> },
 ];
 
@@ -87,6 +90,8 @@ export default function Shell({
       <Settings me={me} onMeChanged={onMeChanged} />
     ) : path === "/admin/plans" ? (
       <Plans />
+    ) : path === "/admin/gateways" ? (
+      <Gateways />
     ) : (
       <Placeholder title={current.label} hint={PLACEHOLDERS[path] ?? "待实现"} />
     );
