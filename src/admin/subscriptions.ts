@@ -55,12 +55,101 @@ export async function handleAdminSubscriptions(
   const path = url.pathname.replace(/^\/api\/admin/, "");
   const method = request.method;
 
-  // ── 客户（本地测试用；正式由 App 登录创建）──
+  // ── 客户列表：带上"当前订阅 + 算出来的状态" ──
+  //    单行模型下这就是全部真相：一个客户一行订阅（domain.md §1.2）
   if (method === "GET" && path === "/customers") {
     const rows = await env.DB.prepare(
-      `SELECT id, email, display_name, status, created_at FROM customers ORDER BY id DESC LIMIT 200`,
-    ).all<{ id: number; email: string; display_name: string | null; status: string; created_at: string }>();
-    return json({ customers: rows.results ?? [] });
+      `SELECT c.id, c.email, c.display_name, c.status, c.created_at,
+              s.plan_id, s.kind AS sub_kind, s.expires_at, s.hold, s.hold_reason,
+              s.anchor_day, s.remaining_gb, s.quota_gb, s.traffic_total_gb,
+              s.balance_gb, s.licence_limit, s.paid_minor
+         FROM customers c
+         LEFT JOIN platform_subscriptions s ON s.customer_id = c.id
+        ORDER BY c.id DESC LIMIT 200`,
+    ).all<{
+      id: number;
+      email: string;
+      display_name: string | null;
+      status: string;
+      created_at: string;
+      plan_id: string | null;
+      sub_kind: string | null;
+      expires_at: string | null;
+      hold: string | null;
+      hold_reason: string | null;
+      anchor_day: number | null;
+      remaining_gb: number | null;
+      quota_gb: number | null;
+      traffic_total_gb: number | null;
+      balance_gb: number | null;
+      licence_limit: number | null;
+      paid_minor: number | null;
+    }>();
+
+    const customers = (rows.results ?? []).map((r) => {
+      if (r.plan_id === null) {
+        return { id: r.id, email: r.email, display_name: r.display_name, created_at: r.created_at, subscription: null };
+      }
+      const state = statusOf(
+        {
+          hold: (r.hold ?? "none") as "none" | "frozen" | "revoked",
+          hold_reason: r.hold_reason,
+          expires_at: r.expires_at,
+          remaining_gb: r.remaining_gb,
+          kind: (r.sub_kind ?? "period") as "period" | "traffic" | "addon",
+          anchor_day: r.anchor_day,
+        },
+        new Date(),
+      );
+      return {
+        id: r.id,
+        email: r.email,
+        display_name: r.display_name,
+        created_at: r.created_at,
+        subscription: {
+          plan_id: r.plan_id,
+          kind: r.sub_kind,
+          expires_at: r.expires_at,
+          licence_limit: r.licence_limit,
+          quota_gb: r.quota_gb,
+          traffic_total_gb: r.traffic_total_gb,
+          remaining_gb: r.remaining_gb,
+          balance_gb: r.balance_gb,
+          paid_minor: r.paid_minor,
+          status: state.status,
+          status_reason: state.reason,
+        },
+      };
+    });
+    return json({ customers });
+  }
+
+  // ── 订单列表（最近 200 条；可按状态 / 客户过滤）──
+  if (method === "GET" && path === "/orders") {
+    const status = url.searchParams.get("status");
+    const customerId = Number(url.searchParams.get("customer_id") ?? 0);
+    const limit = Math.min(Number(url.searchParams.get("limit") ?? 100) || 100, 200);
+    const where: string[] = [];
+    const binds: (string | number)[] = [];
+    if (status) {
+      where.push("o.status = ?");
+      binds.push(status);
+    }
+    if (customerId) {
+      where.push("o.customer_id = ?");
+      binds.push(customerId);
+    }
+    const rows = await env.DB.prepare(
+      `SELECT o.id, o.code, o.customer_id, c.email, o.plan_id, o.kind, o.amount_minor,
+              o.currency, o.source, o.payment_method, o.status, o.paid_at, o.created_at,
+              o.provider_trade_no, o.pay_url
+         FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+         ${where.length ? "WHERE " + where.join(" AND ") : ""}
+         ORDER BY o.id DESC LIMIT ?`,
+    )
+      .bind(...binds, limit)
+      .all();
+    return json({ orders: rows.results ?? [] });
   }
 
   if (method === "POST" && path === "/customers") {

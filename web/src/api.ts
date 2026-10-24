@@ -187,6 +187,22 @@ export const api = {
       "/plans/preview",
       { plan, current },
     ),
+  // ── 客户与订单 ──
+  customers: () => call<{ customers: AdminCustomer[] }>("GET", "/customers"),
+  createCustomer: (email: string) =>
+    call<{ customer: { id: number; email: string } }>("POST", "/customers", { email }),
+  orders: (params: { status?: string; customer_id?: number; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.status) q.set("status", params.status);
+    if (params.customer_id) q.set("customer_id", String(params.customer_id));
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return call<{ orders: AdminOrder[] }>("GET", `/orders${qs ? `?${qs}` : ""}`);
+  },
+  /** 手工开通 / 覆盖订阅（本地联调、运营补单） */
+  grantSubscription: (input: { customer_id: number; plan_id: string; paid_minor?: number }) =>
+    call<{ subscription: { id: number } }>("POST", "/subscriptions", input),
+
   // ── 支付网关 ──
   gateways: () => call<GatewaysResponse>("GET", "/gateways"),
   createGateway: (input: GatewayDraft) =>
@@ -199,6 +215,52 @@ export const api = {
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/disable`),
 };
 
+
+// ── 客户与订单 ──
+
+export type SubscriptionStatus = "active" | "expired" | "exhausted" | "frozen" | "revoked";
+
+export interface AdminSubscriptionSummary {
+  plan_id: string;
+  kind: "period" | "traffic" | "addon";
+  expires_at: string | null;
+  licence_limit: number | null;
+  quota_gb: number | null;
+  /** traffic 包的整包容量（period 为 null） */
+  traffic_total_gb: number | null;
+  remaining_gb: number | null;
+  balance_gb: number | null;
+  paid_minor: number | null;
+  status: SubscriptionStatus;
+  /** 为什么不能用（到期 / 冻结 / 用完）—— 后台也要看得到 */
+  status_reason: string | null;
+}
+
+export interface AdminCustomer {
+  id: number;
+  email: string;
+  display_name: string | null;
+  created_at: string;
+  subscription: AdminSubscriptionSummary | null;
+}
+
+export interface AdminOrder {
+  id: number;
+  code: string;
+  customer_id: number;
+  email: string | null;
+  plan_id: string;
+  kind: string;
+  amount_minor: number;
+  currency: string;
+  source: string;
+  payment_method: string;
+  status: string;
+  paid_at: string | null;
+  created_at: string;
+  provider_trade_no: string | null;
+  pay_url: string | null;
+}
 
 /** 支付网关（服务端**从不回显密钥**，只回 `has_secret`） */
 export interface GatewayView {

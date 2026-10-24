@@ -21,7 +21,9 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { api, type Me } from "../api";
+import Customers from "./Customers";
 import Gateways from "./Gateways";
+import Orders from "./Orders";
 import Plans from "./Plans";
 import Settings from "./Settings";
 
@@ -44,8 +46,6 @@ const NAV: NavItem[] = [
 
 const PLACEHOLDERS: Record<string, string> = {
   "/admin/": "今日注册 / 今日收入 / 待处理订单 / 即将到期客户 —— 数据来自订单与 cf-api 客户镜像。",
-  "/admin/customers": "客户列表 / 详情 / 订阅历史 / 改控制参数。",
-  "/admin/orders": "订单状态机 / 退款 / 人工补单 / 对账。",
 };
 
 function usePathname(): [string, (href: string) => void] {
@@ -88,6 +88,10 @@ export default function Shell({
   const page =
     path === "/admin/settings" ? (
       <Settings me={me} onMeChanged={onMeChanged} />
+    ) : path === "/admin/customers" ? (
+      <Customers />
+    ) : path === "/admin/orders" ? (
+      <Orders />
     ) : path === "/admin/plans" ? (
       <Plans />
     ) : path === "/admin/gateways" ? (
