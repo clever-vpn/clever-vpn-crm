@@ -9,9 +9,10 @@
  *
  * 设计依据：`docs/domain.md`（六条不变量）。改表先改那边。
  *
- * 生成迁移：`npm run db:generate` → `migrations/*.sql`
- * 应用迁移：Worker 启动时自迁移（见 `src/db.ts`），无需 CLI —— 托管模式下
- * 也不能跑 CLI（Worker 是按 release 字节上传的）。
+ * 生成迁移：`npm run db:generate` → `migrations/*.sql`（开发库走 `migrations-dev/`，见 `docs/schema.md`）
+ * 应用迁移：本地 `npm run db:migrate:local`；线上由 `deploy.yml` 在部署前
+ * 执行 `wrangler d1 migrations apply --remote`。**Worker 不做自迁移** —— 缺表时
+ * `src/db.ts` 会直接报错并提示跑哪条命令。
  */
 import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
@@ -131,7 +132,20 @@ export const plans = sqliteTable(
     line_ids: text("line_ids").notNull().default("[]"),
     up_mbps: integer("up_mbps"),
     down_mbps: integer("down_mbps"),
+    /** 渠道 JSON：`web_checkout` | `apple_iap` | `google_play` */
     channels: text("channels").notNull().default("[]"),
+    /**
+     * 商店商品 ID：`{"apple"?: string, "google"?: string}`。
+     *
+     * **由管理员手工定义**，平台不会自动生成 —— 先到 App Store Connect /
+     * Play Console 各建一次商品，再把 ID 抄进来（见 `docs/plans.md` §4.1）。
+     *   - 两端**不可互换**：是不同的商品注册表，需要各自创建、各自激活；
+     *   - 创建后**不可改名**（改 = 新建商品），所以第一次就要起对；
+     *   - Apple 区分大小写；Google 只允许小写字母/数字/`.`/`_`。
+     *
+     * 平台在付款时生成的交易标识（Apple `transactionId` / Google `purchaseToken`）
+     * **不放这里**，那是交易事实，落 `orders.external_id`。
+     */
     store_product_id: text("store_product_id").notNull().default("{}"),
     sort_order: integer("sort_order").notNull().default(0),
     /** draft | active | retired */
