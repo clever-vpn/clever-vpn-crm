@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import {
   Avatar,
   Breadcrumb,
+  Button,
+  Drawer,
   Dropdown,
   Grid,
   Layout,
@@ -17,6 +19,7 @@ import {
   FileTextOutlined,
   LogoutOutlined,
   InboxOutlined,
+  MenuOutlined,
   SettingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
@@ -43,6 +46,12 @@ const NAV: NavItem[] = [
   { key: "/admin/gateways", href: "/admin/gateways", label: "支付", icon: <CreditCardOutlined /> },
   { key: "/admin/settings", href: "/admin/settings", label: "设置", icon: <SettingOutlined /> },
 ];
+
+/**
+ * 手机底部标签栏只放"每天要点"的入口（Material / iOS 规范：3–5 个）。
+ * 其余导航全部进左上角抽屉 —— 以后加功能不用再挤这里。
+ */
+const MOBILE_TABS = NAV.slice(0, 3);
 
 const PLACEHOLDERS: Record<string, string> = {
   "/admin/": "今日注册 / 今日收入 / 待处理订单 / 即将到期客户 —— 数据来自订单与 cf-api 客户镜像。",
@@ -73,6 +82,7 @@ export default function Shell({
   onMeChanged: (me: Me) => void;
 }) {
   const [path, navigate] = usePathname();
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const screens = Grid.useBreakpoint();
   // 首帧 screens 是空对象（还不知道宽度）：用 md === false 判断"确认是小屏"，
   // 否则会在手机上先闪一下侧栏。
@@ -101,7 +111,8 @@ export default function Shell({
     );
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
+    <>
+      <Layout style={{ minHeight: "100vh" }}>
       {!isMobile && (
         <Layout.Sider
           width={208}
@@ -141,9 +152,18 @@ export default function Shell({
           }}
         >
           {isMobile ? (
-            <Typography.Text strong style={{ fontSize: 16 }}>
-              {current.label}
-            </Typography.Text>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <Button
+                type="text"
+                icon={<MenuOutlined />}
+                aria-label="打开菜单"
+                onClick={() => setDrawerOpen(true)}
+                style={{ marginInlineStart: -6 }}
+              />
+              <Typography.Text strong style={{ fontSize: 16 }}>
+                {current.label}
+              </Typography.Text>
+            </div>
           ) : (
             <Breadcrumb
               items={[{ title: "控制台" }, { title: current.label }]}
@@ -201,13 +221,14 @@ export default function Shell({
             right: 0,
             zIndex: 30,
             display: "grid",
-            gridTemplateColumns: `repeat(${NAV.length}, 1fr)`,
+            // 高频入口 + 一个「更多」（打开抽屉）—— 以后加功能只进抽屉，不动这里
+            gridTemplateColumns: `repeat(${MOBILE_TABS.length + 1}, 1fr)`,
             background: token.colorBgContainer,
             borderTop: `1px solid ${token.colorBorderSecondary}`,
             paddingBottom: "env(safe-area-inset-bottom)",
           }}
         >
-          {NAV.map((item) => {
+          {MOBILE_TABS.map((item) => {
             const active = item.key === current.key;
             return (
               <button
@@ -231,9 +252,69 @@ export default function Shell({
               </button>
             );
           })}
+          <button
+            onClick={() => setDrawerOpen(true)}
+            style={{
+              border: 0,
+              background: "transparent",
+              padding: "8px 0 10px",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 2,
+              fontSize: 11,
+              cursor: "pointer",
+              // 当前页不在底部这四项里 ⇒ 高亮"更多"，告诉用户它在抽屉里
+              color: MOBILE_TABS.some((t) => t.key === current.key)
+                ? token.colorTextTertiary
+                : token.colorPrimary,
+            }}
+          >
+            <span style={{ fontSize: 18, lineHeight: 1 }}>
+              <MenuOutlined />
+            </span>
+            更多
+          </button>
         </nav>
       )}
-    </Layout>
+
+      {/*
+        手机端导航分两层（业界标准）：
+          · 底部标签栏 = 每天要点的高频入口（MOBILE_TABS，3 个 + 「更多」）
+          · 左上角汉堡 → 抽屉 = **全部**导航，以后加功能不用再挤底部
+      */}
+      <Drawer
+        placement="left"
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        width={260}
+        title={<Brand />}
+        styles={{ header: { padding: 0, borderBottom: "none" }, body: { padding: 0 } }}
+      >
+        <Menu
+          mode="inline"
+          selectedKeys={[current.key]}
+          items={NAV.map((n) => ({ key: n.key, icon: n.icon, label: n.label }))}
+          onClick={({ key }) => {
+            setDrawerOpen(false);
+            navigate(key);
+          }}
+          style={{ borderInlineEnd: "none" }}
+        />
+        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+          <Tag
+            color={me.mail_ready ? "success" : "warning"}
+            style={{ width: "100%", textAlign: "center", marginInlineEnd: 0 }}
+          >
+            {me.mail_ready ? "邮件通道已就绪" : "邮件通道未配置"}
+          </Tag>
+          <Button block icon={<LogoutOutlined />} danger onClick={() => void logout()}>
+            退出登录
+          </Button>
+        </div>
+      </Drawer>
+      </Layout>
+    </>
   );
 }
 
