@@ -37,7 +37,6 @@ export interface CurrentSubscription {
   remaining_gb: number | null;
   /** 不限量（平台 `traffic_balance = NULL`）：周期不限量 或 流量不限量 */
   unlimited: boolean;
-  allow_addons: boolean;
 }
 
 export type Settlement = "new" | "renewal" | "residual_trade_in" | "store_proration";
@@ -137,7 +136,6 @@ export function quotePurchase(current: CurrentSubscription | null, target: Plan,
   if (target.kind === "addon") {
     if (current.kind !== "period") return reject("加购包只能叠加在周期套餐上");
     if (current.unlimited) return reject("不限量套餐不需要加购");
-    if (!current.allow_addons) return reject("当前套餐不支持加购");
     return {
       allowed: true,
       reason: null,

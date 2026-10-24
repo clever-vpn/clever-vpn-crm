@@ -60,7 +60,6 @@ export interface Subscription {
   quota_gb: number | null;
   traffic_total_gb: number | null;
   validity_days: number | null;
-  allow_addons: boolean;
   line_ids: number[];
   started_at: string;
   /** null = 永不过期 */
@@ -113,7 +112,6 @@ export function subscriptionFromPlan(
     quota_gb: plan.kind === "period" ? plan.monthly_quota_gb : null,
     traffic_total_gb: plan.kind === "period" ? null : plan.traffic_gb,
     validity_days: plan.kind === "traffic" ? plan.validity_days : null,
-    allow_addons: plan.allow_addons,
     line_ids: plan.line_ids,
     started_at: now.toISOString(),
     expires_at: plan.kind === "addon" ? null : expiresAt,

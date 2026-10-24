@@ -39,12 +39,14 @@ Last updated: 2026-10-24
 | 当前状态 | 买同一个套餐 | 买**任何**其它套餐 | 买 `addon` |
 |---|---|---|---|
 | 无主订阅 / 已到期 | 新购 | 新购 | ❌ |
-| 生效中（`period` / `traffic`） | **续订**（全款、顺延） | **升级**（残值抵扣） | 仅 `period`（`allow_addons` 且非不限量） |
+| 生效中（`period` / `traffic`） | **续订**（全款、顺延） | **升级**（残值抵扣） | **`period` 就能买**（不限量除外） |
 
 - **续订不选计划**：App 上就一个“续订 ¥X / N 天”按钮，用户不用挑。
 - **升级可以跨 `kind`**（周期 ⇄ 流量都行），唯一门槛是
   `应付 = 新价 − 残值` 必须 **> 0**。这一条同时挡住了降档（应付 ≤ 0）与 0 元白拿。
 - **加购包不折钱**：`addon` 是纯 GB 余额，升级时原样搬到新订阅。
+- **加购没有开关**：只要有一份生效中的周期套餐就能买加量包（它不产生第二份订阅，
+  只往 `balance_gb` 上加 GB）；唯一例外是不限量套餐——加了对用户没有任何作用。
 
 ## 3. 残值换购（**只用于升级**）
 
@@ -71,7 +73,7 @@ App 只读 `/plans` 里的 `action`(`buy`/`renewal`/`upgrade`/`addon`/`blocked`)
 
 ```sql
 plans (id, name, kind, price_minor, currency, licence_limit,
-       term_days, monthly_quota_gb, traffic_gb, validity_days, allow_addons,
+       term_days, monthly_quota_gb, traffic_gb, validity_days,
        line_ids JSON, up_mbps, down_mbps, sales_channels JSON, store_product_id JSON,
        sort_order, status, visibility, retired_at, created_at, updated_at)
 ```

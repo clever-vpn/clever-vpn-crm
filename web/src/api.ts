@@ -87,7 +87,6 @@ export interface PlanView {
   monthly_quota_gb: number | null;
   traffic_gb: number | null;
   validity_days: number | null;
-  allow_addons: boolean;
   line_ids: number[];
   speed: { up_mbps: number | null; down_mbps: number | null } | null;
   sales_channels: PlanChannel[];
@@ -109,7 +108,6 @@ export interface PlanDraft {
   monthly_quota_gb: number | null;
   traffic_gb: number | null;
   validity_days: number | null;
-  allow_addons: boolean;
   line_ids: number[];
   up_mbps: number | null;
   down_mbps: number | null;
@@ -314,5 +312,4 @@ export interface CurrentSubscriptionInput {
   expires_at: string | null;
   remaining_gb: number | null;
   unlimited: boolean;
-  allow_addons: boolean;
 }

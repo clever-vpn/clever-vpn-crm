@@ -44,9 +44,9 @@ beforeAll(async () => {
 
   await env.DB.prepare(
     `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
-       monthly_quota_gb, traffic_gb, validity_days, allow_addons, line_ids, sales_channels,
+       monthly_quota_gb, traffic_gb, validity_days, line_ids, sales_channels,
        store_product_id, sort_order, status, visibility, created_at, updated_at)
-     VALUES ('adm_plan_30d', '月付 · 测试', 'period', 1500, 'CNY', 1, 30, 100, NULL, NULL, 0,
+     VALUES ('adm_plan_30d', '月付 · 测试', 'period', 1500, 'CNY', 1, 30, 100, NULL, NULL,
        '[]', '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 1, 'active', 'public', ?, ?)`,
   )
     .bind(now, now)

@@ -35,7 +35,6 @@ function makePlan(over: Partial<Plan> = {}): Plan {
     monthly_quota_gb: 100,
     traffic_gb: null,
     validity_days: null,
-    allow_addons: true,
     line_ids: [],
     up_mbps: null,
     down_mbps: null,
@@ -59,7 +58,6 @@ function makeCurrent(over: Partial<CurrentSubscription> = {}): CurrentSubscripti
     expires_at: "2026-11-22T00:00:00Z",
     remaining_gb: null,
     unlimited: false,
-    allow_addons: true,
     ...over,
   };
 }
@@ -93,11 +91,6 @@ describe("validatePlan", () => {
     if (!r.ok) expect(r.errors.join()).toContain("设备数");
   });
 
-  it("不限量套餐不能开启加购", () => {
-    const r = validatePlan({ ...base, monthly_quota_gb: null, allow_addons: true });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toContain("不限量");
-  });
 
   it("流量套餐不能填周期字段", () => {
     const r = validatePlan({
@@ -119,7 +112,6 @@ describe("validatePlan", () => {
       term_days: null,
       monthly_quota_gb: null,
       validity_days: 30,
-      allow_addons: false,
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.join()).toContain("加购包");
@@ -151,7 +143,7 @@ describe("planToControlParams", () => {
   });
 
   it("period 不限量：traffic_balance = null（平台视为不计费）", () => {
-    const c = planToControlParams(makePlan({ monthly_quota_gb: null, allow_addons: false }), NOW);
+    const c = planToControlParams(makePlan({ monthly_quota_gb: null }), NOW);
     expect(c.traffic_balance).toBeNull();
     expect(c.quota).toBeNull();
   });
@@ -302,26 +294,34 @@ describe("quotePurchase", () => {
     expect(q.expires_at).toBeNull();
   });
 
-  it("加购：只允许挂在生效中的周期套餐上", () => {
-    const addon = makePlan({ id: "pack_50g", kind: "addon", term_days: null, monthly_quota_gb: null, traffic_gb: 50, price_minor: 500, allow_addons: false });
+  it("加购：**只要有周期主订阅就能买**，没有额外开关", () => {
+    const addon = makePlan({
+      id: "pack_50g",
+      kind: "addon",
+      term_days: null,
+      monthly_quota_gb: null,
+      traffic_gb: 50,
+      price_minor: 500,
+    });
     const ok = quotePurchase(makeCurrent(), addon, NOW);
     expect(ok.allowed).toBe(true);
+    expect(ok.action).toBe("addon");
     expect(ok.payable_minor).toBe(500);
     expect(ok.expires_at).toBe("2026-11-22T00:00:00.000Z"); // 不动到期日
 
-    const notAllowed = quotePurchase(makeCurrent({ allow_addons: false }), addon, NOW);
-    expect(notAllowed.allowed).toBe(false);
-    expect(notAllowed.reason).toContain("不支持加购");
+    // 本月流量用完之后照样能买（这正是加购的用途）
+    const exhausted = quotePurchase(makeCurrent({ remaining_gb: 0 }), addon, NOW);
+    expect(exhausted.allowed).toBe(true);
 
+    // 没有主订阅 / 主订阅已结束 ⇒ 无处可挂
     const over = quotePurchase(makeCurrent({ expires_at: "2026-10-01T00:00:00Z" }), addon, NOW);
     expect(over.allowed).toBe(false);
     expect(over.reason).toContain("加购包");
   });
 
-  it("不限量套餐不能加购", () => {
+  it("不限量套餐不加购（加了对用户也没作用）", () => {
     const addon = makePlan({ id: "pack_50g", kind: "addon", term_days: null, monthly_quota_gb: null, traffic_gb: 50 });
-    const current = makeCurrent({ unlimited: true, allow_addons: false });
-    const q = quotePurchase(current, addon, NOW);
+    const q = quotePurchase(makeCurrent({ unlimited: true }), addon, NOW);
     expect(q.allowed).toBe(false);
     expect(q.reason).toContain("不限量");
   });
@@ -346,7 +346,7 @@ describe("rowToPlan", () => {
   it("JSON 列解析失败时不炸（回到默认值）", () => {
     const row: PlanRow = {
       id: "x_1", name: "x", kind: "period", price_minor: 100, currency: "CNY", licence_limit: 1,
-      term_days: 30, monthly_quota_gb: 10, traffic_gb: null, validity_days: null, allow_addons: 1,
+      term_days: 30, monthly_quota_gb: 10, traffic_gb: null, validity_days: null,
       line_ids: "[1,2]", up_mbps: null, down_mbps: null,
       sales_channels: "not-json", store_product_id: "{}", sort_order: 0, status: "active",
       retired_at: null,
@@ -354,7 +354,6 @@ describe("rowToPlan", () => {
     const plan = rowToPlan(row);
     expect(plan.line_ids).toEqual([1, 2]);
     expect(plan.sales_channels).toEqual([]);
-    expect(plan.allow_addons).toBe(true);
   });
 });
 

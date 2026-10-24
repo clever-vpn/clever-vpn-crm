@@ -49,7 +49,7 @@ async function audit(env: Env, actor: string, action: string, target: string, de
 }
 
 const PLAN_COLUMNS = `id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
-  traffic_gb, validity_days, allow_addons, line_ids, up_mbps, down_mbps, sales_channels, store_product_id,
+  traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels, store_product_id,
   sort_order, status, retired_at, created_at, updated_at`;
 
 /** 后台视图 = App 视图 + 后台才需要的状态字段 */
@@ -70,14 +70,14 @@ async function insertPlan(env: Env, plan: Plan): Promise<void> {
   const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
-       traffic_gb, validity_days, allow_addons, line_ids, up_mbps, down_mbps, sales_channels, store_product_id,
+       traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels, store_product_id,
        sort_order, status, retired_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       plan.id, plan.name, plan.kind, plan.price_minor, plan.currency, plan.licence_limit,
       plan.term_days, plan.monthly_quota_gb, plan.traffic_gb, plan.validity_days,
-      plan.allow_addons ? 1 : 0, JSON.stringify(plan.line_ids), plan.up_mbps, plan.down_mbps,
+      JSON.stringify(plan.line_ids), plan.up_mbps, plan.down_mbps,
       JSON.stringify(plan.sales_channels), JSON.stringify(plan.store_product_id),
       plan.sort_order, plan.status, plan.retired_at, now, now,
     )
@@ -87,7 +87,7 @@ async function insertPlan(env: Env, plan: Plan): Promise<void> {
 async function updatePlan(env: Env, plan: Plan): Promise<void> {
   await env.DB.prepare(
     `UPDATE plans SET name = ?, kind = ?, price_minor = ?, currency = ?, licence_limit = ?,
-       term_days = ?, monthly_quota_gb = ?, traffic_gb = ?, validity_days = ?, allow_addons = ?,
+       term_days = ?, monthly_quota_gb = ?, traffic_gb = ?, validity_days = ?,
        line_ids = ?, up_mbps = ?, down_mbps = ?, sales_channels = ?, store_product_id = ?,
        sort_order = ?, status = ?, retired_at = ?, updated_at = ?
      WHERE id = ?`,
@@ -95,7 +95,7 @@ async function updatePlan(env: Env, plan: Plan): Promise<void> {
     .bind(
       plan.name, plan.kind, plan.price_minor, plan.currency, plan.licence_limit,
       plan.term_days, plan.monthly_quota_gb, plan.traffic_gb, plan.validity_days,
-      plan.allow_addons ? 1 : 0, JSON.stringify(plan.line_ids), plan.up_mbps, plan.down_mbps,
+      JSON.stringify(plan.line_ids), plan.up_mbps, plan.down_mbps,
       JSON.stringify(plan.sales_channels), JSON.stringify(plan.store_product_id),
       plan.sort_order, plan.status, plan.retired_at,
       new Date().toISOString(), plan.id,

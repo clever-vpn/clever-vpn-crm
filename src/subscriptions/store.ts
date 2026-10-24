@@ -30,7 +30,6 @@ export interface SubscriptionRow {
   quota_gb: number | null;
   traffic_total_gb: number | null;
   validity_days: number | null;
-  allow_addons: number;
   line_ids: string;
   started_at: string;
   expires_at: string | null;
@@ -42,7 +41,7 @@ export interface SubscriptionRow {
 }
 
 const COLUMNS = `id, customer_id, plan_id, kind, hold, hold_reason, hold_at, paid_minor, currency, licence_limit,
-  term_days, quota_gb, traffic_total_gb, validity_days, allow_addons, line_ids, started_at,
+  term_days, quota_gb, traffic_total_gb, validity_days, line_ids, started_at,
   expires_at, anchor_day, balance_gb, remaining_gb, last_settled_at, platform_customer_id`;
 
 export function rowToSubscription(row: SubscriptionRow): Subscription {
@@ -67,7 +66,6 @@ export function rowToSubscription(row: SubscriptionRow): Subscription {
     quota_gb: row.quota_gb,
     traffic_total_gb: row.traffic_total_gb,
     validity_days: row.validity_days,
-    allow_addons: row.allow_addons === 1,
     line_ids: Array.isArray(lineIds) ? lineIds : [],
     started_at: row.started_at,
     expires_at: row.expires_at,
@@ -81,17 +79,17 @@ export function rowToSubscription(row: SubscriptionRow): Subscription {
 
 const UPSERT_SQL = `INSERT INTO platform_subscriptions
     (customer_id, plan_id, kind, hold, hold_reason, hold_at, paid_minor, currency,
-     licence_limit, term_days, quota_gb, traffic_total_gb, validity_days, allow_addons,
+     licence_limit, term_days, quota_gb, traffic_total_gb, validity_days,
      line_ids, started_at, expires_at, anchor_day, balance_gb, remaining_gb,
      last_settled_at, platform_customer_id, code, created_at, updated_at)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
    ON CONFLICT(customer_id) DO UPDATE SET
      plan_id = excluded.plan_id, kind = excluded.kind, hold = excluded.hold,
      hold_reason = excluded.hold_reason, hold_at = excluded.hold_at,
      paid_minor = excluded.paid_minor, currency = excluded.currency,
      licence_limit = excluded.licence_limit, term_days = excluded.term_days,
      quota_gb = excluded.quota_gb, traffic_total_gb = excluded.traffic_total_gb,
-     validity_days = excluded.validity_days, allow_addons = excluded.allow_addons,
+     validity_days = excluded.validity_days,
      line_ids = excluded.line_ids, started_at = excluded.started_at,
      expires_at = excluded.expires_at, anchor_day = excluded.anchor_day,
      balance_gb = excluded.balance_gb, remaining_gb = excluded.remaining_gb,
@@ -109,7 +107,7 @@ export async function upsertSubscription(env: Env, sub: Subscription): Promise<n
     .bind(
       sub.customer_id, sub.plan_id, sub.kind, sub.hold, sub.hold_reason, sub.hold_at,
       sub.paid_minor, sub.currency, sub.licence_limit, sub.term_days, sub.quota_gb,
-      sub.traffic_total_gb, sub.validity_days, sub.allow_addons ? 1 : 0,
+      sub.traffic_total_gb, sub.validity_days,
       JSON.stringify(sub.line_ids), sub.started_at, sub.expires_at, sub.anchor_day,
       sub.balance_gb, sub.remaining_gb, sub.last_settled_at, sub.platform_customer_id,
       now, now,
@@ -325,7 +323,7 @@ export async function runSettlement(
 async function loadPlanSnapshot(env: Env, planId: string) {
   const row = await env.DB.prepare(
     `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
-       traffic_gb, validity_days, allow_addons, line_ids, up_mbps, down_mbps, sales_channels,
+       traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
        store_product_id, sort_order, status, retired_at
      FROM plans WHERE id = ?`,
   ).bind(planId).first<PlanRow>();
