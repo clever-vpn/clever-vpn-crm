@@ -52,6 +52,15 @@ export interface Env {
   TURNSTILE_SECRET?: string;
 
   /**
+   * 支付网关密钥的**主密钥**（`wrangler secret put PAYMENT_SECRET_KEY`）。
+   *
+   * 用于 AES-GCM 加解密 `payment_gateways.secret_enc`。**没配就不能保存/使用
+   * 真实网关密钥**（mock 除外，它用 `SESSION_SECRET` 派生）。
+   * 换掉它会导致已有密文全部解不开 —— 因为密文只存了 `v1:` 前缀，没有其他依赖。
+   */
+  PAYMENT_SECRET_KEY?: string;
+
+  /**
    * **测试网关（`driver = 'mock'`）的总开关**，默认关闭（`docs/payments.md` §5.3）。
    *
    * 为 `"true"` 时，mock 网关才能创建/发布并参与路由。
