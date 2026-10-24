@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4617b1ec-819d-46b6-807b-118340e3e551",
+  "id": "4ca3444f-5d7b-49a3-9a73-d7684a91b20f",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "adjustments": {
@@ -803,15 +803,8 @@
           "notNull": true,
           "autoincrement": true
         },
-        "provider": {
-          "name": "provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "provider_kind": {
-          "name": "provider_kind",
+        "driver": {
+          "name": "driver",
           "type": "text",
           "primaryKey": false,
           "notNull": true,

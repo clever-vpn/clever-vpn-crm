@@ -122,8 +122,7 @@ CREATE INDEX `idx_orders_status` ON `orders` (`status`,`created_at`);--> stateme
 CREATE INDEX `idx_orders_gateway` ON `orders` (`gateway_id`,`status`);--> statement-breakpoint
 CREATE TABLE `payment_gateways` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`provider` text NOT NULL,
-	`provider_kind` text NOT NULL,
+	`driver` text NOT NULL,
 	`name` text NOT NULL,
 	`endpoint` text,
 	`merchant_id` text,

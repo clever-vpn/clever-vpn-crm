@@ -86,7 +86,7 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 | `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`、`source`(purchase/gift/manual)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`status`、`refunded_minor`、`voided_at`、`provision_*` |
 | `refunds` | 退款**明细**（可多次部分退） | `order_id`、`amount_minor`、`mode`、`operator`、`channel_refund_id`、`status` |
 | `adjustments` | 管理员**调整**（非售卖） | `field`、`before_value`、`after_value`、`reason`、`operator`、`platform_applied_at` |
-| `payment_gateways` | **支付网关配置**（一条 = 一家服务商的一份凭据） | `provider`、`provider_kind`(aggregator/brand/manual)、`methods`、`mapping`、`priority`、`status`(draft/live/disabled)、`secret_enc`、`last_test_order_id` |
+| `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`methods`、`mapping`、`priority`、`status`(draft/live/disabled)、`secret_enc`、`last_test_order_id` |
 
 > **没有 `payment_attempts` 表**：订单本身就是那次尝试的证据。理由见 `payments.md` §2。
 
