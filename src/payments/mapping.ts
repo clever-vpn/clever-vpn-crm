@@ -435,16 +435,20 @@ export async function readNotifyParams(
   if (method === "GET") {
     return Object.fromEntries(new URL(request.url).searchParams);
   }
-  const text = await request.text();
   if ((mapping.notify.format ?? "json") === "json") {
     try {
-      const parsed = JSON.parse(text) as unknown;
+      const parsed = JSON.parse(await request.text()) as unknown;
       return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
     } catch {
       return {};
     }
   }
-  return Object.fromEntries(new URLSearchParams(text));
+  // 表单：用 formData 解析，**不要** `text()`（workerd 会对非文本 Content-Type 告警）
+  const form = await request.formData().catch(() => null);
+  if (!form) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of form.entries()) out[k] = typeof v === "string" ? v : v.name;
+  return out;
 }
 
 export interface NotifyResult {

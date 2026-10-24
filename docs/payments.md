@@ -413,13 +413,18 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 3. `src/payments/builtin/epay.ts` —— 内置易支付映射
 4. `test/payments/*` —— 五份协议的夹具（易支付/青蛙/亿宏/华俊/虎皮椒），同一份解释器全过（签名用 `node:crypto` 交叉验证）
 5. 覆盖虎皮椒的 5 个开关：`sign.field` / `fields.nonce` / 空渠道码 / `query` 可选 / 分方向金额单位
+6. **测试网关（mock）** 全链路：`GET /api/app/v1/payment-methods`、
+   `POST /api/app/v1/orders`、`/pay/mock/:code` 演示页、`POST /api/pay/notify/:gatewayId`
+   （所有网关共用的回调入口）、订单 `pending → active` + 订阅发放
+7. 闸门集中在 `src/payments/gateways.ts`（status / methods / 白名单 / 环境开关）
 
 待做：
 
-1. 网关配置的后台表单 + 「高级：覆盖映射」入口
-2. 测试支付流程（`draft → live` 闸门）
-3. 回调路由 + `queryCharge` + cron 兜底扫 `pending`
-4. 密钥加密（`secret_enc`，AES-GCM + `PAYMENT_SECRET_KEY`）
+1. 密钥加密（`secret_enc`，AES-GCM + `PAYMENT_SECRET_KEY`）—— **真实网关自动下单/回调
+   的前置**：在那之前，非 mock 网关会明确返回 `gateway_not_ready`
+2. 网关配置的后台表单 + 「高级：覆盖映射」入口
+3. 真实网关的 ¥1 测试支付（`draft → live` 闸门）
+4. cron 兜底扫 `pending`（`expires_at` 过期 + `hasQuery` 的网关才查单）
 5. `stripe` / `paypal` 薄 driver
 6. AI 生成映射草稿
 7. 退款走网关（`refunds.channel_refund_id`）
