@@ -1,6 +1,6 @@
 # CRM ⇄ cf-api 契约（指针）
 
-Last updated: 2026-10-23
+Last updated: 2026-10-25
 
 **契约正文不在本仓库。** 权威源：
 
@@ -17,9 +17,11 @@ Last updated: 2026-10-23
 
 | 项 | 值 |
 |---|---|
-| 契约版本 | `CRM_CONTRACT_VERSION`（当前 `11`，对齐 `app-crm.md` v11），由 `GET /__version` 回显 |
-| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 10` |
-| 客服 / 官网 | `GET /support` 免登录；官网游客结账先邮箱验证（`checkout_token`），**不引入网页登录态** |
+| 契约版本 | `CRM_CONTRACT_VERSION`（当前 `12`，对齐 `app-crm.md` v12），由 `GET /__version` 回显 |
+| 客户端 | **两个壳（App + 品牌官网）调同一批 `/api/app/v1`**；App 用 `Bearer`，官网用 httpOnly Cookie |
+| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 12` |
+| 客服 / 官网 | `GET /support` 免登录；官网**持有登录态**（同一个 `/auth` + `session_token`），已删游客结账 `checkout_token` |
+| 促销 | 两层：`promotion`（自动/带码）+ `referral`（关系），见 [promotion.md](promotion.md)；字段位已在契约 v12 定下，⬜ 未实现 |
 | 套餐 | **`kind` 三选一**（`period` / `traffic` / `addon`），见 [plans.md](plans.md)；**销售策略全在 CRM**，App 只渲染 |
 | 币种 | **单币种**，初始化时设定（默认 `CNY`），之后不可改；金额一律用最小单位整数（分） |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |

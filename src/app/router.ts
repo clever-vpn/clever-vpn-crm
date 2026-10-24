@@ -1,5 +1,7 @@
 /**
- * App 端接口 `/api/app/v1/*` —— 契约见 `clever-vpn-docs` `app-crm.md`（contract 11）
+ * App 端接口 `/api/app/v1/*` —— 契约见 `clever-vpn-docs` `app-crm.md`（contract 12）
+ *
+ * 这是**唯一对终端用户开放**的接口面，**App 与品牌官网共用**（官网用 httpOnly Cookie）。
  *
  * 当前实现的是**能本地跑通购买前链路**的最小集：
  *   GET  /meta                 版本协商 + 能力位
@@ -35,7 +37,7 @@ import type { Plan, PlanRow } from "../plans/model";
 import type { CurrentSubscription } from "../plans/quote";
 import type { Subscription } from "../plans/subscription";
 
-const APP_CONTRACT = 11;
+const APP_CONTRACT = 12;
 /** 报价有效期：超过这个时间，App 必须重新 `POST /quote`（契约 §2.4.8） */
 const QUOTE_TTL_SECONDS = 900;
 /** 会话不做硬过期（契约 §2.6），这里只在活跃度上留痕 */
