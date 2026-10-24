@@ -8,28 +8,34 @@
 
 **用户只选"支付方式"；服务商是谁、走哪条网关、单号多少，全部是内部实现。**
 
-## 1. 词表（只有 6 个词）
+## 1. 词表（只有 5 个词）
 
 | 词 | 字段 | 含义 | 用户可见 |
 |---|---|---|---|
 | **支付方式** | `orders.payment_method` | 用户选择的那个按钮：`alipay` / `wechat` / `paypal` / `stripe` / `transfer` | ✅ **唯一可见** |
-| **服务商** | `payment_gateways.provider` | 谁在收钱：青蛙 `qwgua` / 亿宏 `yihong` / 华俊 `huajun` / `stripe` / `paypal` / `manual` | ❌ |
-| **服务商类型** | `payment_gateways.provider_kind` | `aggregator`（聚合，名字无意义）/ `brand`（品牌，名字就是方式）/ `manual`（线下） | 间接（决定显示名） |
+| **驱动** | `payment_gateways.driver` | 怎么和这家说话：`epay_v1` / `generic_json_v1` / `stripe` / `paypal` / `manual` | 间接（决定显示名） |
 | **网关** | `payment_gateways` 一行 | 一条能收钱的配置（凭据 + 支持的方式 + 优先级 + 状态） | ❌ |
 | **订单** | `orders` 一行 | **一次支付尝试**的全部证据 | 只见单号 |
 | **售卖渠道** | `plans.sales_channels` | 在哪儿卖：`web_checkout` / `apple_iap` / `google_play` | ✅ 间接 |
 
+两个刻意的取舍：
+
+1. **没有"服务商"这个概念字段。** 租户配几条网关，就有几家服务商；能推导的东西不存第二份。
+2. **没有"聚合商 vs 品牌"这个字段。** 它由 `driver` 决定（见下），少一个租户能填错的选项。
+
 **不要再用"渠道 channel"指支付。** 这个词已经被"售卖渠道"占用，混用会让每张图都要解释一遍。
 
-### 1.1 显示名规则（`provider_kind` 唯一的作用）
+### 1.1 显示名规则（由 `driver` 推导，不单独存）
 
-| 类型 | App 里看到 | 租户要做什么 |
+| `driver` | App 里看到 | 租户要做什么 |
 |---|---|---|
-| `brand`（Stripe / PayPal） | 「PayPal」「Stripe」—— 品牌即方式，**不再细分** | 填密钥即可，无选择 |
-| `aggregator`（青蛙/亿宏/华俊…） | 「支付宝」「微信支付」—— **聚合商的名字永远不出现** | 勾选它覆盖了哪几个方式 |
-| `manual`（对公转账） | 「银行转账」+ 后台人工确认 | 填收款信息 |
+| `epay_v1` | 「支付宝」「微信支付」—— **聚合商/易支付站点的名字永远不出现** | 填 endpoint / pid / key，勾方式 |
+| `generic_json_v1` | 同上（由 `methods` 决定） | 填映射（贴文档 → AI 生成草稿） |
+| `stripe` / `paypal` | 「Stripe」「PayPal」—— 品牌即方式，**不再细分卡种** | 填密钥 |
+| `manual` | 「银行转账」+ 后台人工确认 | 填收款信息 |
 
-> 所以一个租户可以同时接 3 家聚合商，用户那边仍然只有「支付宝 / 微信」两个按钮。
+> 所以一个租户可以同时接 3 家易支付站点做兜底，用户那边仍然只有「支付宝 / 微信」两个按钮。
+
 
 ## 2. 为什么没有 `payment_attempts` 表
 
@@ -115,59 +121,135 @@ method = alipay
 
 降级对用户无感（还在支付页）。**唯一要求：每次尝试用新单号**，绝不复用旧单号给第二家。
 
-## 5. 服务商对照
+## 5. 协议形状对照（为什么映射够用）
 
-| | 青蛙 `qwgua` | 亿宏 `yihong` | 华俊 `huajun` | Stripe | PayPal | 手动 |
-|---|---|---|---|---|---|---|
-| 类型 | aggregator | aggregator | aggregator | brand | brand | manual |
-| 方式 | 支付宝 / 微信 | 支付宝 / 微信 | 支付宝 / 微信 | card（含 Alipay/WeChat 境外） | paypal | transfer |
-| 金额单位 | 元（2 位小数） | 元 | 元 | 分（整数） | 元 | — |
-| 签名 | MD5（参数排序 + key） | MD5 | MD5 / RSA | 平台 SDK 验签 | 平台 SDK 验签 | — |
-| 回调应答 | `success` | `success` | `SUCCESS` | 2xx | 2xx | — |
-| 查单 | 有 | 有 | 有 | 有 | 有 | 人工 |
+国内聚合支付的**主干完全一样**，差异只在几个开关上。下表是四份实测过的协议
+（易支付取自 SSPanel 实现；另外三家只作 `test/payments/fixtures.ts` 的夹具，
+**产品不内置任何一家**）：
 
-> 差异全部收在 driver 里，**不进数据库配置**：状态码语义、签名算法这类东西写成配置，
-> 等于把 bug 交给租户去调。
+| | 易支付（SSPanel） | 青蛙 | 亿宏 | 华俊 |
+|---|---|---|---|---|
+| 下单 | POST **form** `/mapi.php` | POST **JSON** `/pay/create` | POST **form** | POST **JSON** |
+| 金额单位 | 元 | 元 | 元 | **分** |
+| 时间戳 | 无 | `YYYYMMDDHHmmss`(UTC+8) | 无 | **13 位毫秒** |
+| 密钥拼接 | `body + key` | `body + key` | `body + key` | **`body + "&key=" + key`** |
+| 排除字段 | `sign`,`sign_type` | `sign` | `sign`,`format`,`attach` | `sign` |
+| 下单成功 | `code=1` | `code=200` | `code=200` | `code=0` |
+| 收银台 | `payurl` | `data.payUrl` | `datas.url`（http→https） | `data.payUrl` |
+| 回调用法 | GET 查询串 | POST JSON | POST form | POST JSON |
+| **已付判定** | `trade_status=TRADE_SUCCESS` | `status=3` | **回调 `status=1`／查单 `status=3`** | `state=1` |
+| 应答原文 | `success` | `success` | 自有 | `SUCCESS`/`OK` |
 
-## 6. 驱动契约
+结论：**一个解释器 + 十几个开关就能覆盖全部四家**（`test/payments/mapping.test.ts`
+里四份夹具跑的是同一份代码）。这就是 `generic_json_v1` 的存在理由。
 
-```ts
-interface GatewayDriver {
-  createCharge(gw: Gateway, order: Order, opts: { notifyUrl: string; returnUrl: string }):
-    Promise<{ providerOrderNo: string; payUrl: string; raw: string }>;
-  verifyNotify(gw: Gateway, req: Request, raw: string): Promise<{ ok: boolean; providerOrderNo?: string }>;
-  parseNotify(gw: Gateway, raw: string): Promise<{ providerOrderNo: string; amountMinor: number; providerTradeNo?: string }>;
-  queryCharge(gw: Gateway, providerOrderNo: string):
-    Promise<{ status: "paid" | "unpaid" | "closed"; amountMinor?: number; providerTradeNo?: string }>;
-  notifyReply(): Response;   // 各家写法不同（success / SUCCESS / 空 200）
+## 6. 驱动（driver）
+
+| driver | 用什么 | 谁配 |
+|---|---|---|
+| `epay_v1` | 内置一份映射（`src/payments/builtin/epay.ts`） | 租户填 endpoint / pid / key |
+| `generic_json_v1` | 映射解释器（`src/payments/mapping.ts`） | 租户填 `mapping`（可让 AI 生成草稿） |
+| `stripe` / `paypal` | 独立薄 driver | 租户填密钥 |
+| `manual` | 无协议，人工确认 | 租户填收款信息 |
+
+**`epay_v1` 就是 `generic_json_v1` + 一份常量**，不是第二套实现 —— 只有一条代码
+路径要测。变种差异（路径、渠道码、`&key=` 拼接）通过面板上的「高级：覆盖映射」
+改名，不用发版。
+
+### 6.1 判据：什么时候写 driver，什么时候写映射
+
+> **签名能在本地一次算完 → 映射；需要换 token、二次 capture、或回调官方 API 验签 → driver。**
+
+按这条，Stripe / PayPal **不进映射**：
+
+| | 卡在哪 |
+|---|---|
+| Stripe | 回调签名是 `HMAC-SHA256(secret, "{t}.{rawBody}")` + 5 分钟容差 —— 不是"排序拼接"；下单参数是嵌套方括号键 |
+| PayPal | **两步 OAuth2**（先换 token）、必须**二次 capture**、回调要**调官方 API** 验签 |
+
+硬塞进来需要给映射加 `auth.oauth2` / `body_shape` / `sign.hmac_raw` / `verify.remote` /
+`capture_step` 五个概念 —— 那就不是"配置表"而是半个 DSL，租户看不懂、AI 生成不可靠。
+两家薄 driver 各 ~100 行且几乎不改，更划算。
+
+反向的例子也成立：**CoinGate** 那类（header 认证 + 扁平 JSON + 无本地签名 + 靠查单
+定论）**不需要专门 driver**，就是 `generic_json_v1`。
+
+### 6.2 映射规范（`generic_json_v1`）
+
+存进 `payment_gateways.mapping`（JSON）。字段名全部小写下划线，未知键直接报错。
+
+| 键 | 说明 |
+|---|---|
+| `create.method` / `create.path` / `create.format` | 下单请求：`POST`/`GET`、路径、`form`/`json` |
+| `fields.*` | 参数名映射：`merchant` `order_no` `amount` `subject` `body` `notify_url` `return_url` `client_ip` `channel` `timestamp` |
+| `amount_unit` | **必填**：`yuan`（元，两位小数字符串）/ `cent`（整数分） |
+| `timestamp_format` | `s` / `ms` / `ymdhms`（`YYYYMMDDHHmmss`，**北京时间**） |
+| `constants` | 固定参数，如 `{"sign_type":"MD5"}` |
+| `channel_codes` | 方式 → 渠道码：`{"alipay":"alipay","wechat":"wxpay"}` |
+| `sign.algo` | `md5` / `sha256` |
+| `sign.key_append` | 密钥前的拼接串：`""`（直接拼）或 `"&key="` |
+| `sign.exclude` | 不参与签名的字段，默认 `["sign"]` |
+| `sign.exclude_variants` | **仅验签**用的替代排除集合（最多 3 组），用于"文档没写清回调带不带 `attach`" |
+| `sign.upper` / `sign.encode` | 大写输出 / 对值做 URL 编码，默认 `false` |
+| `auth.header` / `auth.value` | 认证头，值里 `{key}` 会替换成密钥（如 `{"header":"Authorization","value":"Token {key}"}`） |
+| `response.ok` | 下单成功判定：`{path, equals}` 或 `{path, in:[…]}` |
+| `response.pay_url` / `pay_url_from` | 收银台地址（单个字段 / 依次取第一个非空） |
+| `response.pay_url_force_https` | 文档给 http 但实际必须 https 时置 `true` |
+| `response.message` / `trade_no` / `expires_at` | 错误信息、服务商流水号、收银台过期时间（原文存） |
+| `notify.method` / `notify.format` | 回调是 `GET` 还是 `POST`，body 是 `form` 还是 `json` |
+| `notify.order_no` / `trade_no` / `amount` | 回调里这些值的字段名 |
+| `notify.paid_when` | 回调"已付款"判定（**与查单分开配**，亿宏就是两套码） |
+| `notify.reply` | 应答原文，**必须逐字一致**（写错会被无限重发） |
+| `query.method` / `path` / `format` | 查单请求形状 |
+| `query.fields` | 查单参数，值支持 `{merchant}` `{secret}` `{order_no}` `{amount}` `{channel}` `{timestamp}` |
+| `query.sign` | `"same"`（与下单同套签名）/ `"none"`（易支付查单自带 key，不签名） |
+| `query.ok` / `paid_when` | 查单成功 / 已付判定 |
+| `query.terminal_when` | 明确终态（失败/过期/撤销）：命中即收尾，不再重试 |
+| `query.amount` / `trade_no` / `message` | 查单返回的金额、流水号、错误信息 |
+
+示例（虚构网关 `acme-pay`，演示最常见的组合）：
+
+```jsonc
+{
+  "create": { "method": "POST", "path": "/pay/create", "format": "json" },
+  "fields": {
+    "merchant": "mchId", "order_no": "outTradeNo", "amount": "amount",
+    "subject": "subject", "notify_url": "notifyUrl", "return_url": "returnUrl",
+    "client_ip": "clientIp", "channel": "wayCode", "timestamp": "reqTime"
+  },
+  "amount_unit": "cent",
+  "timestamp_format": "ms",
+  "channel_codes": { "alipay": 901, "wechat": 902 },
+  "sign": { "algo": "md5", "key_append": "&key=", "exclude": ["sign"] },
+  "response": { "ok": { "path": "code", "equals": 0 },
+                "message": "message",
+                "pay_url": "data.payUrl",
+                "trade_no": "data.tradeNo" },
+  "notify": { "method": "POST", "format": "json",
+              "order_no": "outTradeNo", "trade_no": "tradeNo", "amount": "amount",
+              "paid_when": { "path": "state", "equals": 1 },
+              "reply": "SUCCESS" },
+  "query": { "method": "POST", "format": "json", "path": "/pay/query",
+             "fields": { "mchId": "{merchant}", "outTradeNo": "{order_no}", "reqTime": "{timestamp}" },
+             "ok": { "path": "code", "equals": 0 },
+             "paid_when": { "path": "data.state", "equals": 1 },
+             "terminal_when": { "path": "data.state", "in": [2, 3, 4] },
+             "amount": "data.amount" }
 }
 ```
 
-已定：`epay_v1`（易支付协议族，覆盖绝大多数聚合商）、`generic_json_v1`（自定义）、
-`stripe`、`paypal`、`manual`。
+### 6.3 映射的边界（有意不做）
 
-### 6.1 自定义映射（只给 `generic_json_v1`）
+只有两件事：**取值 + 比对 + 拼参数 + 算签名**。没有表达式、没有脚本、没有正则替换、
+没有状态跳转。所有判定一律 `{path, equals|in}` 三件套 —— 这是"租户能看懂、AI 生成
+可靠、测试可穷举"的前提。
 
-租户贴一份厂商文档，我们生成并**存进 `payment_gateways.mapping`**（JSON）。
-默认值覆盖 ~80% 的易支付变种，租户只需改差异项：
-
-| 键 | 作用 | 缺省 |
-|---|---|---|
-| `create.method` / `create.path` | 下单请求 | `POST` / 文档给的路径 |
-| `create.format` | `form` / `json` | `form` |
-| `fields.*` | 参数名映射：`merchant` / `order_no` / `amount` / `subject` / `notify_url` / `return_url` / `client_ip` / `channel` / `timestamp` | 易支付通用名 |
-| `amount_unit` | **必填**：`yuan` / `cent` | 无（必须显式声明） |
-| `sign.algo` / `sign.key_append` / `sign.separator` / `sign.exclude` / `sign.upper` | 签名怎么算 | `md5` / `key=xxx` / `&key=` / `["sign","sign_type"]` / `false` |
-| `timestamp_format` | `s` / `ms` / `ymdhms` | `s` |
-| `constants` | 固定参数（如 `pid`、`type`） | `{}` |
-| `channel_codes` | 方式 → 厂商渠道码，如 `{alipay:"alipay",wechat:"wxpay"}` | 同名 |
-| `response.ok.path` / `.equals` | 怎么判断下单成功 | 见模板 |
-| `response.pay_url` / `.provider_order_no` | 从响应里取哪两个值 | 见模板 |
-| `notify.order_no` / `notify.amount` / `notify.reply` | 回调取单号、金额、应答原文 | 见模板 |
-| `query.path` / `query.fields` / `query.paid_when.path` / `.equals` | 怎么查单、怎么判已付 | 见模板 |
+一条已知取舍：**不校验下单/查单响应的签名**（有的网关只对 `data` 签名）。传输由 TLS
+保证，且最终以**查单**为准；**回调签名仍然必须校验**，那是安全边界。
 
 **AI 只做草稿**：生成后必须由"测试支付"实测通过才能 `live`。生成时永远不会带上密钥
 （密钥在 `secret_enc`，不进 prompt）。
+
 
 ## 7. 安全
 
@@ -177,11 +259,21 @@ interface GatewayDriver {
 - 金额三处核对：下单时 / 回调时 / 查单时，与 `orders.amount_minor` 比对。
 - 不存任何卡信息；PayPal / Stripe 走各自的托管收银台。
 
-## 8. 未实现（按顺序）
+## 8. 进度
 
-1. 驱动：`epay_v1` + `sign.ts`（带四家的签名测试向量）
-2. `generic_json_v1` 解释器 + 后台网关表单
-3. 测试支付流程（`draft → live` 闸门）
-4. 回调路由 + `queryCharge` + cron 兜底扫 `pending`
-5. AI 生成映射草稿
-6. 退款走网关（`refunds.channel_refund_id`）
+已完成：
+
+1. `src/payments/sign.ts` —— 排序拼接签名（md5/sha256、`key_append`、排除集合与多集合验签）
+2. `src/payments/mapping.ts` —— 映射解释器（含校验、取值、金额/时间戳换算、多字段择优）
+3. `src/payments/builtin/epay.ts` —— 内置易支付映射
+4. `test/payments/*` —— 四份协议的夹具，同一份解释器全过（签名用 `node:crypto` 交叉验证）
+
+待做：
+
+1. 网关配置的后台表单 + 「高级：覆盖映射」入口
+2. 测试支付流程（`draft → live` 闸门）
+3. 回调路由 + `queryCharge` + cron 兜底扫 `pending`
+4. 密钥加密（`secret_enc`，AES-GCM + `PAYMENT_SECRET_KEY`）
+5. `stripe` / `paypal` 薄 driver
+6. AI 生成映射草稿
+7. 退款走网关（`refunds.channel_refund_id`）

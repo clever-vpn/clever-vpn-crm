@@ -389,27 +389,28 @@ export const adjustments = sqliteTable(
  *
  * 三个词分清楚：
  *   - **支付方式** `payment_method`（用户视角：支付宝/微信/PayPal/Stripe）—— 存在订单上；
- *   - **服务商** `provider`（青蛙/亿宏/华俊/Stripe/PayPal）—— 就是这张表的来源；
- *   - **网关** 就是这一行，租户配几条就有几条，可以同方式多条按 `priority` 兜底。
+ *   - **服务商** 用户既看不到也不需要知道：租户配几条网关，就有几家服务商；
+ *   - **网关** 就是这一行，可以同方式多条按 `priority` 兜底。
  *
- * `provider_kind` 决定 App 里怎么显示这个名字：
- *   - `brand`（Stripe / PayPal）：显示品牌，一个品牌就一种方式（`methods` 恒为 `[provider]`）；
- *   - `aggregator`（易支付类）：聚合商的名字对用户没有意义，只显示它覆盖的渠道品牌
- *     （勾了支付宝就显示"支付宝"）—— 所以 `methods` 由租户勾选；
- *   - `manual`（对公转账）：线下人工确认。
+ * `driver` 决定"怎么和它说话"，同时也决定 App 里怎么显示（不需要再单独存一个
+ * 类型字段 —— 能推导的东西不存第二份）：
+ *   - `epay_v1`：易支付协议族（内置一份映射，租户只填 endpoint/pid/key）；
+ *   - `generic_json_v1`：任意私有协议（租户/AI 填 `mapping`）；
+ *   - `stripe` / `paypal`：品牌 PSP，独立薄 driver（OAuth/二次 capture 不属于映射）；
+ *   - `manual`：对公转账，人工确认。
+ *
+ * 判据（`docs/payments.md` §6）：**签名能在本地一次算完 → 映射；否则 → driver**。
  *
  * 不变量：**只有 `status = 'live'` 才参与路由**；`live` 之前必须用真实测试支付
- * （`orders` 里 `plan_id IS NULL` 的那条）验证过签名与回调，见 `docs/payments.md`。
+ * （`orders` 里 `plan_id IS NULL` 的那条）验证过签名与回调。
  */
 export const paymentGateways = sqliteTable(
   "payment_gateways",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    /** qwgua | yihong | huajun | stripe | paypal | manual | custom */
-    provider: text("provider").notNull(),
-    /** aggregator | brand | manual */
-    provider_kind: text("provider_kind").notNull(),
-    /** 后台显示名（例："青蛙-支付宝主号"）—— **永远不会出现在用户界面** */
+    /** epay_v1 | generic_json_v1 | stripe | paypal | manual */
+    driver: text("driver").notNull(),
+    /** 后台显示名（例："支付宝-主号"）—— **永远不会出现在用户界面** */
     name: text("name").notNull(),
     /** 收银台 / API 根地址 */
     endpoint: text("endpoint"),
