@@ -11,6 +11,7 @@ import { ensureSchema } from "./db";
 import type { Env } from "./env";
 import { handleAppApi } from "./app/router";
 import { handleAdminApi } from "./admin/router";
+import { handlePayRoutes } from "./payments/routes";
 import { runSettlement } from "./subscriptions/store";
 
 export type { Env };
@@ -38,6 +39,13 @@ export default {
         contract: env.CRM_CONTRACT_VERSION ?? "1",
         tenant: env.CRM_TENANT_ID ?? null,
       });
+    }
+
+    // 支付回调（服务商过来）与 mock 演示页（浏览器直接打开）——不走 App CORS/会话
+    if (url.pathname.startsWith("/api/pay/") || url.pathname.startsWith("/pay/")) {
+      await ensureSchema(env.DB);
+      const payResponse = await handlePayRoutes(request, env);
+      if (payResponse) return payResponse;
     }
 
     if (url.pathname.startsWith("/api/")) {

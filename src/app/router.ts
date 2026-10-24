@@ -20,6 +20,8 @@
 import { randomToken, sha256Hex } from "../admin/crypto";
 import { consumeCode, issueCode } from "../admin/email-code";
 import { emailCodeAvailable } from "../mail";
+import { listLiveGateways, visibleMethods } from "../payments/gateways";
+import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
 import { currentMainSubscription } from "../subscriptions/store";
@@ -33,6 +35,15 @@ import type { Subscription } from "../plans/subscription";
 const APP_CONTRACT = 10;
 /** 会话不做硬过期（契约 §2.6），这里只在活跃度上留痕 */
 const SESSION_TOUCH_MS = 5 * 60 * 1000;
+
+/** 用户能看懂的支付方式名（聚合商/网关名字永远不出现，`docs/payments.md` §1.1） */
+const PAY_METHOD_LABEL: Record<string, string> = {
+  alipay: "支付宝",
+  wechat: "微信支付",
+  paypal: "PayPal",
+  stripe: "银行卡",
+  transfer: "银行转账",
+};
 
 function json(body: unknown, status = 200, extra?: HeadersInit): Response {
   return new Response(JSON.stringify(body), {
@@ -352,6 +363,60 @@ async function route(request: Request, env: Env, path: string, method: string): 
       payable_minor: quote.payable_minor,
       expires_at: quote.expires_at,
     });
+  }
+
+  // ── 可用的支付方式（受网关闸门约束：status / methods / 白名单 / 环境开关）──
+  if (method === "GET" && path === "/payment-methods") {
+    const email = customer?.email ?? "";
+    const items: { method: string; label: string }[] = [];
+    const seen = new Set<string>();
+    for (const gw of await listLiveGateways(env)) {
+      for (const m of visibleMethods(gw, email, env)) {
+        if (seen.has(m)) continue;
+        seen.add(m);
+        items.push({ method: m, label: PAY_METHOD_LABEL[m] ?? m });
+      }
+    }
+    return json(items);
+  }
+
+  // ── 下单：一次支付尝试（见 docs/payments.md §2）──
+  if (method === "POST" && path === "/orders") {
+    if (!customer) return err(401, "unauthorized");
+    const body = await readBody(request);
+    const planId = typeof body.plan_id === "string" ? body.plan_id.trim() : "";
+    const paymentMethod = typeof body.payment_method === "string" ? body.payment_method.trim() : "";
+    if (!planId || !paymentMethod) return err(400, "invalid_request", "plan_id 与 payment_method 必填");
+
+    const plan = (await loadActivePlans(env)).find((p) => p.id === planId);
+    if (!plan) return err(404, "not_found", "套餐不存在或已下架");
+
+    // 可买性用**同一个纯函数**（与 /plans、后台预览、报价一致）
+    const sub = await currentMainSubscription(env, customer.id);
+    const quote = quotePurchase(sub ? toQuoteInput(sub) : null, plan);
+    if (!quote.allowed) return err(409, "not_purchasable", quote.reason ?? "当前不可购买");
+
+    const result = await createCharge(env, {
+      customerId: customer.id,
+      customerEmail: customer.email,
+      plan,
+      method: paymentMethod,
+      origin: new URL(request.url).origin,
+      clientIp: clientIp(request),
+    });
+    if (!result.ok) return err(result.status, result.code, result.message);
+
+    return json(
+      {
+        order_code: result.orderCode,
+        pay_url: result.payUrl,
+        amount_minor: result.amountMinor,
+        currency: result.currency,
+        expires_at: result.expiresAt,
+        reused: result.reused,
+      },
+      201,
+    );
   }
 
   return err(404, "not_found", `未知接口：${method} ${path}`);

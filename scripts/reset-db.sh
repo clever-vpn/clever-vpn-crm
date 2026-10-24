@@ -116,6 +116,15 @@ SELECT 'ORD-DEV-0002', c.id, 'dev_gift_20g', 'addon',
        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
 FROM customers c WHERE c.email = 'bob@example.com'
   AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.code = 'ORD-DEV-0002');
+-- 测试网关（docs/payments.md §5.3）：默认关闭，需 ALLOW_MOCK_PAYMENTS=true 才可见；
+-- 白名单只放 dev 客户 —— 空名单等于向所有真实用户免费开通，这里绝不能留空。
+INSERT INTO payment_gateways
+  (driver, name, endpoint, merchant_id, secret_enc, methods, mapping, priority, status,
+   currency, allowed_emails, created_at, updated_at)
+VALUES
+  ('mock', '测试网关（演示）', NULL, 'MOCK-M1', NULL, '["alipay","wechat"]', NULL, 999, 'live',
+   'CNY', '["alice@example.com"]',
+   strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 SQL
 }
 
