@@ -1,5 +1,5 @@
 /**
- * App 端接口 `/api/app/v1/*` —— 契约见 `clever-vpn-docs` `app-crm.md`（contract 10）
+ * App 端接口 `/api/app/v1/*` —— 契约见 `clever-vpn-docs` `app-crm.md`（contract 11）
  *
  * 当前实现的是**能本地跑通购买前链路**的最小集：
  *   GET  /meta                 版本协商 + 能力位
@@ -7,14 +7,16 @@
  *   POST /auth/verify          验证码换 session_token（不存在则建号）
  *   POST /auth/logout
  *   GET  /me                   用户 + 订阅快照
- *   GET  /subscription         订阅状态
- *   GET  /plans                可售套餐（带 `purchasable` / `reason`）
- *   POST /upgrade/quote        换购报价（残值换购）
+ *   GET  /subscription         订阅状态（status + reason + status_text）
+ *   GET  /plans                可售套餐（免登录；每项只带一个 `action`）
+ *   GET  /payment-methods      可用支付方式（需登录）
+ *   POST /quote                报价（唯一的应付金额来源）
+ *   POST /orders               审计式创建一笔待支付订单
  *
  * **这里没有一行价格/资格计算**：可买性与报价都来自 `src/plans/*` 的纯函数，
  * 同一个函数给后台预览用，保证"后台预览 == App 看到"。
  *
- * 未实现（下一步）：下单 `/orders`、支付回调、`/orders/iap`、取码与 cf-api 落账。
+ * 未实现（下一步）：支付回调、`/orders/iap`、取码与 cf-api 落账。
  */
 
 import { randomToken, sha256Hex } from "../admin/crypto";
@@ -33,7 +35,9 @@ import type { Plan, PlanRow } from "../plans/model";
 import type { CurrentSubscription } from "../plans/quote";
 import type { Subscription } from "../plans/subscription";
 
-const APP_CONTRACT = 10;
+const APP_CONTRACT = 11;
+/** 报价有效期：超过这个时间，App 必须重新 `POST /quote`（契约 §2.4.8） */
+const QUOTE_TTL_SECONDS = 900;
 /** 会话不做硬过期（契约 §2.6），这里只在活跃度上留痕 */
 const SESSION_TOUCH_MS = 5 * 60 * 1000;
 
@@ -158,10 +162,19 @@ async function loadActivePlans(env: Env): Promise<Plan[]> {
   return (rows.results ?? []).map(rowToPlan);
 }
 
-function toQuoteInput(sub: Subscription): CurrentSubscription {
+/** 当前套餐的**目录标价** —— 只用于比“谁更贵”；下架（retired）的套餐也得读得到 */
+async function planListPrice(env: Env, planId: string): Promise<number> {
+  const row = await env.DB.prepare(`SELECT price_minor FROM plans WHERE id = ?`)
+    .bind(planId)
+    .first<{ price_minor: number }>();
+  return row?.price_minor ?? 0;
+}
+
+function toQuoteInput(sub: Subscription, listPriceMinor: number): CurrentSubscription {
   return {
     plan_id: sub.plan_id,
     kind: sub.kind === "traffic" ? "traffic" : "period",
+    list_price_minor: listPriceMinor,
     paid_minor: sub.paid_minor,
     term_days: sub.term_days,
     traffic_gb: sub.traffic_total_gb,
@@ -171,14 +184,26 @@ function toQuoteInput(sub: Subscription): CurrentSubscription {
   };
 }
 
+/** 当前订阅 + 它的标价；两者要么都有，要么都没有 */
+async function currentContext(
+  env: Env,
+  customerId: number,
+): Promise<{ sub: Subscription | null; current: CurrentSubscription | null }> {
+  const sub = await customerSubscription(env, customerId);
+  if (!sub) return { sub: null, current: null };
+  return { sub, current: toQuoteInput(sub, await planListPrice(env, sub.plan_id)) };
+}
+
 function subscriptionView(sub: Subscription | null): Record<string, unknown> {
-  if (!sub) return { status: "none" };
+  if (!sub) return { status: "none", reason: null, status_text: "还没有订阅" };
   const state = statusOf(sub);
   const unlimited = sub.kind === "period" && sub.quota_gb === null;
   return {
     status: state.status,
-    // 不能用的原因（到期 / 冻结 / 用完）—— App 必须说清是哪一种
-    status_reason: state.reason,
+    // 不能用的原因只有三种：到期 / 用完 / 冻结（撤销、退款也归 frozen）
+    reason: state.reason,
+    // 用户可见文案的唯一来源，App 不拼文案
+    status_text: state.status_text,
     kind: sub.kind,
     plan_id: sub.plan_id,
     expires_at: sub.expires_at,
@@ -310,25 +335,35 @@ async function route(request: Request, env: Env, path: string, method: string): 
     return json({ ok: true });
   }
 
-  // ── 套餐列表（免登录；带 session 时可算出可买性）──
+  // ── 套餐列表（免登录：商品与标价公开，动作与金额属于某个人）──
   if (method === "GET" && path === "/plans") {
-    const customer = await resolveSession(env, request);
-    const current = customer ? await customerSubscription(env, customer.id) : null;
+    const viewer = await resolveSession(env, request);
     const plans = await loadActivePlans(env);
     const now = new Date();
+    const ctx = viewer ? await currentContext(env, viewer.id) : { sub: null, current: null };
 
     const items = plans.map((plan) => {
-      const quote = quotePurchase(current ? toQuoteInput(current) : null, plan, now);
+      const base = planForClient(plan);
+      if (!viewer) {
+        // 匿名：能看商品与标价，不给可购买性与应付
+        return {
+          ...base,
+          payable_minor: null,
+          action: "login_required" as const,
+          reason: "登录后购买",
+          next_expires_at: null,
+        };
+      }
+      const quote = quotePurchase(ctx.current, plan, now);
       return {
-        ...planForClient(plan),
-        purchasable: quote.allowed,
-        reason: quote.reason,
+        ...base,
+        // 列表只给"按标价买"的金额；升级的应付含残值，必须点开由 /quote 给
+        payable_minor: quote.action === "upgrade" ? null : quote.payable_minor,
         // App 不做任何判断：按 action 渲染 购买 / 续订 / 升级 按钮
         action: quote.action,
-        payable_minor: quote.payable_minor,
-        residual_minor: quote.residual_minor,
-        // 续订 / 升级之后的新到期日（"续订后有效期至…"）
-        next_expires_at: quote.allowed ? quote.expires_at : null,
+        reason: quote.reason,
+        // 只有续订给“续订后有效期至…”，升级的到期日由 /quote 给
+        next_expires_at: quote.action === "renewal" ? quote.expires_at : null,
       };
     });
     return json(items);
@@ -352,39 +387,45 @@ async function route(request: Request, env: Env, path: string, method: string): 
     return json(subscriptionView(sub));
   }
 
-  if (method === "POST" && path === "/upgrade/quote") {
+  // ── 报价：所有下单的唯一金额来源（契约 §2.4.8）──
+  if (method === "POST" && path === "/quote") {
     if (!customer) return err(401, "unauthorized");
     const body = await readBody(request);
-    const toPlanId = typeof body.to_plan_id === "string" ? body.to_plan_id.trim() : "";
-    const plan = (await loadActivePlans(env)).find((p) => p.id === toPlanId);
+    const planId = typeof body.plan_id === "string" ? body.plan_id.trim() : "";
+    if (!planId) return err(400, "invalid_request", "plan_id 必填");
+    const plan = (await loadActivePlans(env)).find((p) => p.id === planId);
     if (!plan) return err(404, "not_found", "套餐不存在或已下架");
 
-    const sub = await customerSubscription(env, customer.id);
-    const quote = quotePurchase(sub ? toQuoteInput(sub) : null, plan);
+    const { sub, current } = await currentContext(env, customer.id);
+    const now = new Date();
+    const quote = quotePurchase(current, plan, now);
     return json({
+      // 与 /plans[].action 同值域；登录态下不会出现 login_required
+      action: quote.action,
       allowed: quote.allowed,
       reason: quote.reason,
-      settlement: quote.settlement,
       currency: plan.currency,
-      from: sub ? { plan_id: sub.plan_id, kind: sub.kind } : null,
-      to: { plan_id: plan.id, kind: plan.kind },
+      price_minor: plan.price_minor,
       paid_minor: sub?.paid_minor ?? null,
       residual_minor: quote.residual_minor,
       payable_minor: quote.payable_minor,
       expires_at: quote.expires_at,
+      quoted_at: now.toISOString(),
+      quote_ttl_s: QUOTE_TTL_SECONDS,
     });
   }
 
   // ── 可用的支付方式（受网关闸门约束：status / methods / 白名单 / 环境开关）──
+  //    白名单按用户算，所以必须登录（契约 §2.2）
   if (method === "GET" && path === "/payment-methods") {
-    const email = customer?.email ?? "";
-    const items: { method: string; label: string }[] = [];
+    if (!customer) return err(401, "unauthorized");
+    const items: { id: string; label: string; channel: string }[] = [];
     const seen = new Set<string>();
     for (const gw of await listLiveGateways(env)) {
-      for (const m of visibleMethods(gw, email, env)) {
+      for (const m of visibleMethods(gw, customer.email, env)) {
         if (seen.has(m)) continue;
         seen.add(m);
-        items.push({ method: m, label: PAY_METHOD_LABEL[m] ?? m });
+        items.push({ id: m, label: PAY_METHOD_LABEL[m] ?? m, channel: "web_checkout" });
       }
     }
     return json(items);
@@ -402,9 +443,15 @@ async function route(request: Request, env: Env, path: string, method: string): 
     if (!plan) return err(404, "not_found", "套餐不存在或已下架");
 
     // 可买性用**同一个纯函数**（与 /plans、后台预览、报价一致）
-    const sub = await customerSubscription(env, customer.id);
-    const quote = quotePurchase(sub ? toQuoteInput(sub) : null, plan);
+    const { current } = await currentContext(env, customer.id);
+    const quote = quotePurchase(current, plan);
     if (!quote.allowed) return err(409, "not_purchasable", quote.reason ?? "当前不可购买");
+
+    // 报价过期 / 改价：差额 ≤1 分忽略（舍入），超出就让 App 重新报价
+    const expected = typeof body.expected_payable_minor === "number" ? body.expected_payable_minor : null;
+    if (expected !== null && Math.abs(expected - (quote.payable_minor ?? 0)) > 1) {
+      return err(409, "price_changed", "价格已变化，请重新确认后再支付");
+    }
 
     const result = await createCharge(env, {
       customerId: customer.id,

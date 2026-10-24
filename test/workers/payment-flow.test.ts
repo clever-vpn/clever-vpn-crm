@@ -82,13 +82,58 @@ beforeAll(async () => {
   await seedCustomer(OTHER, "test-session-token-other");
 });
 
+describe("契约 v11：/plans 只给一个 action", () => {
+  const OTHER_TOKEN = "test-session-token-other";
+
+  it("匿名：能看商品与标价，但 action=login_required 且没有应付", async () => {
+    const res = await call("/api/app/v1/plans");
+    expect(res.status).toBe(200);
+    const items = (await res.json()) as Record<string, unknown>[];
+    expect(items.length).toBeGreaterThan(0);
+    for (const p of items) {
+      expect(p.action).toBe("login_required");
+      expect(p.payable_minor).toBeNull();
+      expect(p.price_minor).toBeGreaterThan(0);
+      // 旧口径必须彻底消失
+      expect(p).not.toHaveProperty("purchasable");
+      expect(p).not.toHaveProperty("allow_addons");
+      expect(p).not.toHaveProperty("residual_minor");
+    }
+  });
+
+  it("登录但没订阅过：主套餐 buy + 目录价", async () => {
+    const res = await call("/api/app/v1/plans", { token: OTHER_TOKEN });
+    const items = (await res.json()) as {
+      plan_id: string;
+      action: string;
+      payable_minor: number | null;
+    }[];
+    const plan = items.find((p) => p.plan_id === "pay_plan_30d");
+    expect(plan?.action).toBe("buy");
+    expect(plan?.payable_minor).toBe(1500);
+  });
+
+  it("expected_payable_minor 与报价不符 → 409 price_changed", async () => {
+    const res = await call("/api/app/v1/orders", {
+      method: "POST",
+      token: OTHER_TOKEN,
+      body: { plan_id: "pay_plan_30d", payment_method: "alipay", expected_payable_minor: 1 },
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("price_changed");
+  });
+});
+
 describe("支付方式列表受白名单约束", () => {
   it("白名单内的客户能看到 alipay/wechat", async () => {
     const res = await call("/api/app/v1/payment-methods", { token: TOKEN });
     expect(res.status).toBe(200);
-    const items = (await res.json()) as { method: string; label: string }[];
-    expect(items.map((i) => i.method).sort()).toEqual(["alipay", "wechat"]);
-    expect(items.find((i) => i.method === "alipay")?.label).toBe("支付宝");
+    const items = (await res.json()) as { id: string; label: string; channel: string }[];
+    expect(items.map((i) => i.id).sort()).toEqual(["alipay", "wechat"]);
+    expect(items.find((i) => i.id === "alipay")?.label).toBe("支付宝");
+    // channel 是支付方式的属性，不是订单入参（v11）
+    expect(items.every((i) => i.channel === "web_checkout")).toBe(true);
   });
 
   it("白名单外的客户看不到（否则等于免费开通）", async () => {
@@ -97,9 +142,9 @@ describe("支付方式列表受白名单约束", () => {
     expect(await res.json()).toEqual([]);
   });
 
-  it("未登录也看不到", async () => {
+  it("未登录直接 401（白名单按用户算，匿名给不出）", async () => {
     const res = await call("/api/app/v1/payment-methods");
-    expect(await res.json()).toEqual([]);
+    expect(res.status).toBe(401);
   });
 });
 
@@ -518,28 +563,53 @@ describe("升级：换成别的套餐（残值抵扣）", () => {
       .first<{ id: number; plan_id: string; paid_minor: number }>();
     expect(before?.plan_id).toBe("pay_plan_30d");
 
-    // /plans 会告诉 App：这是 upgrade，应付多少
+    // /plans 只说“这是 upgrade”，金额必须点开走 /quote（列表不泄露残值）
     const list = await call("/api/app/v1/plans", { token: TOKEN });
     const plans = (await list.json()) as {
       plan_id: string;
       action: string;
       payable_minor: number | null;
-      residual_minor: number | null;
+      next_expires_at: string | null;
     }[];
     const up = plans.find((p) => p.plan_id === UPGRADE_PLAN);
     expect(up?.action).toBe("upgrade");
-    expect(up?.payable_minor).toBeGreaterThan(0);
-    expect(up?.payable_minor).toBeLessThan(4000); // 抵掉了残值
+    expect(up?.payable_minor).toBeNull();
+    expect(up?.next_expires_at).toBeNull();
+
+    const quoted = await call("/api/app/v1/quote", {
+      method: "POST",
+      token: TOKEN,
+      body: { plan_id: UPGRADE_PLAN },
+    });
+    expect(quoted.status).toBe(200);
+    const quote = (await quoted.json()) as {
+      action: string;
+      payable_minor: number;
+      residual_minor: number;
+      price_minor: number;
+      quote_ttl_s: number;
+      quoted_at: string;
+    };
+    expect(quote.action).toBe("upgrade");
+    expect(quote.price_minor).toBe(4000);
+    expect(quote.payable_minor).toBeGreaterThan(0);
+    expect(quote.payable_minor).toBeLessThan(4000); // 抵掉了残值
+    expect(quote.quote_ttl_s).toBe(900);
+    expect(Date.parse(quote.quoted_at)).toBeGreaterThan(0);
 
     const ordered = await call("/api/app/v1/orders", {
       method: "POST",
       token: TOKEN,
-      body: { plan_id: UPGRADE_PLAN, payment_method: "alipay" },
+      body: {
+        plan_id: UPGRADE_PLAN,
+        payment_method: "alipay",
+        expected_payable_minor: quote.payable_minor,
+      },
     });
     expect(ordered.status).toBe(201);
     const order = (await ordered.json()) as { order_code: string; pay_url: string; amount_minor: number };
     // 收的钱必须是应付，不是目录价 4000
-    expect(order.amount_minor).toBe(up?.payable_minor);
+    expect(order.amount_minor).toBe(quote.payable_minor);
 
     await worker.default.fetch(new Request(`${order.pay_url}/paid`, { method: "POST" }));
 
@@ -563,7 +633,7 @@ describe("升级：换成别的套餐（残值抵扣）", () => {
     expect(change?.action).toBe("upgrade");
     expect(change?.plan_before).toBe("pay_plan_30d");
     expect(change?.plan_after).toBe(UPGRADE_PLAN);
-    expect(change?.residual_minor).toBe(4000 - (up?.payable_minor ?? 0));
+    expect(change?.residual_minor).toBe(quote.residual_minor);
   });
 });
 

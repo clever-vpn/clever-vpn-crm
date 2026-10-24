@@ -37,7 +37,7 @@
     "CRM_TENANT_ID": "0",
     "CF_API_BASE": "https://api.clever-vpn.org",
     "CRM_CODE_VERSION": "dev",
-    "CRM_CONTRACT_VERSION": "1",
+    "CRM_CONTRACT_VERSION": "11",
     // 非 production ⇒ 验证码直接回显给客户端（本地联调）；部署时由 CI 覆盖
     "ENVIRONMENT": "development",
     // App 端跨域白名单（精确匹配 Origin）；本地用 app-web 模拟端

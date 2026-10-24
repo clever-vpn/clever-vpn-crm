@@ -123,29 +123,45 @@ async function call(method, path, body) {
 }
 
 const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
-/** 四种动作的按钮文案：全部由 CRM 的 action 决定 */
-const ACTION = { buy: '购买', renewal: '续订', upgrade: '升级', addon: '加购', blocked: '不可购买' };
+/** 动作全部由 CRM 的 action 决定（契约 v11）；加量包可买时就是 buy */
+const ACTION = {
+  buy: '购买', renewal: '续订', upgrade: '升级',
+  blocked: '不可购买', login_required: '登录后订阅',
+};
+/** 只有这三个能下单；blocked / login_required 都是置灰态 */
+const BUYABLE = new Set(['buy', 'renewal', 'upgrade']);
 
 async function loadMethods() {
   const items = await call('GET', '/payment-methods');
   const sel = $('method');
-  sel.innerHTML = items.map((m) => `<option value="${m.method}">${m.label}</option>`).join('');
+  sel.innerHTML = items.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
   if (!items.length) sel.innerHTML = '<option value="">（无可用支付方式）</option>';
 }
 
+/** 契约：所有下单都先报价，金额只认 /quote */
 async function buy(plan) {
   if (!plan) return;
   flash('', '');
   const method = $('method').value;
   if (!method) return flash('err', '没有可用的支付方式');
   try {
-    const r = await call('POST', '/orders', { plan_id: plan.plan_id, payment_method: method });
+    const q = await call('POST', '/quote', { plan_id: plan.plan_id });
+    if (!q.allowed) return flash('err', q.reason || '当前不可购买');
+    const r = await call('POST', '/orders', {
+      plan_id: plan.plan_id,
+      payment_method: method,
+      expected_payable_minor: q.payable_minor,
+    });
     state.payUrl = r.pay_url;
     show('pay-card', true);
     $('pay-info').innerHTML = `<dl class="kv">
       <dt>动作</dt><dd>${ACTION[plan.action] ?? '购买'}</dd>
       <dt>订单号</dt><dd>${r.order_code}</dd>
+      <dt>新套餐</dt><dd>${yuan(q.price_minor)}</dd>
+      <dt>残值抵扣</dt><dd>${q.residual_minor ? '−' + yuan(q.residual_minor) : '—'}</dd>
       <dt>应付</dt><dd>${yuan(r.amount_minor)}</dd>
+      <dt>买后有效期至</dt><dd>${q.expires_at ? q.expires_at.slice(0, 10) : '—'}</dd>
+      <dt>报价有效期</dt><dd>${q.quote_ttl_s} 秒</dd>
       <dt>说明</dt><dd>${r.reused ? '复用了 60 秒内的未支付单（防双击）' : '新建订单'}</dd>
     </dl>`;
   } catch (e) { flash('err', e.message); }
@@ -162,7 +178,8 @@ function renderPlans(plans) {
   if (!plans.length) { box.innerHTML = '<p class="hint">还没有已上架的套餐（先在 /admin/plans 里发布一个）。</p>'; return; }
   for (const p of plans) {
     const el = document.createElement('div');
-    el.className = 'plan' + (p.purchasable ? '' : ' disabled');
+    const canBuy = BUYABLE.has(p.action);
+    el.className = 'plan' + (canBuy ? '' : ' disabled');
     el.innerHTML = `
       <div class="row" style="justify-content:space-between">
         <span class="name">${p.name}</span>
@@ -174,14 +191,14 @@ function renderPlans(plans) {
         <span class="badge">${p.kind === 'period' ? p.term_days + ' 天' : (p.validity_days ? p.validity_days + ' 天' : '永久')}</span>
         <span class="badge">${p.licence_limit} 台设备</span>
       </div>
-      <div class="meta">${p.purchasable
-        ? `${ACTION[p.action] ?? '购买'} · 应付 ${yuan(p.payable_minor)}` +
-          (p.action === 'renewal' && p.next_expires_at ? ` · 续订后有效期至 ${p.next_expires_at.slice(0, 10)}` : '') +
-          (p.action === 'upgrade' && p.residual_minor ? ` · 已抵残值 ${yuan(p.residual_minor)}` : '')
-        : '不可购买：' + (p.reason ?? '')}</div>
-      ${p.purchasable
+      <div class="meta">${canBuy
+        ? `${ACTION[p.action]} · ` +
+          (p.action === 'upgrade' ? '点「升级」看应付' : `应付 ${yuan(p.payable_minor)}`) +
+          (p.action === 'renewal' && p.next_expires_at ? ` · 续订后有效期至 ${p.next_expires_at.slice(0, 10)}` : '')
+        : (p.action === 'login_required' ? '登录后订阅' : '不可购买：' + (p.reason ?? ''))}</div>
+      ${canBuy
         ? `<div class="row" style="gap:8px">
-             <button data-buy="${p.plan_id}">${ACTION[p.action] ?? '购买'}</button>
+             <button data-buy="${p.plan_id}">${ACTION[p.action]}</button>
              <button class="ghost" data-plan="${p.plan_id}">查看报价</button>
            </div>`
         : ''}
@@ -199,7 +216,7 @@ function renderPlans(plans) {
 
 async function quote(planId) {
   try {
-    const q = await call('POST', '/upgrade/quote', { to_plan_id: planId });
+    const q = await call('POST', '/quote', { plan_id: planId });
     show('quote-card', true);
     $('quote').textContent = JSON.stringify(q, null, 2);
   } catch (e) { flash('err', e.message); }

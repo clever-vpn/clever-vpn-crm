@@ -216,7 +216,9 @@ export const api = {
 
 // ── 客户与订单 ──
 
-export type SubscriptionStatus = "active" | "expired" | "exhausted" | "frozen" | "revoked";
+export type SubscriptionStatus = "active" | "inactive";
+/** 不可用的原因（CRM 对外只给这三种；撤销/退款也归 frozen） */
+export type InactiveReason = "expired" | "exhausted" | "frozen";
 
 export interface AdminSubscriptionSummary {
   plan_id: string;
@@ -230,8 +232,10 @@ export interface AdminSubscriptionSummary {
   balance_gb: number | null;
   paid_minor: number | null;
   status: SubscriptionStatus;
-  /** 为什么不能用（到期 / 冻结 / 用完）—— 后台也要看得到 */
-  status_reason: string | null;
+  /** 不可用的原因（expired / exhausted / frozen）；`active` 时为 null */
+  status_reason: InactiveReason | null;
+  /** 用户可见的整句文案，后台直接展示 */
+  status_text: string | null;
 }
 
 export interface AdminCustomer {
