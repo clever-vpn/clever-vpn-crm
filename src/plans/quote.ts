@@ -1,20 +1,24 @@
 /**
  * 报价 —— **用户能看到的所有结论都从这里出**（`docs/plans.md` §2 / §3）
  *
- * 四种动作，App 不判断，只按 `action` 渲染按钮：
+ * 四个可购买动作，App 不判断，只按 `action` 渲染按钮：
  *
- *   buy     没有订阅 / 已结束 → 目录价，从今天起算
+ *   buy     按标价全额买下这个 SKU：新开主订阅 / 过期重开 / **买加量包**
  *   renewal 同一个套餐再来一份 → **目录价全款**，到期日顺延（不走残值）
- *   upgrade 换成任何其它套餐（含跨 kind）→ 新价 − 残值，**必须 > 0**
- *   addon   往周期套餐上加流量包 → 目录价，不动到期日
+ *   upgrade 换成**标价更高**的套餐（含跨 kind）→ 新价 − 残值，**必须 > 0**
  *
- * 两条硬规则：
- *   1. 应付必须 > 0：这一条同时挡住了降档（应付 ≤ 0）和 0 元白拿；
- *   2. 残值按**实付价**算（促销价不按目录价折），period 按小时、traffic 按 GB。
+ * 加量包可买时就是 `buy`：它的交易行为恒为“按标价加流量”，不需要单独一格
+ * `action`（`kind === "addon"` 已经说明了它是什么）。
  *
- * "降级"不是动作，是 upgrade 被拒的一个分支。
- * 为什么把时间放在这里而不是 cf-api：平台只认"到期日 + 余额"，
- * 怎么从"还剩多少价值"推导出新订单，是纯粹的商业逻辑，属于 CRM。
+ * 三条硬规则：
+ *   1. 升级 = 目标**标价** > 当前套餐**标价**，且应付 > 0。
+ *      只看残值会出现“便宜的套餐也叫升级”，只看标价会出现“升级还倒找钱”。
+ *   2. `price_minor` 只用于比贵，`paid_minor` 只用于算残值；促销时两者分叉是正常的。
+ *   3. 残值按**实付价**算（促销价不按目录价折），period 按小时、traffic 按 GB。
+ *
+ * “降级”不是动作，是 upgrade 被拒的一个分支。
+ * 为什么把时间放在这里而不是 cf-api：平台只认“到期日 + 余额”，
+ * 怎么从“还剩多少价值”推导出新订单，是纯粹的商业逻辑，属于 CRM。
  */
 
 import type { Plan } from "./model";
@@ -25,6 +29,11 @@ const HOUR_MS = 60 * 60 * 1000;
 export interface CurrentSubscription {
   plan_id: string;
   kind: "period" | "traffic";
+  /**
+   * 当前套餐的**目录标价**（不是实付！）。只用于“谁的标价更高”，
+   * 与算残值的 `paid_minor` 严格分开。套餐下架（retired）后仍要从 `plans` 表读得到。
+   */
+  list_price_minor: number;
   /** 该笔订单实际支付金额（最小货币单位） */
   paid_minor: number;
   /** period 才有 */
@@ -42,7 +51,7 @@ export interface CurrentSubscription {
 export type Settlement = "new" | "renewal" | "residual_trade_in" | "store_proration";
 
 /** 给 App 直接照着渲染的动作；`blocked` = 不能买，`reason` 说明为什么 */
-export type QuoteAction = "buy" | "renewal" | "upgrade" | "addon" | "blocked";
+export type QuoteAction = "buy" | "renewal" | "upgrade" | "blocked";
 
 export interface Quote {
   allowed: boolean;
@@ -116,7 +125,7 @@ export function quotePurchase(current: CurrentSubscription | null, target: Plan,
   // ── 没有任何有效主订阅：等价于新购 ──
   const over = current === null || isSubscriptionOver(current, now);
   if (over) {
-    if (target.kind === "addon") return reject("加购包只能叠加在生效中的周期套餐上");
+    if (target.kind === "addon") return reject("需要先有一个生效中的周期套餐");
     return {
       allowed: true,
       reason: null,
@@ -132,14 +141,14 @@ export function quotePurchase(current: CurrentSubscription | null, target: Plan,
     };
   }
 
-  // ── 加购包 ──
+  // ── 加量包：交易行为恒为“按标价加流量”，所以是 buy（不是新订阅）──
   if (target.kind === "addon") {
-    if (current.kind !== "period") return reject("加购包只能叠加在周期套餐上");
+    if (current.kind !== "period") return reject("加量包只能叠加在周期套餐上");
     if (current.unlimited) return reject("不限量套餐不需要加购");
     return {
       allowed: true,
       reason: null,
-      action: "addon",
+      action: "buy",
       settlement: "new",
       residual_minor: 0,
       payable_minor: target.price_minor,
@@ -173,15 +182,17 @@ export function quotePurchase(current: CurrentSubscription | null, target: Plan,
     };
   }
 
-  // ── 升级：换成任何其它套餐（**可以跨 kind**）──
-  //    唯一的门槛是应付必须 > 0：一条规则同时挡住降档和 0 元白拿。
+  // ── 换购：只认**标价**更高（可以跨 kind）。标价不涨就不是升级，直接拒。──
+  if (target.price_minor <= current.list_price_minor) {
+    return reject("不支持降档：请选择标价更高的套餐，或等当前订阅结束");
+  }
+
+  // 标价更高也可能“倒找钱”（旧套餐实付高、剩余比例大），所以应付仍需 > 0
   const residual = residualMinor(current, now);
   const payable = target.price_minor - residual;
   if (payable <= 0) {
     return reject(
-      residual >= target.price_minor
-        ? `降档请等到期：当前订阅残值 ${(residual / 100).toFixed(2)} 已抵满新套餐`
-        : "应付金额必须大于 0",
+      `当前订阅残值 ${(residual / 100).toFixed(2)} 已抵满新套餐，请等到期后再换购`,
     );
   }
 

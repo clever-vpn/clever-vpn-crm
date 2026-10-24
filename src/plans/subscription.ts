@@ -32,15 +32,23 @@ export type SubscriptionKind = "period" | "traffic" | "addon";
 export type Hold = "none" | "frozen" | "revoked";
 
 /**
- * 算出来的状态。前四种都“不能用”，但原因不同，必须分别告诉用户：
- * 作废（退款）/ 冻结（管理员）/ 到期 / 流量用完。
+ * 能不能用（`app-crm.md` §2.3）：**状态只有两个**，原因单独给。
+ *
+ * 把“到期 / 用完 / 冻结”塞进 status，会让每加一个停用原因就多一个值，
+ * App 的放行判断就得跟着改。这里只留“可用 / 不可用”，原因放 `reason`，
+ * 文案放 `status_text`（App 不拼文案）。
  */
-export type SubscriptionStatus = "active" | "expired" | "exhausted" | "frozen" | "revoked";
+export type SubscriptionStatus = "active" | "inactive";
+
+/** 不可用的原因：对外只这三种（撤销 / 退款 / 换档中间态都归入 `frozen`） */
+export type InactiveReason = "expired" | "exhausted" | "frozen";
 
 export interface SubscriptionState {
   status: SubscriptionStatus;
-  /** 给终端用户看的整句话；`active` 时为 `null` */
-  reason: string | null;
+  /** 只有 `inactive` 时有值 */
+  reason: InactiveReason | null;
+  /** 用户可见文案的**唯一来源**；`active` 时为“生效中” */
+  status_text: string;
 }
 
 /** 一行 `platform_subscriptions`（含创建时的规则快照） */
@@ -127,7 +135,7 @@ export function subscriptionFromPlan(
 
 /**
  * 算出状态，**不存储**。优先级与文案见 `docs/domain.md` §1.3：
- * 作废 → 冻结 → 到期 → 用完 → 可用。
+ * 冻结/作废 → 到期 → 用完 → 可用。
  *
  * 注意：这里只用于**展示与报价**。“能不能连”的权威判定在 cf-api（心跳读自己的余额）。
  */
@@ -135,16 +143,22 @@ export function statusOf(
   sub: Pick<Subscription, "hold" | "hold_reason" | "expires_at" | "remaining_gb" | "kind" | "anchor_day">,
   now: Date = new Date(),
 ): SubscriptionState {
-  if (sub.hold === "revoked") return { status: "revoked", reason: "已作废（退款）" };
-  if (sub.hold === "frozen") return { status: "frozen", reason: sub.hold_reason ?? "已被冻结" };
-  if (sub.expires_at && Date.parse(sub.expires_at) <= now.getTime()) {
-    return { status: "expired", reason: `已于 ${sub.expires_at.slice(0, 10)} 到期` };
+  if (sub.hold === "revoked" || sub.hold === "frozen") {
+    return {
+      status: "inactive",
+      reason: "frozen",
+      status_text: sub.hold_reason ?? "订阅已被暂停，请联系客服",
+    };
   }
+  if (sub.expires_at && Date.parse(sub.expires_at) <= now.getTime()) {
+    return { status: "inactive", reason: "expired", status_text: `已于 ${sub.expires_at.slice(0, 10)} 到期` };
+  }
+  // `remaining_gb === null` 是“未同步”，不是 0 —— 不能当成已用完
   if (sub.remaining_gb !== null && sub.remaining_gb <= 0) {
     const reset = sub.kind === "period" && sub.anchor_day ? `，每月 ${sub.anchor_day} 日重置` : "";
-    return { status: "exhausted", reason: `流量已用完${reset}` };
+    return { status: "inactive", reason: "exhausted", status_text: `本月流量已用完${reset}` };
   }
-  return { status: "active", reason: null };
+  return { status: "active", reason: null, status_text: "生效中" };
 }
 
 // ---- 两种后续动作（纯函数：算新快照，不碰库） ----

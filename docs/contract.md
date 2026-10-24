@@ -17,7 +17,7 @@ Last updated: 2026-10-23
 
 | 项 | 值 |
 |---|---|
-| 契约版本 | `CRM_CONTRACT_VERSION`（默认 `1`），由 `GET /__version` 回显 |
+| 契约版本 | `CRM_CONTRACT_VERSION`（当前 `11`，对齐 `app-crm.md` v11），由 `GET /__version` 回显 |
 | App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 10` |
 | 客服 / 官网 | `GET /support` 免登录；官网游客结账先邮箱验证（`checkout_token`），**不引入网页登录态** |
 | 套餐 | **`kind` 三选一**（`period` / `traffic` / `addon`），见 [plans.md](plans.md)；**销售策略全在 CRM**，App 只渲染 |

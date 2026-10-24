@@ -16,13 +16,21 @@ import {
 
 import { api, ApiError, type AdminCustomer, type PlanView, type SubscriptionStatus } from "../api";
 
-const STATUS: Record<SubscriptionStatus, { color: string; text: string }> = {
+const STATUS: Record<string, { color: string; text: string }> = {
   active: { color: "green", text: "生效中" },
-  expired: { color: "default", text: "已到期" },
-  exhausted: { color: "orange", text: "流量用完" },
-  frozen: { color: "volcano", text: "已冻结" },
-  revoked: { color: "red", text: "已作废" },
+  // inactive 的具体原因放 reason：expired / exhausted / frozen
+  "inactive:expired": { color: "default", text: "已到期" },
+  "inactive:exhausted": { color: "orange", text: "流量用完" },
+  "inactive:frozen": { color: "volcano", text: "已暂停" },
+  inactive: { color: "red", text: "不可用" },
 };
+
+/** `inactive` 时要看 reason 才知道是哪一种不可用 */
+function statusTag(s: AdminCustomer["subscription"]) {
+  if (!s) return { color: "default", text: "无订阅" };
+  const key = s.status === "inactive" && s.status_reason ? `inactive:${s.status_reason}` : s.status;
+  return STATUS[key] ?? { color: "default", text: s.status };
+}
 
 const KIND_TEXT: Record<string, string> = {
   period: "周期",
@@ -164,10 +172,10 @@ export default function Customers() {
               render: (s: AdminCustomer["subscription"]) =>
                 s ? (
                   <Space direction="vertical" size={0}>
-                    <Tag color={STATUS[s.status]?.color}>{STATUS[s.status]?.text ?? s.status}</Tag>
-                    {s.status_reason && (
+                    <Tag color={statusTag(s).color}>{statusTag(s).text}</Tag>
+                    {s.status !== "active" && s.status_text && (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        {s.status_reason}
+                        {s.status_text}
                       </Typography.Text>
                     )}
                   </Space>

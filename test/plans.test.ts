@@ -49,17 +49,19 @@ function makePlan(over: Partial<Plan> = {}): Plan {
 
 /** 生效中 30 天周期订阅，刚买（剩余 30 天） */
 function makeCurrent(over: Partial<CurrentSubscription> = {}): CurrentSubscription {
-  return {
+  const base: CurrentSubscription = {
     plan_id: "p_30d_100g_1d",
     kind: "period",
+    // 标价 1500 / 实付 1500：促销时两者会分叉，升级判定只看前者
+    list_price_minor: 1500,
     paid_minor: 1500,
     term_days: 30,
     traffic_gb: null,
     expires_at: "2026-11-22T00:00:00Z",
     remaining_gb: null,
     unlimited: false,
-    ...over,
   };
+  return { ...base, ...over } as CurrentSubscription;
 }
 
 describe("validatePlan", () => {
@@ -244,21 +246,39 @@ describe("quotePurchase", () => {
     expect(q.payable_minor).toBeNull();
   });
 
-  it("周期生效中可以**升级**成流量包（跨 kind 允许，残值抵扣）", () => {
+  it("周期生效中可以**升级**成流量包（跨 kind 允许，标价更高 + 残值抵扣）", () => {
     const target = makePlan({
       id: "p_traffic_200g",
       kind: "traffic",
       term_days: null,
       monthly_quota_gb: null,
       traffic_gb: 200,
+      // 必须**标价更高**才算升级（v11）：当前套餐标价 1500
+      price_minor: 5000,
     });
     const q = quotePurchase(makeCurrent({ expires_at: "2026-11-15T00:00:00Z" }), target, NOW);
     expect(q.allowed).toBe(true);
     expect(q.action).toBe("upgrade");
     expect(q.settlement).toBe("residual_trade_in");
-    // 还剩 23 天 / 30 天 ⇒ 残值 1150，付差价 350
+    // 还剩 23 天 / 30 天 ⇒ 残值 1150，付差价 3850
     expect(q.residual_minor).toBe(1150);
-    expect(q.payable_minor).toBe(350);
+    expect(q.payable_minor).toBe(3850);
+  });
+
+  it("平档换购也算降档：标价不涨就不是升级", () => {
+    // 同为 1500 的另一个套餐：金额上“不亏”，但业务上不允许平换
+    const target = makePlan({ id: "p_30d_100g_other", price_minor: 1500 });
+    const q = quotePurchase(makeCurrent(), target, NOW);
+    expect(q.allowed).toBe(false);
+    expect(q.reason).toContain("降档");
+  });
+
+  it("标价更高时只补差价（残值按实付价算）", () => {
+    const target = makePlan({ id: "p_30d_120g", price_minor: 1600 });
+    // 刚买、实付 1500、剩余接近 100% ⇒ 残值 1500，应付 100 仍 > 0
+    const q = quotePurchase(makeCurrent(), target, NOW);
+    expect(q.allowed).toBe(true);
+    expect(q.payable_minor).toBe(100);
   });
 
   it("到期之后可以买流量包（视为新购）", () => {
@@ -305,7 +325,8 @@ describe("quotePurchase", () => {
     });
     const ok = quotePurchase(makeCurrent(), addon, NOW);
     expect(ok.allowed).toBe(true);
-    expect(ok.action).toBe("addon");
+    // 加量包的交易行为恒为“按标价加流量” ⇒ action 就是 buy（不再单设 addon 格）
+    expect(ok.action).toBe("buy");
     expect(ok.payable_minor).toBe(500);
     expect(ok.expires_at).toBe("2026-11-22T00:00:00.000Z"); // 不动到期日
 
@@ -316,7 +337,7 @@ describe("quotePurchase", () => {
     // 没有主订阅 / 主订阅已结束 ⇒ 无处可挂
     const over = quotePurchase(makeCurrent({ expires_at: "2026-10-01T00:00:00Z" }), addon, NOW);
     expect(over.allowed).toBe(false);
-    expect(over.reason).toContain("加购包");
+    expect(over.reason).toContain("周期套餐");
   });
 
   it("不限量套餐不加购（加了对用户也没作用）", () => {

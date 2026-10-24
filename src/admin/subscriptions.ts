@@ -117,7 +117,9 @@ export async function handleAdminSubscriptions(
           balance_gb: r.balance_gb,
           paid_minor: r.paid_minor,
           status: state.status,
+          // 后台看到的是机器原因 + 用户文案两个字段
           status_reason: state.reason,
+          status_text: state.status_text,
         },
       };
     });

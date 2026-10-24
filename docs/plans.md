@@ -36,17 +36,20 @@ Last updated: 2026-10-24
 订阅只有**一行**（`UNIQUE(customer_id)`，见 `domain.md` §1.2）。有了主订阅之后，能做的
 只剩下**续订**和**升级**：
 
-| 当前状态 | 买同一个套餐 | 买**任何**其它套餐 | 买 `addon` |
-|---|---|---|---|
-| 无主订阅 / 已到期 | 新购 | 新购 | ❌ |
-| 生效中（`period` / `traffic`） | **续订**（全款、顺延） | **升级**（残值抵扣） | **`period` 就能买**（不限量除外） |
+| 当前状态 | 买同一个套餐 | 买**标价更高**的套餐 | 买**标价相同/更低**的 | 买 `addon` |
+|---|---|---|---|---|
+| 无主订阅 / 已 `inactive` | `buy` | `buy` | `buy` | `blocked`（先有周期套餐） |
+| 生效中（`period` / `traffic`） | **`renewal`**（全款、顺延） | **`upgrade`**（残值抵扣） | `blocked`（不支持降档） | **`period` 就能买**（`buy`，不限量除外） |
 
 - **续订不选计划**：App 上就一个“续订 ¥X / N 天”按钮，用户不用挑。
-- **升级可以跨 `kind`**（周期 ⇄ 流量都行），唯一门槛是
-  `应付 = 新价 − 残值` 必须 **> 0**。这一条同时挡住了降档（应付 ≤ 0）与 0 元白拿。
+- **升级只认标价**：`目标 price_minor > 当前套餐 price_minor`，且 `应付 = 新价 − 残值 > 0`。
+  两条都要：只看残值会让“便宜的套餐也叫升级”，只看标价会“升级还倒找钱”。
+- **升级可以跨 `kind`**（周期 ⇄ 流量都行），因为残值是“实付价 × 剩余比例”，与量纲无关。
 - **加购包不折钱**：`addon` 是纯 GB 余额，升级时原样搬到新订阅。
 - **加购没有开关**：只要有一份生效中的周期套餐就能买加量包（它不产生第二份订阅，
   只往 `balance_gb` 上加 GB）；唯一例外是不限量套餐——加了对用户没有任何作用。
+- **加量包可买时 `action` 就是 `buy`**：它的交易行为恒为“按标价加流量”，不需要单独一格
+  （`kind === "addon"` 已经说明它是什么）。
 
 ## 3. 残值换购（**只用于升级**）
 
@@ -65,9 +68,10 @@ $$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应�
 - **加购包余额原样搬过去**，不折算（它是 GB，不是钱）。
 - 商店通道（`apple_iap` / `google_play`）的升级由商店自己做 proration，不参与残值抵扣。
 
-实现：`src/plans/quote.ts`（纯函数，37 个单测在 `test/plans.test.ts`）。
-App 只读 `/plans` 里的 `action`(`buy`/`renewal`/`upgrade`/`addon`/`blocked`) 与
-`payable_minor` 渲染按钮，**不做任何计算**。
+实现：`src/plans/quote.ts`（纯函数，单测在 `test/plans.test.ts`）。
+App 只读 `/plans[].action`（`buy` / `renewal` / `upgrade` / `blocked` / `login_required`）
+与 `payable_minor` 渲染按钮；升级的应付必须点开走 `POST /quote`（列表不带残值），
+**App 不做任何计算**。契约正文在 `clever-vpn-docs` `app-crm.md` §2.4.7 / §2.4.8。
 
 ## 4. 数据模型
 
@@ -180,8 +184,8 @@ $$R = P + B, \qquad B' = \min(B, R), \qquad R' = P + B'$$
 
 ## 8. 待办
 
-- [ ] 对外 `POST /api/app/v1/upgrade/quote`（复用 `quotePurchase()`）
+- [x] 对外 `POST /api/app/v1/quote`（复用 `quotePurchase()`，带 `quote_ttl_s`）
 - [ ] 下单 / 续订 / 升级时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数 + 存 `platform_customer_id`/`code`）
-- [ ] App 端登录（邮箱验证码 + `session_token`）与 `/plans`（带 `purchasable`/`reason`）
+- [x] App 端登录（邮箱验证码 + `session_token`）与 `/plans`（每项只带一个 `action`）
 - [ ] 读 cf-api `lines` 填充线路选择器
 - [ ] 支付（网页收银台 + 商店内购）

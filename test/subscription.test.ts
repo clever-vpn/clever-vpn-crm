@@ -235,28 +235,38 @@ describe("addAddonBalance / isOver", () => {
   });
 });
 
-describe("statusOf：状态是算出来的", () => {
-  it("五种状态按优先级命中，并且都给出用户能看懂的原因", () => {
-    // 作废 > 冻结 > 到期 > 用完
+describe("statusOf：状态算出来，原因单独给", () => {
+  it("冻结/作废 → 到期 → 用完 → 可用，按优先级命中", () => {
+    // 状态只有 active / inactive；原因才是 expired / exhausted / frozen
     const base = makeSub({ expires_at: "2026-10-01T00:00:00Z", remaining_gb: 0 });
-    expect(statusOf({ ...base, hold: "revoked" }, NOW).status).toBe("revoked");
-    expect(statusOf({ ...base, hold: "frozen", hold_reason: "风控" }, NOW)).toEqual({
-      status: "frozen",
-      reason: "风控",
+    expect(statusOf({ ...base, hold: "revoked" }, NOW)).toEqual({
+      status: "inactive",
+      reason: "frozen",
+      status_text: "订阅已被暂停，请联系客服",
     });
-    expect(statusOf(base, NOW).status).toBe("expired");
+    expect(statusOf({ ...base, hold: "frozen", hold_reason: "风控" }, NOW)).toEqual({
+      status: "inactive",
+      reason: "frozen",
+      status_text: "风控",
+    });
+    expect(statusOf(base, NOW)).toEqual({
+      status: "inactive",
+      reason: "expired",
+      status_text: "已于 2026-10-01 到期",
+    });
   });
 
-  it("没到期但流量用完 → exhausted，并带上重置日", () => {
+  it("没到期但流量用完 → inactive/exhausted，文案带重置日", () => {
     const sub = makeSub({ expires_at: "2026-12-01T00:00:00Z", remaining_gb: 0, anchor_day: 23 });
     const state = statusOf(sub, NOW);
-    expect(state.status).toBe("exhausted");
-    expect(state.reason).toContain("23");
+    expect(state.status).toBe("inactive");
+    expect(state.reason).toBe("exhausted");
+    expect(state.status_text).toContain("23");
   });
 
   it("不限量（remaining_gb = null）永远不会 exhausted", () => {
     const sub = makeSub({ expires_at: "2026-12-01T00:00:00Z", remaining_gb: null });
-    expect(statusOf(sub, NOW)).toEqual({ status: "active", reason: null });
+    expect(statusOf(sub, NOW)).toEqual({ status: "active", reason: null, status_text: "生效中" });
   });
 });
 
