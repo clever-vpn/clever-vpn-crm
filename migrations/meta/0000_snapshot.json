@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "3aa28eef-6254-43d7-a2b5-fca996be660a",
+  "id": "c28d0996-a8b3-44ea-8e89-f7a1c27559f4",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "adjustments": {
@@ -1153,13 +1153,27 @@
           "notNull": true,
           "autoincrement": false
         },
-        "status": {
-          "name": "status",
+        "hold": {
+          "name": "hold",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'active'"
+          "default": "'none'"
+        },
+        "hold_reason": {
+          "name": "hold_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "hold_at": {
+          "name": "hold_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "paid_minor": {
           "name": "paid_minor",
@@ -1290,20 +1304,6 @@
           "autoincrement": false,
           "default": 0
         },
-        "revoked_at": {
-          "name": "revoked_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "revoke_reason": {
-          "name": "revoke_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -1320,19 +1320,17 @@
         }
       },
       "indexes": {
-        "idx_subs_customer": {
-          "name": "idx_subs_customer",
+        "uq_subs_customer": {
+          "name": "uq_subs_customer",
           "columns": [
-            "customer_id",
-            "status"
+            "customer_id"
           ],
-          "isUnique": false
+          "isUnique": true
         },
         "idx_subs_due": {
           "name": "idx_subs_due",
           "columns": [
             "kind",
-            "status",
             "last_settled_at"
           ],
           "isUnique": false
@@ -1457,18 +1455,11 @@
           "notNull": true,
           "autoincrement": false
         },
-        "from_subscription_id": {
-          "name": "from_subscription_id",
+        "subscription_id": {
+          "name": "subscription_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "to_subscription_id": {
-          "name": "to_subscription_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "action": {
@@ -1495,6 +1486,48 @@
         "payable_minor": {
           "name": "payable_minor",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "kind_before": {
+          "name": "kind_before",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "kind_after": {
+          "name": "kind_after",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "plan_before": {
+          "name": "plan_before",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "plan_after": {
+          "name": "plan_after",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "expires_before": {
+          "name": "expires_before",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "expires_after": {
+          "name": "expires_after",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

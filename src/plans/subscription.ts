@@ -27,7 +27,21 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 export type SubscriptionKind = "period" | "traffic" | "addon";
-export type SubscriptionStatus = "active" | "expired" | "superseded" | "refunded";
+
+/** 手工控制位：**只表达人的意图**，它本身不是状态（`domain.md` §1.3） */
+export type Hold = "none" | "frozen" | "revoked";
+
+/**
+ * 算出来的状态。前四种都“不能用”，但原因不同，必须分别告诉用户：
+ * 作废（退款）/ 冻结（管理员）/ 到期 / 流量用完。
+ */
+export type SubscriptionStatus = "active" | "expired" | "exhausted" | "frozen" | "revoked";
+
+export interface SubscriptionState {
+  status: SubscriptionStatus;
+  /** 给终端用户看的整句话；`active` 时为 `null` */
+  reason: string | null;
+}
 
 /** 一行 `platform_subscriptions`（含创建时的规则快照） */
 export interface Subscription {
@@ -35,7 +49,9 @@ export interface Subscription {
   customer_id: number;
   plan_id: string;
   kind: SubscriptionKind;
-  status: SubscriptionStatus;
+  hold: Hold;
+  hold_reason: string | null;
+  hold_at: string | null;
   paid_minor: number;
   currency: string;
   licence_limit: number;
@@ -87,7 +103,9 @@ export function subscriptionFromPlan(
     customer_id: opts.customerId,
     plan_id: plan.id,
     kind: plan.kind,
-    status: "active",
+    hold: "none",
+    hold_reason: null,
+    hold_at: null,
     paid_minor: paid,
     currency: plan.currency,
     licence_limit: plan.licence_limit,
@@ -105,6 +123,94 @@ export function subscriptionFromPlan(
     last_settled_at: plan.kind === "period" ? now.toISOString() : null,
     platform_customer_id: null,
   };
+}
+
+// ---- 状态（算出来的） ----
+
+/**
+ * 算出状态，**不存储**。优先级与文案见 `docs/domain.md` §1.3：
+ * 作废 → 冻结 → 到期 → 用完 → 可用。
+ *
+ * 注意：这里只用于**展示与报价**。“能不能连”的权威判定在 cf-api（心跳读自己的余额）。
+ */
+export function statusOf(
+  sub: Pick<Subscription, "hold" | "hold_reason" | "expires_at" | "remaining_gb" | "kind" | "anchor_day">,
+  now: Date = new Date(),
+): SubscriptionState {
+  if (sub.hold === "revoked") return { status: "revoked", reason: "已作废（退款）" };
+  if (sub.hold === "frozen") return { status: "frozen", reason: sub.hold_reason ?? "已被冻结" };
+  if (sub.expires_at && Date.parse(sub.expires_at) <= now.getTime()) {
+    return { status: "expired", reason: `已于 ${sub.expires_at.slice(0, 10)} 到期` };
+  }
+  if (sub.remaining_gb !== null && sub.remaining_gb <= 0) {
+    const reset = sub.kind === "period" && sub.anchor_day ? `，每月 ${sub.anchor_day} 日重置` : "";
+    return { status: "exhausted", reason: `流量已用完${reset}` };
+  }
+  return { status: "active", reason: null };
+}
+
+// ---- 两种后续动作（纯函数：算新快照，不碰库） ----
+
+/**
+ * 续订：**同一套餐再来一份**。
+ *
+ * - `period`：到期日 = `max(现在, 原到期日) + term_days`（提前续订不丢时间，也不走残值）
+ * - `traffic`：整包叠加（`traffic_total_gb` 与 `remaining_gb` 同步加），到期日取两者更晚
+ * - `addon`：只加 `balance_gb`，不动到期日
+ *
+ * 权益列（额度 / 设备数 / 线路 / 锚点）**沿用当前订阅的快照**，不因套餐改版而变化。
+ */
+export function renewSubscription(
+  sub: Subscription,
+  plan: Plan,
+  opts: { paidMinor: number; now?: Date },
+): Subscription {
+  const now = opts.now ?? new Date();
+  const base = Math.max(now.getTime(), sub.expires_at ? Date.parse(sub.expires_at) : 0);
+  const next = { ...sub, paid_minor: opts.paidMinor };
+
+  if (plan.kind === "addon") {
+    next.balance_gb = (sub.balance_gb ?? 0) + (plan.traffic_gb ?? 0);
+    return next;
+  }
+  if (sub.kind === "period") {
+    next.expires_at = new Date(base + (sub.term_days ?? 0) * DAY_MS).toISOString();
+    return next;
+  }
+  // traffic：整包叠加，到期日取更晚者
+  next.traffic_total_gb = (sub.traffic_total_gb ?? 0) + (plan.traffic_gb ?? 0);
+  next.remaining_gb = (sub.remaining_gb ?? 0) + (plan.traffic_gb ?? 0);
+  const added = plan.validity_days === null ? null : new Date(base + plan.validity_days * DAY_MS).toISOString();
+  const candidates = [sub.expires_at, added].filter((v): v is string => v !== null);
+  next.expires_at = candidates.length ? candidates.sort().at(-1)! : null;
+  return next;
+}
+
+/**
+ * 升级：换成**另一份**套餐（可跨 `kind`）。
+ *
+ * - 新快照从**今天**起算（旧的剩余时间 / 流量已经折成钱，不叠加）
+ * - 加购余额 `balance_gb` **原样带过去**（它是 GB，不折钱）
+ * - `paid_minor` = 本次实付；后续残值用它 × 剩余比例（已封顶到 1，不会亏本）
+ */
+export function upgradeSubscription(
+  sub: Subscription,
+  plan: Plan,
+  opts: { paidMinor: number; now?: Date },
+): Subscription {
+  const fresh = subscriptionFromPlan(plan, {
+    customerId: sub.customer_id,
+    paidMinor: opts.paidMinor,
+    now: opts.now,
+  });
+  return {
+    ...fresh,
+    id: sub.id,
+    hold: sub.hold,
+    hold_reason: sub.hold_reason,
+    hold_at: sub.hold_at,
+    balance_gb: sub.balance_gb ?? 0,
+  } as Subscription;
 }
 
 // ---- 结算（period 每月重置） ----

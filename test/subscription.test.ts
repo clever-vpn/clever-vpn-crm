@@ -18,6 +18,9 @@ import {
   bindingExpireDate,
   isOver,
   nextResetAt,
+  renewSubscription,
+  statusOf,
+  upgradeSubscription,
   settle,
   subscriptionFromPlan,
 } from "../src/plans/subscription";
@@ -58,7 +61,9 @@ function makeSub(over: Partial<Subscription> = {}): Subscription {
     customer_id: 7,
     plan_id: "p_30d_100g_1d",
     kind: "period",
-    status: "active",
+    hold: "none",
+    hold_reason: null,
+    hold_at: null,
     paid_minor: 1500,
     currency: "CNY",
     licence_limit: 1,
@@ -229,5 +234,83 @@ describe("addAddonBalance / isOver", () => {
 
   it("traffic 余量 0 算结束", () => {
     expect(isOver(makeSub({ kind: "traffic", remaining_gb: 0 }), NOW)).toBe(true);
+  });
+});
+
+describe("statusOf：状态是算出来的", () => {
+  it("五种状态按优先级命中，并且都给出用户能看懂的原因", () => {
+    // 作废 > 冻结 > 到期 > 用完
+    const base = makeSub({ expires_at: "2026-10-01T00:00:00Z", remaining_gb: 0 });
+    expect(statusOf({ ...base, hold: "revoked" }, NOW).status).toBe("revoked");
+    expect(statusOf({ ...base, hold: "frozen", hold_reason: "风控" }, NOW)).toEqual({
+      status: "frozen",
+      reason: "风控",
+    });
+    expect(statusOf(base, NOW).status).toBe("expired");
+  });
+
+  it("没到期但流量用完 → exhausted，并带上重置日", () => {
+    const sub = makeSub({ expires_at: "2026-12-01T00:00:00Z", remaining_gb: 0, anchor_day: 23 });
+    const state = statusOf(sub, NOW);
+    expect(state.status).toBe("exhausted");
+    expect(state.reason).toContain("23");
+  });
+
+  it("不限量（remaining_gb = null）永远不会 exhausted", () => {
+    const sub = makeSub({ expires_at: "2026-12-01T00:00:00Z", remaining_gb: null });
+    expect(statusOf(sub, NOW)).toEqual({ status: "active", reason: null });
+  });
+});
+
+describe("续订：同一套餐再买一份", () => {
+  it("周期套餐从原到期日顺延，不是从今天起算", () => {
+    const sub = makeSub({ expires_at: "2026-10-31T00:00:00Z", term_days: 30 });
+    const next = renewSubscription(sub, makePlan({ kind: "period", term_days: 30 }), {
+      paidMinor: 1500,
+      now: NOW,
+    });
+    // 10-31 + 30 天；如果错误地从"现在"起算会得到 11-15 左右
+    expect(next.expires_at).toBe("2026-11-30T00:00:00.000Z");
+    expect(next.paid_minor).toBe(1500);
+  });
+
+  it("已过期再续订：从今天起算", () => {
+    const sub = makeSub({ expires_at: "2026-09-01T00:00:00Z", term_days: 30 });
+    const next = renewSubscription(sub, makePlan({ kind: "period", term_days: 30 }), {
+      paidMinor: 1500,
+      now: NOW,
+    });
+    expect(Date.parse(next.expires_at ?? "")).toBe(NOW.getTime() + 30 * 24 * 3600 * 1000);
+  });
+
+  it("加购包只加余额，不动到期日", () => {
+    const sub = makeSub({ balance_gb: 10, expires_at: "2026-10-31T00:00:00Z" });
+    const next = renewSubscription(sub, makePlan({ kind: "addon", traffic_gb: 50 }), {
+      paidMinor: 800,
+      now: NOW,
+    });
+    expect(next.balance_gb).toBe(60);
+    expect(next.expires_at).toBe(sub.expires_at);
+  });
+});
+
+describe("升级：换成另一份套餐", () => {
+  it("跨 kind 也允许，从今天起算，加购余额原样带过去", () => {
+    const sub = makeSub({ balance_gb: 25, expires_at: "2026-12-31T00:00:00Z" });
+    const next = upgradeSubscription(sub, makePlan({ kind: "traffic", traffic_gb: 500, validity_days: 365 }), {
+      paidMinor: 4200,
+      now: NOW,
+    });
+    expect(next.kind).toBe("traffic");
+    expect(next.traffic_total_gb).toBe(500);
+    expect(next.balance_gb).toBe(25); // 不折钱，原样搬
+    expect(next.paid_minor).toBe(4200);
+    expect(next.id).toBe(sub.id); // 同一行
+  });
+
+  it("冻结状态不会被付款解开", () => {
+    const sub = makeSub({ hold: "frozen", hold_reason: "风控" });
+    const next = upgradeSubscription(sub, makePlan({ kind: "period" }), { paidMinor: 1500, now: NOW });
+    expect(next.hold).toBe("frozen");
   });
 });

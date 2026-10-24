@@ -76,8 +76,8 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 | 表 | 用途 | 关键列 |
 |---|---|---|
 | `plans` | 可售商品定义（**可变目录**，历史靠快照） | `kind`(period/traffic/addon)、`price_minor`、`visibility`(public/hidden)、`status`(draft/active/retired)、`retired_at` |
-| `platform_subscriptions` | **订阅**（销售事实 + 快照） | `order_id`、`kind`、`quota_gb`、`balance_gb`（结转）、`anchor_day`、`params_version`（写冲突检测）、`revoked_at` |
-| `subscription_changes` | 换购/结算台账 | `action`、`residual_minor`、`payable_minor`、`balance_*` |
+| `platform_subscriptions` | **订阅**（当前权益，**一个客户一行**：`uq_subs_customer`） | `kind`、`quota_gb`、`balance_gb`（结转）、`anchor_day`、`expires_at`、`hold`/`hold_reason`（手工控制位）、`params_version` |
+| `subscription_changes` | 权益变更台账（**单行模型的历史全在这里**） | `action`(new/renewal/upgrade/addon/settle/hold)、`paid_minor`、`residual_minor`、`payable_minor`、`kind_before`/`kind_after`、`plan_before`/`plan_after`、`expires_before`/`expires_after`、`balance_before`/`balance_after` |
 
 ### 2.3 钱
 

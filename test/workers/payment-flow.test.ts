@@ -144,12 +144,14 @@ describe("mock 支付全链路", () => {
     expect(row?.paid_at).toBeTruthy();
     expect(row?.subscription_id).toBeGreaterThan(0);
 
+    // 状态是算出来的，库里只有 hold（没人冻它就还是 none）
     const sub = await env.DB.prepare(
-      `SELECT plan_id, status, paid_minor FROM platform_subscriptions WHERE id = ?`,
+      `SELECT plan_id, hold, expires_at, paid_minor FROM platform_subscriptions WHERE id = ?`,
     )
       .bind(row?.subscription_id ?? 0)
-      .first<{ plan_id: string; status: string; paid_minor: number }>();
-    expect(sub).toMatchObject({ plan_id: "pay_plan_30d", status: "active", paid_minor: 1500 });
+      .first<{ plan_id: string; hold: string; expires_at: string | null; paid_minor: number }>();
+    expect(sub).toMatchObject({ plan_id: "pay_plan_30d", hold: "none", paid_minor: 1500 });
+    expect(Date.parse(sub?.expires_at ?? "")).toBeGreaterThan(Date.now());
   });
 
   it("重复点「模拟支付」不会重复发货", async () => {
@@ -171,7 +173,8 @@ describe("mock 支付全链路", () => {
     const after = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM platform_subscriptions WHERE plan_id = 'pay_plan_30d'`,
     ).first<{ n: number }>();
-    expect(after?.n).toBe((before?.n ?? 0) + 1); // 只多一条
+    // 单行模型：订阅本来就只有一行，重复回调不该多出任何东西
+    expect(after?.n).toBe(before?.n ?? 0);
   });
 
   it("60 秒内重复下单复用同一张单（防双击）", async () => {
@@ -417,5 +420,68 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
       .first<{ status: string; subscription_id: number | null }>();
     expect(row?.status).toBe("active");
     expect(row?.subscription_id).toBeGreaterThan(0);
+  });
+});
+
+describe("续订：同一套餐再买一次", () => {
+  async function buyAndPay() {
+    const created = await call("/api/app/v1/orders", {
+      method: "POST",
+      token: TOKEN,
+      body: { plan_id: "pay_plan_30d", payment_method: "alipay" },
+    });
+    expect(created.status).toBe(201);
+    const order = (await created.json()) as { order_code: string; pay_url: string };
+    const pay = await worker.default.fetch(new Request(`${order.pay_url}/paid`, { method: "POST" }));
+    expect(pay.status).toBe(200);
+    return order;
+  }
+
+  // 只看这个客户的行（同一个套餐可能还有别的客户买过）
+  const readRow = () =>
+    env.DB.prepare(
+      `SELECT s.id, s.expires_at, s.paid_minor FROM platform_subscriptions s
+         JOIN customers c ON c.id = s.customer_id
+        WHERE c.email = ? AND s.plan_id = 'pay_plan_30d'`,
+    )
+      .bind(PAYER)
+      .first<{ id: number; expires_at: string; paid_minor: number }>();
+
+  it("只有一行订阅，到期日往后顺延（不是并存两份）", async () => {
+    // 自己先买一次，不依赖其他用例留下的状态
+    await buyAndPay();
+    const before = await readRow();
+    expect(before?.id).toBeGreaterThan(0);
+
+    const order = await buyAndPay();
+    const after = await readRow();
+
+    // 同一行（单行模型）
+    expect(after?.id).toBe(before?.id);
+    // 到期日 = 原到期日 + 30 天
+    const deltaDays =
+      (Date.parse(after?.expires_at ?? "") - Date.parse(before?.expires_at ?? "")) / 86_400_000;
+    expect(Math.round(deltaDays)).toBe(30);
+
+    const rows = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM platform_subscriptions s
+         JOIN customers c ON c.id = s.customer_id
+        WHERE c.email = ? AND s.plan_id = 'pay_plan_30d'`,
+    )
+      .bind(PAYER)
+      .first<{ n: number }>();
+    expect(rows?.n).toBe(1);
+
+    // 流水里能看出"改之前 / 改之后"，退款回滚靠它
+    const change = await env.DB.prepare(
+      `SELECT action, expires_before, expires_after FROM subscription_changes
+        WHERE detail LIKE ?
+        ORDER BY id DESC LIMIT 1`,
+    )
+      .bind(`%${order.order_code}%`)
+      .first<{ action: string; expires_before: string | null; expires_after: string | null }>();
+    expect(change?.action).toBe("renewal");
+    expect(change?.expires_before).toBe(before?.expires_at);
+    expect(change?.expires_after).toBe(after?.expires_at);
   });
 });
