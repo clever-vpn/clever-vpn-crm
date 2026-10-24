@@ -143,6 +143,48 @@ method = alipay
 结论：**一个解释器 + 十几个开关就能覆盖全部四家**（`test/payments/mapping.test.ts`
 里四份夹具跑的是同一份代码）。这就是 `generic_json_v1` 的存在理由。
 
+### 5.1 另一类协议族：虎皮椒（XunHuPay）
+
+虎皮椒和易支付**不是同一个族** —— 签名算法一致（ASCII 升序 + 直接拼 AppSecret + MD5），
+但**状态码、渠道模型、查单能力**都不同：
+
+| | 易支付 V1 | 虎皮椒 |
+|---|---|---|
+| 签名字段 | `sign`（排除 `sign`,`sign_type`） | **`hash`**（排除 `hash`） |
+| 商户号 | `pid` | `appid` |
+| 金额 / 订单号 / 标题 | `money` / `out_trade_no` / `name` | `total_fee` / `trade_order_id` / `title` |
+| **成功码** | `code == 1` | **`errcode == "0"`** |
+| 收银台 | `payurl`（单一） | `url`（H5 跳转）+ `url_qrcode`（PC 扫码内容，自己出图） |
+| **渠道** | 参数 `type=alipay/wxpay` | **没有渠道参数**：一个 `appid` 绑一个通道，换 appid 才换渠道 |
+| 必填随机串 | 无 | **`nonce_str`**（防重放）+ 必填 `time` |
+| 回调已付 | `trade_status=TRADE_SUCCESS` | **`status=OD`**（固定字面量） |
+| 回调应答 | `success` | `success` / `成功` / `ok` 任一 |
+| 查单 | `api.php?act=order` | **官方"开发中"，只能靠回调** |
+| 响应验签 | 一般无 | 响应带 `hash`，可验 |
+
+真正"本质"的三点：
+
+1. **状态码是另一套编码。** `code=1` 成功 vs `errcode=0` 成功 —— 数值相反、都是合法
+   整数，写错时单测不报错，只有真收款才发现。所以这类判定**必须在映射里显式写死**，
+   不许有"默认值"。
+2. **渠道是"账号"不是"参数"。** 虎皮椒没有 `type`，"一个网关同时支持支付宝+微信"这个
+   假设不成立 ⇒ 每个渠道一条网关（`methods` 只能有一个值）。
+3. **没有查单。** "回调只当触发器、以查单为真相"的兜底链路对它不可用 ⇒ 只能依赖回调
+   重试，`live` 之前必须实测 `notify_url` 真的可达。
+
+### 5.2 让映射覆盖虎皮椒还缺 4 个小开关（都不改变模型）
+
+| 缺口 | 补法 |
+|---|---|
+| 签名字段名不一定是 `sign` | `sign.field`（默认 `"sign"`，可设 `"hash"`） |
+| `nonce_str` 每次必须随机 | `fields.nonce` + 模板变量 `{nonce}` |
+| 有些网关**没有查单接口** | `query` 改为可选；为空时禁用 cron 兜底，并在面板上明确提示"只能靠回调" |
+| 金额单位可能**按方向不同** | 下单按元、回调按分（XArrPay 原生协议就是这样）⇒ `notify_amount_unit` / `query_amount_unit`，缺省跟随 `amount_unit` |
+
+> 易支付 V2（`epayn`）用 **RSA-SHA256 双向签名**，属于非对称签名，是另一档能力，
+> 暂不支持（也不违反"签名本地一次算完"的判据，将来要支持时按 `sign.algo` 扩展即可）。
+
+
 ## 6. 驱动（driver）
 
 | driver | 用什么 | 谁配 |
@@ -277,3 +319,24 @@ method = alipay
 5. `stripe` / `paypal` 薄 driver
 6. AI 生成映射草稿
 7. 退款走网关（`refunds.channel_refund_id`）
+8. §5.2 的四个小开关（`sign.field` / `{nonce}` / `query` 可选 / 分方向金额单位）
+
+## 9. 参考
+
+核对字段、金额单位与状态码时，优先看这几处（都是可以直接对照的规范）：
+
+- **XArrPay 商户 API 总览** —— 协议清单、统一签名算法、**金额单位的方向差异**、订单状态码：
+  <https://docs.xarr.cn/merchant/api/>
+- **易支付协议 V1** —— 与 SSPanel `Epay*` 实现一致，可作为 `epay_v1` 的对照：
+  <https://docs.xarr.cn/merchant/api/epay.html>
+- **虎皮椒协议** —— `hash` 签名、`errcode=0`、`status=OD`、无查单：
+  <https://docs.xarr.cn/merchant/api/xunhupay.html>
+- **易支付 V2（epayn）** —— RSA-SHA256 双向签名（暂不支持）：
+  <https://docs.xarr.cn/merchant/api/epayn.html>
+- **亿宏数码 API 文档** —— 本仓库 `clever-vpn-cf-api/docs/亿宏数码API接口文档.html`
+  （回调 `status=1` / 查单 `status=3` 两套语义的出处）
+
+> 注意：这类文档描述的是**聚合商自己的网关**，各家下游的 `submit.php` / `mapi.php`
+> 仍可能有细微差异（路径、渠道码、`&key=` 拼接）。所以 `epay_v1` 必须允许"高级覆盖"，
+> 且 `live` 之前必须真收一次钱。
+
