@@ -71,9 +71,9 @@ beforeAll(async () => {
     ).bind(JSON.stringify([PAYER]), now(), now()),
     env.DB.prepare(
       `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
-         monthly_quota_gb, traffic_gb, validity_days, allow_addons, line_ids, sales_channels,
+         monthly_quota_gb, traffic_gb, validity_days, line_ids, sales_channels,
          store_product_id, sort_order, status, visibility, created_at, updated_at)
-       VALUES ('pay_plan_30d', '月付 · 测试', 'period', 1500, 'CNY', 1, 30, 100, NULL, NULL, 0,
+       VALUES ('pay_plan_30d', '月付 · 测试', 'period', 1500, 'CNY', 1, 30, 100, NULL, NULL,
          '[]', '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 1, 'active', 'public', ?, ?)`,
     ).bind(now(), now()),
   ]);
@@ -262,7 +262,6 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
     monthly_quota_gb: 100,
     traffic_gb: null,
     validity_days: null,
-    allow_addons: false,
     line_ids: [],
     up_mbps: null,
     down_mbps: null,
@@ -492,9 +491,9 @@ describe("升级：换成别的套餐（残值抵扣）", () => {
   beforeAll(async () => {
     await env.DB.prepare(
       `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
-         monthly_quota_gb, traffic_gb, validity_days, allow_addons, line_ids, sales_channels,
+         monthly_quota_gb, traffic_gb, validity_days, line_ids, sales_channels,
          store_product_id, sort_order, status, visibility, created_at, updated_at)
-       VALUES (?, '月付 · 200GB 测试', 'period', 4000, 'CNY', 3, 30, 200, NULL, NULL, 0,
+       VALUES (?, '月付 · 200GB 测试', 'period', 4000, 'CNY', 3, 30, 200, NULL, NULL,
          '[]', '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 9, 'active', 'public', ?, ?)`,
     )
       .bind(UPGRADE_PLAN, now(), now())
@@ -565,5 +564,36 @@ describe("升级：换成别的套餐（残值抵扣）", () => {
     expect(change?.plan_before).toBe("pay_plan_30d");
     expect(change?.plan_after).toBe(UPGRADE_PLAN);
     expect(change?.residual_minor).toBe(4000 - (up?.payable_minor ?? 0));
+  });
+});
+
+describe("隐藏套餐（礼品包）不能出现在 App 里", () => {
+  const HIDDEN = "pay_hidden_gift";
+
+  beforeAll(async () => {
+    await env.DB.prepare(
+      `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
+         monthly_quota_gb, traffic_gb, validity_days, line_ids, sales_channels,
+         store_product_id, sort_order, status, visibility, created_at, updated_at)
+       VALUES (?, '礼品包（隐藏）', 'addon', 0, 'CNY', 1, NULL, NULL, 20, NULL,
+         '[]', '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 99, 'active', 'hidden', ?, ?)`,
+    )
+      .bind(HIDDEN, now(), now())
+      .run();
+  });
+
+  it("列表里看不到", async () => {
+    const res = await call("/api/app/v1/plans", { token: TOKEN });
+    const plans = (await res.json()) as { plan_id: string }[];
+    expect(plans.some((p) => p.plan_id === HIDDEN)).toBe(false);
+  });
+
+  it("直接拿 id 下单也下不了（404）", async () => {
+    const res = await call("/api/app/v1/orders", {
+      method: "POST",
+      token: TOKEN,
+      body: { plan_id: HIDDEN, payment_method: "alipay" },
+    });
+    expect(res.status).toBe(404);
   });
 });

@@ -148,9 +148,12 @@ async function resolveSession(env: Env, request: Request): Promise<CustomerRow |
 async function loadActivePlans(env: Env): Promise<Plan[]> {
   const rows = await env.DB.prepare(
     `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
-       traffic_gb, validity_days, allow_addons, line_ids, up_mbps, down_mbps, sales_channels,
+       traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
        store_product_id, sort_order, status, retired_at
-     FROM plans WHERE status = 'active' ORDER BY sort_order, created_at`,
+     -- 只卖"公开"的套餐：hidden（礼品包之类，0 元）只能由后台赠送，
+     -- 绝不能出现在 App 列表里，也不能被 POST /orders 直接点出来。
+     FROM plans WHERE status = 'active' AND visibility = 'public'
+     ORDER BY sort_order, created_at`,
   ).all<PlanRow>();
   return (rows.results ?? []).map(rowToPlan);
 }
@@ -165,7 +168,6 @@ function toQuoteInput(sub: Subscription): CurrentSubscription {
     expires_at: sub.expires_at,
     remaining_gb: sub.remaining_gb,
     unlimited: sub.quota_gb === null && sub.kind === "period",
-    allow_addons: sub.allow_addons,
   };
 }
 

@@ -47,7 +47,6 @@ export interface Plan {
   traffic_gb: number | null;
   /** traffic 可空：null = 永久有效 */
   validity_days: number | null;
-  allow_addons: boolean;
   /** 空数组 = 不限线路；只影响 App 展示，不是权限边界 */
   line_ids: number[];
   up_mbps: number | null;
@@ -139,11 +138,6 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
     if (term_days !== null || monthly_quota_gb !== null) errors.push("加购包不要填周期/月度额度");
   }
 
-  const allow_addons = Boolean(input.allow_addons);
-  if (allow_addons && kind !== "period") errors.push("只有周期套餐可以开启加购");
-  if (allow_addons && kind === "period" && monthly_quota_gb === null) {
-    errors.push("不限量套餐不能开启加购（加购对不限量没有意义）");
-  }
 
   const rawLines = Array.isArray(input.line_ids) ? input.line_ids : [];
   const line_ids = [...new Set(rawLines.map((v) => int(v)).filter((v): v is number => v !== null && v > 0))];
@@ -187,7 +181,6 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
       monthly_quota_gb,
       traffic_gb,
       validity_days,
-      allow_addons,
       line_ids,
       up_mbps: int(input.up_mbps),
       down_mbps: int(input.down_mbps),
@@ -213,7 +206,6 @@ export function planToFields(plan: Plan): Record<string, unknown> {
     monthly_quota_gb: plan.monthly_quota_gb,
     traffic_gb: plan.traffic_gb,
     validity_days: plan.validity_days,
-    allow_addons: plan.allow_addons,
     line_ids: plan.line_ids,
     up_mbps: plan.up_mbps,
     down_mbps: plan.down_mbps,
@@ -312,7 +304,6 @@ export interface PlanRow {
   monthly_quota_gb: number | null;
   traffic_gb: number | null;
   validity_days: number | null;
-  allow_addons: number;
   line_ids: string;
   up_mbps: number | null;
   down_mbps: number | null;
@@ -344,7 +335,6 @@ export function rowToPlan(row: PlanRow): Plan {
     monthly_quota_gb: row.monthly_quota_gb,
     traffic_gb: row.traffic_gb,
     validity_days: row.validity_days,
-    allow_addons: row.allow_addons === 1,
     line_ids: parseJson<number[]>(row.line_ids, []),
     up_mbps: row.up_mbps,
     down_mbps: row.down_mbps,
@@ -369,7 +359,6 @@ export function planForClient(plan: Plan): Record<string, unknown> {
     monthly_quota_gb: plan.monthly_quota_gb,
     traffic_gb: plan.traffic_gb,
     validity_days: plan.validity_days,
-    allow_addons: plan.allow_addons,
     line_ids: plan.line_ids,
     speed: plan.up_mbps || plan.down_mbps ? { up_mbps: plan.up_mbps, down_mbps: plan.down_mbps } : null,
     sales_channels: plan.sales_channels,

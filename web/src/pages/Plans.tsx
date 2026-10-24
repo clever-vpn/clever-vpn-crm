@@ -29,7 +29,6 @@ const emptyDraft = (): PlanDraft => ({
   monthly_quota_gb: 100,
   traffic_gb: null,
   validity_days: null,
-  allow_addons: false,
   line_ids: [],
   up_mbps: null,
   down_mbps: null,
@@ -114,7 +113,6 @@ export default function Plans() {
       monthly_quota_gb: plan.monthly_quota_gb,
       traffic_gb: plan.traffic_gb,
       validity_days: plan.validity_days,
-      allow_addons: plan.allow_addons,
       line_ids: plan.line_ids,
       up_mbps: plan.speed?.up_mbps ?? null,
       down_mbps: plan.speed?.down_mbps ?? null,
@@ -285,7 +283,6 @@ function PlanForm({
                 term_days: kind === "period" ? draft.term_days ?? 30 : null,
                 monthly_quota_gb: kind === "period" ? draft.monthly_quota_gb ?? 100 : null,
                 traffic_gb: kind === "period" ? null : draft.traffic_gb ?? 100,
-                allow_addons: kind === "period" ? draft.allow_addons : false,
               });
             }}
           >
@@ -339,16 +336,9 @@ function PlanForm({
                 onChange={(e) => set("monthly_quota_gb", e.target.value === "" ? null : Number(e.target.value))}
               />
             </label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={draft.allow_addons}
-                disabled={draft.monthly_quota_gb === null}
-                onChange={(e) => set("allow_addons", e.target.checked)}
-              />
-              允许加购流量包
-              {draft.monthly_quota_gb === null && <small className="hint">不限量套餐不支持加购</small>}
-            </label>
+            <small className="hint">
+              周期套餐默认支持加购（加量包 = 额外买的流量，不动到期日）；不限量套餐除外。
+            </small>
           </>
         )}
 
