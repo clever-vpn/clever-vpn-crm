@@ -140,8 +140,13 @@ export const plans = sqliteTable(
     line_ids: text("line_ids").notNull().default("[]"),
     up_mbps: integer("up_mbps"),
     down_mbps: integer("down_mbps"),
-    /** 渠道 JSON：`web_checkout` | `apple_iap` | `google_play` */
-    channels: text("channels").notNull().default("[]"),
+    /**
+     * **售卖渠道** JSON：`[{channel:"web_checkout",methods:["alipay"]}]`。
+     *
+     * 回答的是"在哪儿卖"（自有收银台 / App Store / Google Play），
+     * 与"用什么付钱"（`orders.payment_method`）是两个问题 —— 所以不要叫 `channels`。
+     */
+    sales_channels: text("sales_channels").notNull().default("[]"),
     /**
      * 商店商品 ID：`{"apple"?: string, "google"?: string}`。
      *
@@ -152,7 +157,7 @@ export const plans = sqliteTable(
      *   - Apple 区分大小写；Google 只允许小写字母/数字/`.`/`_`。
      *
      * 平台在付款时生成的交易标识（Apple `transactionId` / Google `purchaseToken`）
-     * **不放这里**，那是交易事实，落 `orders.external_id`。
+     * **不放这里**，那是交易事实，落 `orders.provider_trade_no`。
      */
     store_product_id: text("store_product_id").notNull().default("{}"),
     sort_order: integer("sort_order").notNull().default(0),
@@ -245,11 +250,20 @@ export const subscriptionChanges = sqliteTable(
 // ─────────────────────────────────────────────────────────────
 
 /**
- * 订单 = 一次**收款**的商业事实（domain.md §1）。
+ * 订单 = 一次**收款**的商业事实（domain.md §1，细则见 `docs/payments.md`）。
+ *
+ * ⚠️ 粒度是"**一次支付尝试**"，不是"一次购买意图"：用户点一次「支付」就落一行。
+ * 原因是第三方收银台的回调**只带我们下发的那个单号** —— 单号必须永远唯一对应一行，
+ * 所以"换一个单号"就必然"换一行"。旧的未付款订单转 `expired`；它的钱晚到了，
+ * 照样能凭单号找回并转 `paid`（钱到了必须记账，发不发货另算）。
+ *
+ * 因此**没有** `payment_attempts` 表：这一行就是那次尝试的全部证据。
  *
  * 关键字段：
  *   - `plan_snapshot`：下单瞬间的套餐快照（改价不影响历史，I2）
  *   - `source`：purchase（自助）/ gift（赠送）/ manual（后台补单）
+ *   - `payment_method`：用户看到并选择的方式（`alipay` / `wechat` / …）
+ *   - `provider_order_no`：发给服务商的单号，**创建后不可改**（回调靠它定位）
  *   - `refunded_minor`：已退金额缓存（明细在 `refunds`）
  *   - `voided_at`：作废时间（退款模式 A）
  */
@@ -269,14 +283,32 @@ export const orders = sqliteTable(
     currency: text("currency").notNull().default("CNY"),
     /** purchase | gift | manual */
     source: text("source").notNull().default("purchase"),
-    /** manual | alipay | wechat | stripe | usdt | gift */
-    channel: text("channel").notNull(),
-    /** pending | paid | provisioning | active | closed | refunded */
+    /**
+     * 支付方式 —— **用户可见的唯一支付概念**：`alipay` | `wechat` | `paypal` |
+     * `stripe` | `transfer` | `manual` | `gift`。
+     * 具体走哪家服务商/哪条网关（`gateway_id`）对用户不可见。
+     */
+    payment_method: text("payment_method").notNull(),
+    /** 实际使用的网关（`payment_gateways.id`）；手工补单/赠送/内购为空 */
+    gateway_id: integer("gateway_id"),
+    /**
+     * 我方下发给服务商的单号（回调里带回来的就是它）。
+     * **创建后永不修改** —— 改了旧单号的回调就找不到家。
+     */
+    provider_order_no: text("provider_order_no").unique(),
+    /** 服务商侧流水号（退款、对账用） */
+    provider_trade_no: text("provider_trade_no"),
+    /** 收银台地址：未过期可直接复用，客服排查也看它 */
+    pay_url: text("pay_url"),
+    /** 创建请求 / 回调的原始报文 —— 出问题时唯一的证据 */
+    raw_create: text("raw_create"),
+    raw_notify: text("raw_notify"),
+    /** 支付超时；过期后不再等回调，但查到钱仍会转 paid */
+    expires_at: text("expires_at"),
+    /** pending | paid | provisioning | active | expired | closed | refunded */
     status: text("status").notNull().default("pending"),
     /** 生效后回填 */
     subscription_id: integer("subscription_id"),
-    /** 渠道流水号（对账用） */
-    external_id: text("external_id"),
     refunded_minor: integer("refunded_minor").notNull().default(0),
     voided_at: text("voided_at"),
     /** refund_and_void | refund_only */
@@ -295,7 +327,8 @@ export const orders = sqliteTable(
   (t) => [
     index("idx_orders_customer").on(t.customer_id, t.id),
     index("idx_orders_status").on(t.status, t.created_at),
-    index("idx_orders_external").on(t.channel, t.external_id),
+    /** 兜底 cron 扫 `pending` + 按网关看健康度 */
+    index("idx_orders_gateway").on(t.gateway_id, t.status),
   ],
 );
 
@@ -352,29 +385,58 @@ export const adjustments = sqliteTable(
 );
 
 /**
- * 支付渠道配置（domain.md §9）。
+ * 支付网关 = **一条能收钱的配置**（`docs/payments.md`）。
  *
- * `config` 存加密 JSON（密钥/商户号/webhook secret）；CRM 只做配置 + 验签 + 记账，
- * **不存任何卡信息**。`manual`（对公转账）与 `gift`（赠送）复用同一条确认流程。
+ * 三个词分清楚：
+ *   - **支付方式** `payment_method`（用户视角：支付宝/微信/PayPal/Stripe）—— 存在订单上；
+ *   - **服务商** `provider`（青蛙/亿宏/华俊/Stripe/PayPal）—— 就是这张表的来源；
+ *   - **网关** 就是这一行，租户配几条就有几条，可以同方式多条按 `priority` 兜底。
+ *
+ * `provider_kind` 决定 App 里怎么显示这个名字：
+ *   - `brand`（Stripe / PayPal）：显示品牌，一个品牌就一种方式（`methods` 恒为 `[provider]`）；
+ *   - `aggregator`（易支付类）：聚合商的名字对用户没有意义，只显示它覆盖的渠道品牌
+ *     （勾了支付宝就显示"支付宝"）—— 所以 `methods` 由租户勾选；
+ *   - `manual`（对公转账）：线下人工确认。
+ *
+ * 不变量：**只有 `status = 'live'` 才参与路由**；`live` 之前必须用真实测试支付
+ * （`orders` 里 `plan_id IS NULL` 的那条）验证过签名与回调，见 `docs/payments.md`。
  */
-export const paymentChannels = sqliteTable(
-  "payment_channels",
+export const paymentGateways = sqliteTable(
+  "payment_gateways",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    /** manual | alipay | wechat | stripe | usdt */
-    type: text("type").notNull(),
+    /** qwgua | yihong | huajun | stripe | paypal | manual | custom */
+    provider: text("provider").notNull(),
+    /** aggregator | brand | manual */
+    provider_kind: text("provider_kind").notNull(),
+    /** 后台显示名（例："青蛙-支付宝主号"）—— **永远不会出现在用户界面** */
     name: text("name").notNull(),
-    enabled: integer("enabled").notNull().default(1),
+    /** 收银台 / API 根地址 */
+    endpoint: text("endpoint"),
+    /** 商户号 / app_id / client_id */
+    merchant_id: text("merchant_id"),
+    /**
+     * 加密后的密钥（AES-GCM，主密钥在 Worker secret `PAYMENT_SECRET_KEY`）。
+     * 明文密钥**不入库、不进日志、不进任何 API 响应**。
+     */
+    secret_enc: text("secret_enc"),
+    /** 这条网关支持的支付方式：`["alipay","wechat"]` */
+    methods: text("methods").notNull().default("[]"),
+    /** 自定义协议映射 JSON —— 只有 `custom`（generic_json_v1）需要 */
+    mapping: text("mapping"),
+    /** 同一方式多条网关时，数字小的先试；失败自动降级到下一 条 */
+    priority: integer("priority").notNull().default(100),
+    /** draft | live | disabled */
+    status: text("status").notNull().default("draft"),
     currency: text("currency").notNull().default("CNY"),
-    /** 静态费率（万分比），用于净收入统计 */
-    fee_bps: integer("fee_bps").notNull().default(0),
-    config: text("config").notNull().default("{}"),
-    webhook_path: text("webhook_path"),
-    sort_order: integer("sort_order").notNull().default(0),
+    /** 最近一次成功的测试支付（`orders.id`，那条订单 `plan_id IS NULL`） */
+    last_test_order_id: integer("last_test_order_id"),
+    last_ok_at: text("last_ok_at"),
+    last_error: text("last_error"),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),
   },
-  (t) => [index("idx_channels_type").on(t.type)],
+  (t) => [index("idx_gateways_route").on(t.status, t.priority)],
 );
 
 // ─────────────────────────────────────────────────────────────
@@ -385,7 +447,7 @@ export type Order = typeof orders.$inferSelect;
 export type NewOrder = typeof orders.$inferInsert;
 export type Refund = typeof refunds.$inferSelect;
 export type Adjustment = typeof adjustments.$inferSelect;
-export type PaymentChannel = typeof paymentChannels.$inferSelect;
+export type PaymentGateway = typeof paymentGateways.$inferSelect;
 export type SubscriptionRow = typeof platformSubscriptions.$inferSelect;
 export type PlanRow = typeof plans.$inferSelect;
 export type Customer = typeof customers.$inferSelect;

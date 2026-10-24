@@ -39,7 +39,7 @@ function makePlan(over: Partial<Plan> = {}): Plan {
     line_ids: [],
     up_mbps: null,
     down_mbps: null,
-    channels: [{ channel: "web_checkout", methods: ["alipay"] }],
+    sales_channels: [{ channel: "web_checkout", methods: ["alipay"] }],
     store_product_id: {},
     sort_order: 0,
     status: "active",
@@ -74,7 +74,7 @@ describe("validatePlan", () => {
     licence_limit: 1,
     term_days: 30,
     monthly_quota_gb: 100,
-    channels: [{ channel: "web_checkout", methods: ["alipay", "wechat"] }],
+    sales_channels: [{ channel: "web_checkout", methods: ["alipay", "wechat"] }],
   };
 
   it("合法周期套餐 → 归一化币种大写", () => {
@@ -82,7 +82,7 @@ describe("validatePlan", () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.plan.currency).toBe("CNY");
-      expect(r.plan.channels[0]!.methods).toEqual(["alipay", "wechat"]);
+      expect(r.plan.sales_channels[0]!.methods).toEqual(["alipay", "wechat"]);
       expect(r.plan.status).toBe("draft"); // 新建一律草稿
     }
   });
@@ -126,7 +126,7 @@ describe("validatePlan", () => {
   });
 
   it("选了商店通道就必须有商品 ID", () => {
-    const r = validatePlan({ ...base, channels: [{ channel: "apple_iap" }] });
+    const r = validatePlan({ ...base, sales_channels: [{ channel: "apple_iap" }] });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.join()).toContain("Apple");
   });
@@ -319,12 +319,12 @@ describe("rowToPlan", () => {
       id: "x_1", name: "x", kind: "period", price_minor: 100, currency: "CNY", licence_limit: 1,
       term_days: 30, monthly_quota_gb: 10, traffic_gb: null, validity_days: null, allow_addons: 1,
       line_ids: "[1,2]", up_mbps: null, down_mbps: null,
-      channels: "not-json", store_product_id: "{}", sort_order: 0, status: "active",
+      sales_channels: "not-json", store_product_id: "{}", sort_order: 0, status: "active",
       retired_at: null,
     };
     const plan = rowToPlan(row);
     expect(plan.line_ids).toEqual([1, 2]);
-    expect(plan.channels).toEqual([]);
+    expect(plan.sales_channels).toEqual([]);
     expect(plan.allow_addons).toBe(true);
   });
 });
@@ -338,7 +338,7 @@ describe("applyPlanPatch（可变目录的合并规则）", () => {
     expect(result.plan.status).toBe("active");
     // 没提到的字段原样保留（PATCH 是局部更新）
     expect(result.plan.monthly_quota_gb).toBe(100);
-    expect(result.plan.channels).toEqual([{ channel: "web_checkout", methods: ["alipay"] }]);
+    expect(result.plan.sales_channels).toEqual([{ channel: "web_checkout", methods: ["alipay"] }]);
   });
 
   it("不能通过 PATCH 把 status 改成 draft（状态机只能走 publish/retire）", () => {
@@ -364,10 +364,10 @@ describe("applyPlanPatch（可变目录的合并规则）", () => {
     expect(result.plan.retired_at).toBe(retiredAt);
   });
 
-  it("合并后仍要过完整校验（清空 channels 会被拒）", () => {
-    const result = applyPlanPatch(makePlan(), { channels: [] });
+  it("合并后仍要过完整校验（清空售卖渠道会被拒）", () => {
+    const result = applyPlanPatch(makePlan(), { sales_channels: [] });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors.join()).toContain("至少选一个支付通道");
+    expect(result.errors.join()).toContain("至少选一个售卖渠道");
   });
 });

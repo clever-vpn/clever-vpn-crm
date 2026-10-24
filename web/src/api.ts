@@ -90,7 +90,7 @@ export interface PlanView {
   allow_addons: boolean;
   line_ids: number[];
   speed: { up_mbps: number | null; down_mbps: number | null } | null;
-  channels: PlanChannel[];
+  sales_channels: PlanChannel[];
   store_product_id: { apple?: string; google?: string };
   status: PlanStatus;
   sort_order: number;
@@ -113,7 +113,7 @@ export interface PlanDraft {
   line_ids: number[];
   up_mbps: number | null;
   down_mbps: number | null;
-  channels: PlanChannel[];
+  sales_channels: PlanChannel[];
   store_product_id: { apple?: string; google?: string };
   sort_order: number;
 }

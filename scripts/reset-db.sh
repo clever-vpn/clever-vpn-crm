@@ -53,11 +53,11 @@ VALUES
    strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
 -- 套餐：周期 / 流量 / 加量 + 一个礼品包（price=0 且 hidden）
--- 渠道必须非空（validatePlan 要求至少一个），否则后台 PATCH 会被判非法。
+-- 售卖渠道必须非空（validatePlan 要求至少一个），否则后台 PATCH 会被判非法。
 -- dev_period_100g 故意三个渠道全开，用于本地验证 Apple/Google 双商品 ID。
 INSERT OR IGNORE INTO plans
   (id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
-   traffic_gb, validity_days, allow_addons, line_ids, channels, store_product_id,
+   traffic_gb, validity_days, allow_addons, line_ids, sales_channels, store_product_id,
    sort_order, status, visibility, created_at, updated_at)
 VALUES
   ('dev_period_100g',  '月付 · 100GB · 1 设备', 'period',  1500, 'CNY', 1, 30, 100, NULL, NULL, 1, '[]',
@@ -97,7 +97,7 @@ WHERE c.email = 'alice@example.com'
 -- 两张订单：一张自助购买、一张 0 元赠单（给 UI 开发用）
 INSERT INTO orders
   (code, customer_id, plan_id, kind, plan_snapshot, amount_minor, currency, source,
-   channel, status, paid_at, created_at, updated_at)
+   payment_method, status, paid_at, created_at, updated_at)
 SELECT 'ORD-DEV-0001', c.id, 'dev_period_100g', 'period',
        '{"name":"月付 · 100GB · 1 设备","kind":"period","price_minor":1500,"quota_gb":100,"term_days":30}',
        1500, 'CNY', 'purchase', 'manual', 'paid',
@@ -108,7 +108,7 @@ FROM customers c WHERE c.email = 'alice@example.com'
 
 INSERT INTO orders
   (code, customer_id, plan_id, kind, plan_snapshot, amount_minor, currency, source,
-   channel, status, paid_at, operator, note, created_at, updated_at)
+   payment_method, status, paid_at, operator, note, created_at, updated_at)
 SELECT 'ORD-DEV-0002', c.id, 'dev_gift_20g', 'addon',
        '{"name":"赠送 · 20GB（礼品包）","kind":"addon","price_minor":0,"traffic_gb":20}',
        0, 'CNY', 'gift', 'gift', 'paid',

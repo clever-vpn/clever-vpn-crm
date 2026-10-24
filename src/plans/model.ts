@@ -22,11 +22,12 @@ export type PlanKind = (typeof PLAN_KINDS)[number];
 export const PLAN_STATUSES = ["draft", "active", "retired"] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
-export const PAYMENT_CHANNELS = ["web_checkout", "apple_iap", "google_play"] as const;
-export type PaymentChannel = (typeof PAYMENT_CHANNELS)[number];
+/** 售卖渠道：在**哪儿卖**（与"用什么付钱"的 `payment_method` 不是一回事） */
+export const SALES_CHANNELS = ["web_checkout", "apple_iap", "google_play"] as const;
+export type SalesChannel = (typeof SALES_CHANNELS)[number];
 
 export interface PlanChannel {
-  channel: PaymentChannel;
+  channel: SalesChannel;
   /** 仅 `web_checkout` 有意义（`alipay` / `wechat` …）；商店通道留空 */
   methods?: string[];
 }
@@ -51,7 +52,7 @@ export interface Plan {
   line_ids: number[];
   up_mbps: number | null;
   down_mbps: number | null;
-  channels: PlanChannel[];
+  sales_channels: PlanChannel[];
   store_product_id: { apple?: string; google?: string };
   sort_order: number;
   status: PlanStatus;
@@ -147,12 +148,12 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
   const rawLines = Array.isArray(input.line_ids) ? input.line_ids : [];
   const line_ids = [...new Set(rawLines.map((v) => int(v)).filter((v): v is number => v !== null && v > 0))];
 
-  const channels = Array.isArray(input.channels) ? input.channels : [];
+  const rawChannels = Array.isArray(input.sales_channels) ? input.sales_channels : [];
   const normalizedChannels: PlanChannel[] = [];
-  for (const raw of channels) {
+  for (const raw of rawChannels) {
     const ch = (raw as PlanChannel | undefined)?.channel;
-    if (!ch || !PAYMENT_CHANNELS.includes(ch)) {
-      errors.push(`未知支付通道：${String(ch)}`);
+    if (!ch || !SALES_CHANNELS.includes(ch)) {
+      errors.push(`未知售卖渠道：${String(ch)}`);
       continue;
     }
     const methods = Array.isArray((raw as PlanChannel).methods)
@@ -160,7 +161,7 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
       : undefined;
     normalizedChannels.push(ch === "web_checkout" ? { channel: ch, methods: methods ?? ["alipay"] } : { channel: ch });
   }
-  if (!normalizedChannels.length) errors.push("至少选一个支付通道");
+  if (!normalizedChannels.length) errors.push("至少选一个售卖渠道");
 
   const store = (input.store_product_id ?? {}) as Record<string, unknown>;
   const store_product_id: { apple?: string; google?: string } = {};
@@ -190,7 +191,7 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
       line_ids,
       up_mbps: int(input.up_mbps),
       down_mbps: int(input.down_mbps),
-      channels: normalizedChannels,
+      sales_channels: normalizedChannels,
       store_product_id,
       sort_order: int(input.sort_order) ?? 0,
       status: (input.status as PlanStatus) ?? "draft",
@@ -216,7 +217,7 @@ export function planToFields(plan: Plan): Record<string, unknown> {
     line_ids: plan.line_ids,
     up_mbps: plan.up_mbps,
     down_mbps: plan.down_mbps,
-    channels: plan.channels,
+    sales_channels: plan.sales_channels,
     store_product_id: plan.store_product_id,
     sort_order: plan.sort_order,
     status: plan.status,
@@ -315,7 +316,7 @@ export interface PlanRow {
   line_ids: string;
   up_mbps: number | null;
   down_mbps: number | null;
-  channels: string;
+  sales_channels: string;
   store_product_id: string;
   sort_order: number;
   status: string;
@@ -347,7 +348,7 @@ export function rowToPlan(row: PlanRow): Plan {
     line_ids: parseJson<number[]>(row.line_ids, []),
     up_mbps: row.up_mbps,
     down_mbps: row.down_mbps,
-    channels: parseJson<PlanChannel[]>(row.channels, []),
+    sales_channels: parseJson<PlanChannel[]>(row.sales_channels, []),
     store_product_id: parseJson<Record<string, string>>(row.store_product_id, {}) as Plan["store_product_id"],
     sort_order: row.sort_order,
     status: row.status as PlanStatus,
@@ -371,7 +372,7 @@ export function planForClient(plan: Plan): Record<string, unknown> {
     allow_addons: plan.allow_addons,
     line_ids: plan.line_ids,
     speed: plan.up_mbps || plan.down_mbps ? { up_mbps: plan.up_mbps, down_mbps: plan.down_mbps } : null,
-    channels: plan.channels,
+    sales_channels: plan.sales_channels,
     store_product_id: plan.store_product_id,
   };
 }

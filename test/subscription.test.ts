@@ -43,7 +43,7 @@ function makePlan(over: Partial<Plan> = {}): Plan {
     line_ids: [],
     up_mbps: null,
     down_mbps: null,
-    channels: [{ channel: "web_checkout", methods: ["alipay"] }],
+    sales_channels: [{ channel: "web_checkout", methods: ["alipay"] }],
     store_product_id: {},
     sort_order: 0,
     status: "active",

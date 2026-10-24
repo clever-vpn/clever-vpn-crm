@@ -28,7 +28,7 @@ Last updated: 2026-10-23
 | 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
 | 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |
 | 换套餐 | 删旧客户 → 用**同一 `auth_id`** 建新客户（得到新 `code`）；流量余量/已用额度不继承 |
-| 支付通道 | `channel`/`method`/`provider` 三层：构建定 channel；alipay/wechat 由租户配置的服务商承接（缺省 qwgua，可切 yihong）；**新增服务商只改 CRM** |
+| 支付方式 | App 只认 **`payment_method`**（`alipay` / `wechat` / `paypal` / `stripe`）；服务商与网关都在 CRM 内部，**不进任何 App 响应**（见 [payments.md](payments.md)） |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
 | 控制参数 | `customers` 的 create/update 参数，由租户与 CRM 设定；平台只按它们判定能否使用 |
 | 计划 / 套餐 | **CRM 自己的概念**，平台没有；平台只看到 `licence_limit`（1–3）等参数 |
