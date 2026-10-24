@@ -55,7 +55,7 @@ async function createPlan(id: string): Promise<void> {
       licence_limit: 1,
       traffic_gb: 10,
       validity_days: 30,
-      channels: [{ channel: "web_checkout" }],
+      sales_channels: [{ channel: "web_checkout" }],
     },
   });
   expect(res.status, `创建 ${id} 应成功`).toBe(201);
@@ -146,18 +146,18 @@ describe("套餐写路径", () => {
     expect(plan.price_minor).toBe(2000);
   });
 
-  it("合并后仍然过完整校验：清空 channels 被拒", async () => {
+  it("合并后仍然过完整校验：清空售卖渠道被拒", async () => {
     await createPlan("t_invalid");
 
     const res = await call("/api/admin/plans/t_invalid", {
       method: "PATCH",
-      body: { channels: [] },
+      body: { sales_channels: [] },
     });
     expect(res.status).toBe(400);
 
     const body = await jsonOf<{ error: string; errors: string[] }>(res);
     expect(body.error).toBe("invalid_plan");
-    expect(body.errors.join()).toContain("至少选一个支付通道");
+    expect(body.errors.join()).toContain("至少选一个售卖渠道");
   });
 
   it("克隆端点已经不存在", async () => {

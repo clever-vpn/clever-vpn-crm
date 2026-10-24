@@ -33,7 +33,7 @@ const emptyDraft = (): PlanDraft => ({
   line_ids: [],
   up_mbps: null,
   down_mbps: null,
-  channels: [{ channel: "web_checkout", methods: ["alipay"] }],
+  sales_channels: [{ channel: "web_checkout", methods: ["alipay"] }],
   store_product_id: {},
   sort_order: 0,
 });
@@ -118,7 +118,7 @@ export default function Plans() {
       line_ids: plan.line_ids,
       up_mbps: plan.speed?.up_mbps ?? null,
       down_mbps: plan.speed?.down_mbps ?? null,
-      channels: plan.channels,
+      sales_channels: plan.sales_channels,
       store_product_id: plan.store_product_id,
       sort_order: plan.sort_order,
     });
@@ -389,10 +389,12 @@ function PlanForm({
         )}
 
         <label>
-          支付通道
+          售卖渠道
           <select
-            value={draft.channels[0]?.channel ?? "web_checkout"}
-            onChange={(e) => set("channels", [{ channel: e.target.value as "web_checkout", methods: ["alipay"] }])}
+            value={draft.sales_channels[0]?.channel ?? "web_checkout"}
+            onChange={(e) =>
+              set("sales_channels", [{ channel: e.target.value as "web_checkout", methods: ["alipay"] }])
+            }
           >
             <option value="web_checkout">网页收银台（支付宝/微信）</option>
             <option value="apple_iap">App Store 内购</option>
@@ -400,19 +402,19 @@ function PlanForm({
           </select>
         </label>
 
-        {(draft.channels[0]?.channel === "apple_iap" || draft.channels[0]?.channel === "google_play") && (
+        {(draft.sales_channels[0]?.channel === "apple_iap" || draft.sales_channels[0]?.channel === "google_play") && (
           <label>
             商店商品 ID
             <input
               value={
-                draft.channels[0]?.channel === "apple_iap"
+                draft.sales_channels[0]?.channel === "apple_iap"
                   ? draft.store_product_id.apple ?? ""
                   : draft.store_product_id.google ?? ""
               }
               onChange={(e) =>
                 set(
                   "store_product_id",
-                  draft.channels[0]?.channel === "apple_iap"
+                  draft.sales_channels[0]?.channel === "apple_iap"
                     ? { apple: e.target.value }
                     : { google: e.target.value },
                 )

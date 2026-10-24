@@ -71,6 +71,7 @@ site/                 品牌官网静态页（占位；构建时复制到 web/di
 docs/admin.md         管理后台说明（认证、初始化、恢复、API）
 docs/contract.md      契约指针（正文在 clever-vpn-docs/docs/contracts/）
 docs/domain.md        领域模型（客户 / 订单 / 订阅 / 退款 / 礼品包）
+docs/payments.md      支付域（词表 / 状态机 / 网关与映射）
 docs/schema.md        表结构（Drizzle + D1，字段/索引/迁移）
 docs/plans.md         套餐模型与残值换购（销售策略的唯一出处）
 docs/local-dev.md     本地联调环境（crm/app-web 域名 + 反代 + 验证码回显）

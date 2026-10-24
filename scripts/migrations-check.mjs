@@ -9,7 +9,8 @@
  *
  * 三段判据：
  *   A 结构   每个 `.sql` ↔ `meta/_journal.json` 一一对应；序号连续；dev 链不入库。
- *   B 不可变 相对 origin/main：**已提交**的迁移不得修改/删除（生产库已 apply）。
+ *   B 不可变 相对**最近一次发布 tag**：已发布的迁移不得修改/删除（租户库已 apply）。
+ *            没有任何 `v*` tag 时跳段 B —— 那是"还没发布"，整条链可以随时重写（压成 baseline）。
  *   C 漂移   重跑 `drizzle-kit generate`，若产出任何东西 ⇒ schema 与迁移链不同步。
  *
  * 用法：
@@ -24,7 +25,9 @@ import { join } from "node:path";
 const ROOT = process.cwd();
 const PROD_DIR = "migrations";
 const DEV_DIR = "migrations-dev";
-const BASE_REF = process.env.MIGRATIONS_BASE_REF ?? "origin/main";
+// 基线 = 最近一次发布 tag。迁移一旦随 release 发出去，租户库就 apply 过了，
+// 那时再改它 = 改历史；而没有 tag 的时候，改它只是还没定稿。
+const BASE_REF = process.env.MIGRATIONS_BASE_REF ?? latestReleaseTag();
 const args = new Set(process.argv.slice(2));
 const LIST_ONLY = args.has("--list");
 const FORCE = args.has("--force");
@@ -34,11 +37,20 @@ const notes = [];
 
 function git(cmdArgs, allowFail = false) {
   try {
-    return execFileSync("git", cmdArgs, { cwd: ROOT, encoding: "utf8" }).trim();
+    return execFileSync("git", cmdArgs, {
+      cwd: ROOT,
+      encoding: "utf8",
+      // `git describe` 在没有 tag 时会往 stderr 喷 "No names found"，那是预期情况，别吓人。
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
   } catch (e) {
     if (allowFail) return null;
     throw e;
   }
+}
+
+function latestReleaseTag() {
+  return git(["describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"], true) || null;
 }
 
 function sqlFiles() {
@@ -90,8 +102,12 @@ function checkStructure() {
 
 // ── B 不可变 ──────────────────────────────────────────────────────
 function checkImmutable() {
+  if (!BASE_REF) {
+    notes.push("[B] 仓库还没有 v* 发布 tag（尚未发布）⇒ 迁移链可自由重写，跳过不可变检查");
+    return;
+  }
   if (!git(["rev-parse", "--verify", BASE_REF], true)) {
-    notes.push(`[B] 找不到 ${BASE_REF}，跳过不可变检查（CI 里应先 fetch 该分支）`);
+    notes.push(`[B] 找不到基线 ${BASE_REF}，跳过不可变检查`);
     return;
   }
   const diff = git(["diff", "--name-status", `${BASE_REF}...HEAD`, "--", PROD_DIR], true);
@@ -103,7 +119,7 @@ function checkImmutable() {
     // 不能算"篡改历史"。真正要守的是 `.sql` 本身：改了它就等于改已 apply 的 DDL。
     if (file.includes("/meta/")) continue;
     (FORCE ? notes : problems).push(
-      `[B] 已提交的迁移被${status === "M" ? "修改" : "删除"}：${file}（生产库已 apply，请新增一条迁移）`,
+      `[B] 已发布的迁移被${status === "M" ? "修改" : "删除"}：${file}（租户库已 apply，请新增一条迁移）`,
     );
   }
 }

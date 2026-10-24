@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # `check:migrations` 的"不可变"段要和 origin/main 比对；默认浅克隆里没有它，
+          # `check:migrations` 的"不可变"段要和最近一次发布 tag 比对；浅克隆里没有 tag，
           # 那样检查会静默跳过（等于没守）。
           fetch-depth: 0
       - uses: actions/setup-node@v4

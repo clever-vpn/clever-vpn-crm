@@ -1,6 +1,6 @@
 # 表结构（Drizzle / D1）
 
-Last updated: 2026-10-23
+Last updated: 2026-10-24
 
 > 设计依据：[`domain.md`](domain.md)（六条不变量）。改表先改那边，再改本文件，最后改 schema。
 > 实现：`src/db/schema.ts`；生产迁移：`migrations/`；开发链：`migrations-dev/`（gitignore）。
@@ -83,17 +83,20 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `orders` | **订单**（一次收款） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`、`source`(purchase/gift/manual)、`channel`、`status`、`refunded_minor`、`voided_at`、`refund_mode`、`provision_*` |
+| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`、`source`(purchase/gift/manual)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`status`、`refunded_minor`、`voided_at`、`provision_*` |
 | `refunds` | 退款**明细**（可多次部分退） | `order_id`、`amount_minor`、`mode`、`operator`、`channel_refund_id`、`status` |
 | `adjustments` | 管理员**调整**（非售卖） | `field`、`before_value`、`after_value`、`reason`、`operator`、`platform_applied_at` |
-| `payment_channels` | 支付渠道配置 | `type`、`enabled`、`fee_bps`、`config`（加密 JSON）、`webhook_path` |
+| `payment_gateways` | **支付网关配置**（一条 = 一家服务商的一份凭据） | `provider`、`provider_kind`(aggregator/brand/manual)、`methods`、`mapping`、`priority`、`status`(draft/live/disabled)、`secret_enc`、`last_test_order_id` |
+
+> **没有 `payment_attempts` 表**：订单本身就是那次尝试的证据。理由见 `payments.md` §2。
 
 ### 2.4 订单状态与来源
 
 ```
 status: pending → paid → provisioning → active
-                              ↘ closed（超时/取消）
-        paid/provisioning → refunded（可能同时 voided）
+                     ↘ expired（超时/明确失败；钱晚到仍可转 paid）
+        paid → refunded（可能同时 voided）
+        周期到期 → closed
 source: purchase（自助） | gift（赠送） | manual（后台补单）
 ```
 
@@ -101,8 +104,11 @@ source: purchase（自助） | gift（赠送） | manual（后台补单）
 
 | 文件 | 内容 |
 |---|---|
-| `0000_baseline.sql` | 现有全部表（与 `src/migrations.ts` 等价）—— **已存在的库不应执行**，见 §4 |
-| `0001_orders_adjustments_channels.sql` | 新增 `orders` / `refunds` / `adjustments` / `payment_channels`；`customers.cf_customer_id`、`plans.visibility`、`platform_subscriptions` 四列 |
+| `0000_baseline.sql` | 全部现有表（从 `src/db/schema.ts` 全量生成） |
+
+**尚未发布，所以迁移链只有一条 baseline。** 改表就直接改 schema 并重生成 baseline；
+一旦打了 `v*` tag，就变成追加式：已发布的迁移不能再改（`check:migrations` 以最近一次
+release tag 为基线强制这一点），只能新增下一条。
 
 ## 4. 升级路径（重要）
 

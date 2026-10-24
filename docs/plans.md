@@ -64,7 +64,7 @@ $$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应�
 ```sql
 plans (id, name, kind, price_minor, currency, licence_limit,
        term_days, monthly_quota_gb, traffic_gb, validity_days, allow_addons,
-       line_ids JSON, up_mbps, down_mbps, channels JSON, store_product_id JSON,
+       line_ids JSON, up_mbps, down_mbps, sales_channels JSON, store_product_id JSON,
        sort_order, status, visibility, retired_at, created_at, updated_at)
 ```
 
@@ -81,20 +81,23 @@ plans (id, name, kind, price_minor, currency, licence_limit,
 - `line_ids`：空数组 = 不限线路。它只是**展示层过滤**（App 与 `/api/v3/key-lines` 取交集），
   不是权限边界——真要做「这个套餐不能连那条线路」得改 cf-api。
 
-### 4.1 商店商品 ID（`channels` + `store_product_id`）
+### 4.1 商店商品 ID（`sales_channels` + `store_product_id`）
 
-一个套餐可以在多个渠道卖，`channels` 列出渠道，`store_product_id` 存各商店的商品 ID：
+一个套餐可以在多个渠道卖，`sales_channels` 列出渠道，`store_product_id` 存各商店的商品 ID。
+
+> `sales_channels` 回答"**在哪儿卖**"；"用什么付钱"是 `orders.payment_method`。
+> 支付侧的词表见 [`payments.md`](payments.md)。
 
 ```jsonc
 {
-  "channels": ["web_checkout", "apple_iap", "google_play"],
+  "sales_channels": ["web_checkout", "apple_iap", "google_play"],
   "store_product_id": { "apple": "vpn.period.100g.month", "google": "vpn_period_100g_month" }
 }
 ```
 
 | 渠道 | 在哪卖 | 需要商品 ID |
 |---|---|---|
-| `web_checkout` | 自有收银台（`payment_channels` 决定具体支付方式） | 不需要 |
+| `web_checkout` | 自有收银台（具体能用哪些支付方式由 `payment_gateways` 决定） | 不需要 |
 | `apple_iap` | App 内购买（App Store） | 需要 `apple` |
 | `google_play` | App 内购买（Google Play） | 需要 `google` |
 
