@@ -139,6 +139,29 @@ npm run db:migrate:local   # 只 apply（不清库）
 - 开发想看效果 → `npm run db:reset`（开发链自动重生成）；
 - 要发布 → `npm run db:generate` 生成**生产链**迁移并提交（`npm run check:migrations` 会拦住漏提交）。
 
+## 6.1 测试（两套）
+
+| 命令 | 跑在哪 | 内容 |
+|---|---|---|
+| `npm run test:unit` | **Node**（`vitest.config.ts`） | 纯函数：报价、校验、加解密、邮件模板 → `test/**/*.test.ts` |
+| `npm run test:workers` | **workerd**（`@cloudflare/vitest-plugin`，Miniflare） | 真 D1 + 真路由 + 真 cookie → `test/workers/**/*.test.ts` |
+| `npm test` | 上面两个依次跑 | CI 用这个 |
+
+两套必须分开配置：Workers 集成不允许自定义 `environment`/`runner`，所以
+`vitest.config.ts` 显式 `exclude: ["test/workers/**"]`。
+
+集成测试的几个要点：
+
+- **建表**：`test/workers/apply-migrations.ts` 在每个 test 文件里
+  `applyD1Migrations(env.DB, env.TEST_MIGRATIONS)`。迁移数组由
+  `readD1Migrations("migrations")` 在 **Node 侧**读出（用 fs），以测试专用绑定注入。
+  读的是**生产链** `migrations/`，不是 `migrations-dev/` —— 测试用的就是 CI 会 apply 的 DDL。
+- **隔离**：存储按 test 文件隔离，每个文件一份空库 + 重跑一次迁移；文件之间默认并发。
+- **写操作要带 `x-crm-request: 1`**（CSRF 防线），否则一律 403 `csrf_rejected`。
+- **登录**：没有 cookie jar，自己从 `set-cookie` 里取 `crm_admin=…` 再回传。
+- ⚠️ 插件会自动注入 `nodejs_compat`，所以测试里 `import fs` 也能跑通，**但线上会挂**。
+  集成测试里要刻意避免 Node API，保住"测得过 = 部署得上"。
+
 ## 7. 常见问题
 
 | 现象 | 原因 / 处理 |

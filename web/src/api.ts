@@ -94,7 +94,6 @@ export interface PlanView {
   store_product_id: { apple?: string; google?: string };
   status: PlanStatus;
   sort_order: number;
-  supersedes_id: string | null;
   retired_at: string | null;
 }
 
@@ -181,8 +180,6 @@ export const api = {
     call<{ plan: PlanView }>("PATCH", `/plans/${id}`, input),
   publishPlan: (id: string) => call<{ plan: PlanView }>("POST", `/plans/${id}/publish`),
   retirePlan: (id: string) => call<{ plan: PlanView }>("POST", `/plans/${id}/retire`),
-  clonePlan: (id: string, input: Partial<PlanDraft>) =>
-    call<{ plan: PlanView }>("POST", `/plans/${id}/clone`, input),
   /** 干跑：看清落账参数与换购报价，不写库 */
   previewPlan: (plan: Partial<PlanDraft>, current: CurrentSubscriptionInput | null) =>
     call<{ plan: PlanView; control: Record<string, unknown>; quote: Quote }>(

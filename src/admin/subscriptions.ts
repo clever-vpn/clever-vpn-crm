@@ -97,7 +97,7 @@ export async function handleAdminSubscriptions(
     const planRow = await env.DB.prepare(
       `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
          traffic_gb, validity_days, allow_addons, line_ids, up_mbps, down_mbps, channels,
-         store_product_id, sort_order, status, supersedes_id, retired_at
+         store_product_id, sort_order, status, retired_at
        FROM plans WHERE id = ?`,
     ).bind(planId).first<PlanRow>();
     if (!planRow) return fail(404, "plan_not_found");

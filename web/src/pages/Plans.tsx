@@ -4,7 +4,8 @@
  * 页面本身**不含任何业务计算**：可买性、残值、应付金额都来自 `/api/admin/plans/preview`
  * （与服务端同一份代码），这里只负责渲染与收集输入。
  *
- * 不可变流程：active 的套餐不能改 → 克隆新版本（supersedes_id 指向旧行）→ 发布 → 下线旧行。
+ * `plans` 是可变目录：任何状态都能直接改。改动只影响**之后的新购买**，
+ * 已卖出的订阅用的是自己的快照（`platform_subscriptions`），不会被修改。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -92,10 +93,11 @@ export default function Plans() {
   async function save() {
     if (!draft) return;
     const payload = { ...draft };
-    const editing = plans.some((p) => p.plan_id === draft.id && p.status === "draft");
+    // 已存在的套餐（草稿/在售/已下架）一律走 PATCH；只有全新 id 才创建。
+    const existing = plans.some((p) => p.plan_id === draft.id);
     await run(
-      () => (editing ? api.updatePlan(draft.id, payload) : api.createPlan(payload)),
-      editing ? "已保存草稿" : "已创建草稿（发布后 App 才能看到）",
+      () => (existing ? api.updatePlan(draft.id, payload) : api.createPlan(payload)),
+      existing ? "已保存：只影响之后的新购买，已售订阅按原快照执行" : "已创建草稿（发布后 App 才能看到）",
     );
     setDraft(null);
   }
@@ -120,12 +122,6 @@ export default function Plans() {
       store_product_id: plan.store_product_id,
       sort_order: plan.sort_order,
     });
-  }
-
-  function clone(plan: PlanView) {
-    const nextId = window.prompt("新版本套餐 ID（例如 p_30d_100g_v2）", `${plan.plan_id}_v2`);
-    if (!nextId) return;
-    void run(() => api.clonePlan(plan.plan_id, { id: nextId.trim(), name: plan.name }), "已克隆为草稿");
   }
 
   return (
@@ -194,15 +190,22 @@ export default function Plans() {
                     )}
                     {plan.status === "active" && (
                       <>
-                        <button disabled={busy} onClick={() => clone(plan)}>
-                          改价/改规则
+                        <button disabled={busy} onClick={() => edit(plan)}>
+                          编辑
                         </button>
                         <button disabled={busy} onClick={() => void run(() => api.retirePlan(plan.plan_id), "已下线")}>
                           下线
                         </button>
                       </>
                     )}
-                    {plan.status === "retired" && <span className="hint">历史版本，已售订单仍按它计算</span>}
+                    {plan.status === "retired" && (
+                      <>
+                        <button disabled={busy} onClick={() => edit(plan)}>
+                          编辑
+                        </button>
+                        <span className="hint">已下架：只影响能否再卖，已售订阅不受影响</span>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

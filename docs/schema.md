@@ -75,7 +75,7 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `plans` | 可售商品定义 | `kind`(period/traffic/addon)、`price_minor`、`visibility`(public/hidden)、`status`(draft/active/retired)、`supersedes_id` |
+| `plans` | 可售商品定义（**可变目录**，历史靠快照） | `kind`(period/traffic/addon)、`price_minor`、`visibility`(public/hidden)、`status`(draft/active/retired)、`retired_at` |
 | `platform_subscriptions` | **订阅**（销售事实 + 快照） | `order_id`、`kind`、`quota_gb`、`balance_gb`（结转）、`anchor_day`、`params_version`（写冲突检测）、`revoked_at` |
 | `subscription_changes` | 换购/结算台账 | `action`、`residual_minor`、`payable_minor`、`balance_*` |
 

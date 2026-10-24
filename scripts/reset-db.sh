@@ -53,18 +53,26 @@ VALUES
    strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
 -- 套餐：周期 / 流量 / 加量 + 一个礼品包（price=0 且 hidden）
+-- 渠道必须非空（validatePlan 要求至少一个），否则后台 PATCH 会被判非法。
+-- dev_period_100g 故意三个渠道全开，用于本地验证 Apple/Google 双商品 ID。
 INSERT OR IGNORE INTO plans
   (id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
-   traffic_gb, validity_days, allow_addons, line_ids, sort_order, status, visibility,
-   created_at, updated_at)
+   traffic_gb, validity_days, allow_addons, line_ids, channels, store_product_id,
+   sort_order, status, visibility, created_at, updated_at)
 VALUES
-  ('dev_period_100g',  '月付 · 100GB · 1 设备', 'period',  1500, 'CNY', 1, 30, 100, NULL, NULL, 1, '[]', 10, 'active', 'public',
+  ('dev_period_100g',  '月付 · 100GB · 1 设备', 'period',  1500, 'CNY', 1, 30, 100, NULL, NULL, 1, '[]',
+   '[{"channel":"web_checkout","methods":["alipay"]},{"channel":"apple_iap"},{"channel":"google_play"}]',
+   '{"apple":"vpn.period.100g.month","google":"vpn_period_100g_month"}',
+   10, 'active', 'public',
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  ('dev_traffic_500g','流量包 · 500GB',        'traffic', 5000, 'CNY', 1, NULL, NULL, 500, 365,  0, '[]', 20, 'active', 'public',
+  ('dev_traffic_500g','流量包 · 500GB',        'traffic', 5000, 'CNY', 1, NULL, NULL, 500, 365,  0, '[]',
+   '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 20, 'active', 'public',
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  ('dev_addon_50g',    '加量包 · 50GB',        'addon',    800, 'CNY', 1, NULL, NULL,  50, NULL, 0, '[]', 30, 'active', 'public',
+  ('dev_addon_50g',    '加量包 · 50GB',        'addon',    800, 'CNY', 1, NULL, NULL,  50, NULL, 0, '[]',
+   '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 30, 'active', 'public',
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  ('dev_gift_20g',     '赠送 · 20GB（礼品包）', 'addon',      0, 'CNY', 1, NULL, NULL,  20, NULL, 0, '[]', 90, 'active', 'hidden',
+  ('dev_gift_20g',     '赠送 · 20GB（礼品包）', 'addon',      0, 'CNY', 1, NULL, NULL,  20, NULL, 0, '[]',
+   '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 90, 'active', 'hidden',
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
 -- 客户（cf_customer_id 留空：本地还没绑定 cf-api 行的场景）
