@@ -14,7 +14,7 @@
  * 执行 `wrangler d1 migrations apply --remote`。**Worker 不做自迁移** —— 缺表时
  * `src/db.ts` 会直接报错并提示跑哪条命令。
  */
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // ─────────────────────────────────────────────────────────────
 // 身份
@@ -190,8 +190,14 @@ export const platformSubscriptions = sqliteTable(
     order_id: integer("order_id"),
     plan_id: text("plan_id").notNull(),
     kind: text("kind").notNull(),
-    /** active | expired | revoked | pending */
-    status: text("status").notNull().default("active"),
+    /**
+     * 手工控制位：`none` / `frozen` / `revoked`。
+     * **状态是算出来的**（domain.md §1.3）：到期看 `expires_at`，用完看余额；
+     * 这一列只表达“人的意图”（管理员冻结 / 退款作废）。
+     */
+    hold: text("hold").notNull().default("none"),
+    hold_reason: text("hold_reason"),
+    hold_at: text("hold_at"),
     paid_minor: integer("paid_minor").notNull(),
     currency: text("currency").notNull(),
     licence_limit: integer("licence_limit").notNull(),
@@ -212,32 +218,39 @@ export const platformSubscriptions = sqliteTable(
     platform_customer_id: integer("platform_customer_id"),
     code: text("code"),
     params_version: integer("params_version").notNull().default(0),
-    revoked_at: text("revoked_at"),
-    revoke_reason: text("revoke_reason"),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),
   },
   (t) => [
-    index("idx_subs_customer").on(t.customer_id, t.status),
-    index("idx_subs_due").on(t.kind, t.status, t.last_settled_at),
+    // I7：一个客户最多一行（历史留在 orders / subscription_changes）
+    uniqueIndex("uq_subs_customer").on(t.customer_id),
+    index("idx_subs_due").on(t.kind, t.last_settled_at),
     index("idx_subs_order").on(t.order_id),
   ],
 );
 
-/** 换购 / 结算台账：每一笔权益变化都留痕，客服对账只查这张表 */
+/** 权益变更台账：每一笔变化都留痕，客服对账与退款回滚只查这张表 */
 export const subscriptionChanges = sqliteTable(
   "subscription_changes",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     at: text("at").notNull(),
     customer_id: integer("customer_id").notNull(),
-    from_subscription_id: integer("from_subscription_id"),
-    to_subscription_id: integer("to_subscription_id"),
-    /** upgrade | settle | addon | revoke */
+    /** 被改的那一行订阅（单行模型下，一个客户就一个 id） */
+    subscription_id: integer("subscription_id").notNull(),
+    /** new | renewal | upgrade | addon | settle | hold */
     action: text("action").notNull(),
     paid_minor: integer("paid_minor"),
     residual_minor: integer("residual_minor"),
     payable_minor: integer("payable_minor"),
+    // 单行模型下“改之前”会被覆盖掉，所以 before / after 必须落在这里：
+    // 退款模式 A 回滚到购买前状态的唯一依据（domain.md §1.2）。
+    kind_before: text("kind_before"),
+    kind_after: text("kind_after"),
+    plan_before: text("plan_before"),
+    plan_after: text("plan_after"),
+    expires_before: text("expires_before"),
+    expires_after: text("expires_after"),
     balance_before: real("balance_before"),
     balance_after: real("balance_after"),
     detail: text("detail"),

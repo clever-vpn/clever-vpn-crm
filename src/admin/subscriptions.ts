@@ -11,12 +11,13 @@
  */
 
 import { planForClient, rowToPlan } from "../plans/model";
-import { subscriptionFromPlan } from "../plans/subscription";
+import { statusOf, subscriptionFromPlan } from "../plans/subscription";
 import {
-  insertSubscription,
-  listSubscriptions,
+  customerSubscription,
+  listChanges,
   logChange,
   runSettlement,
+  upsertSubscription,
 } from "../subscriptions/store";
 
 import type { Env } from "../env";
@@ -79,11 +80,17 @@ export async function handleAdminSubscriptions(
     return json({ customer: { id, email } }, 201);
   }
 
-  // ── 订阅列表 ──
+  // ── 当前订阅 + 变更流水（单行模型：一个客户一条） ──
   if (method === "GET" && path === "/subscriptions") {
     const customerId = Number(url.searchParams.get("customer_id") ?? 0);
     if (!customerId) return fail(400, "customer_id_required");
-    return json({ subscriptions: await listSubscriptions(env, customerId) });
+    const subscription = await customerSubscription(env, customerId);
+    return json({
+      subscription,
+      // 状态是算出来的，顺带把原因给后台，避免运营自己算
+      state: subscription ? statusOf(subscription) : null,
+      changes: await listChanges(env, customerId),
+    });
   }
 
   // ── 手工开通（本地开发 / 运营补单）──
@@ -111,14 +118,19 @@ export async function handleAdminSubscriptions(
     if (!Number.isFinite(paidMinor) || paidMinor < 0) return fail(400, "invalid_paid_minor");
 
     const now = body.now ? new Date(String(body.now)) : undefined;
+    // 单行模型：手工开通 = 覆盖这一行（历史进流水）
+    const before = await customerSubscription(env, customerId);
     const draft = subscriptionFromPlan(plan, { customerId, paidMinor, now });
-    const id = await insertSubscription(env, draft);
+    const id = await upsertSubscription(env, { ...draft, id: before?.id ?? 0 });
+    const after = await customerSubscription(env, customerId);
     await logChange(env, {
       customer_id: customerId,
+      subscription_id: id,
       action: "new",
-      to_subscription_id: id,
+      before,
+      after,
       paid_minor: paidMinor,
-      detail: { plan_id: plan.id, kind: plan.kind },
+      detail: { plan_id: plan.id, kind: plan.kind, by: "admin" },
     });
     await audit(env, actor, "subscription_created", String(id), { plan: plan.id, paid_minor: paidMinor });
     return json({ subscription: { id, ...draft }, plan: planForClient(plan) }, 201);

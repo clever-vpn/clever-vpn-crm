@@ -13,14 +13,16 @@ import { rowToPlan } from "../plans/model";
 
 import type { Env } from "../env";
 import type { PlanRow } from "../plans/model";
-import type { Subscription, SubscriptionKind, SubscriptionStatus } from "../plans/subscription";
+import type { Hold, Subscription, SubscriptionKind } from "../plans/subscription";
 
 export interface SubscriptionRow {
   id: number;
   customer_id: number;
   plan_id: string;
   kind: string;
-  status: string;
+  hold: string;
+  hold_reason: string | null;
+  hold_at: string | null;
   paid_minor: number;
   currency: string;
   licence_limit: number;
@@ -39,7 +41,7 @@ export interface SubscriptionRow {
   platform_customer_id: number | null;
 }
 
-const COLUMNS = `id, customer_id, plan_id, kind, status, paid_minor, currency, licence_limit,
+const COLUMNS = `id, customer_id, plan_id, kind, hold, hold_reason, hold_at, paid_minor, currency, licence_limit,
   term_days, quota_gb, traffic_total_gb, validity_days, allow_addons, line_ids, started_at,
   expires_at, anchor_day, balance_gb, remaining_gb, last_settled_at, platform_customer_id`;
 
@@ -55,7 +57,9 @@ export function rowToSubscription(row: SubscriptionRow): Subscription {
     customer_id: row.customer_id,
     plan_id: row.plan_id,
     kind: row.kind as SubscriptionKind,
-    status: row.status as SubscriptionStatus,
+    hold: row.hold as Hold,
+    hold_reason: row.hold_reason,
+    hold_at: row.hold_at,
     paid_minor: row.paid_minor,
     currency: row.currency,
     licence_limit: row.licence_limit,
@@ -75,27 +79,46 @@ export function rowToSubscription(row: SubscriptionRow): Subscription {
   };
 }
 
-export async function insertSubscription(
-  env: Env,
-  sub: Omit<Subscription, "id">,
-): Promise<number> {
+const UPSERT_SQL = `INSERT INTO platform_subscriptions
+    (customer_id, plan_id, kind, hold, hold_reason, hold_at, paid_minor, currency,
+     licence_limit, term_days, quota_gb, traffic_total_gb, validity_days, allow_addons,
+     line_ids, started_at, expires_at, anchor_day, balance_gb, remaining_gb,
+     last_settled_at, platform_customer_id, code, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+   ON CONFLICT(customer_id) DO UPDATE SET
+     plan_id = excluded.plan_id, kind = excluded.kind, hold = excluded.hold,
+     hold_reason = excluded.hold_reason, hold_at = excluded.hold_at,
+     paid_minor = excluded.paid_minor, currency = excluded.currency,
+     licence_limit = excluded.licence_limit, term_days = excluded.term_days,
+     quota_gb = excluded.quota_gb, traffic_total_gb = excluded.traffic_total_gb,
+     validity_days = excluded.validity_days, allow_addons = excluded.allow_addons,
+     line_ids = excluded.line_ids, started_at = excluded.started_at,
+     expires_at = excluded.expires_at, anchor_day = excluded.anchor_day,
+     balance_gb = excluded.balance_gb, remaining_gb = excluded.remaining_gb,
+     last_settled_at = excluded.last_settled_at, updated_at = excluded.updated_at`;
+
+/**
+ * 写入这一行订阅（**一个客户只有一行**，见 `docs/domain.md` §1.2）。
+ *
+ * 新购 / 续订 / 升级都是"算出一份新快照 → overwrite 这一行"，
+ * 差别只在价格与到期日。历史在 `orders` 与 `subscription_changes` 里。
+ */
+export async function upsertSubscription(env: Env, sub: Subscription): Promise<number> {
   const now = new Date().toISOString();
-  const res = await env.DB.prepare(
-    `INSERT INTO platform_subscriptions (customer_id, plan_id, kind, status, paid_minor, currency,
-       licence_limit, term_days, quota_gb, traffic_total_gb, validity_days, allow_addons, line_ids,
-       started_at, expires_at, anchor_day, balance_gb, remaining_gb, last_settled_at,
-       platform_customer_id, code, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-  )
+  await env.DB.prepare(UPSERT_SQL)
     .bind(
-      sub.customer_id, sub.plan_id, sub.kind, sub.status, sub.paid_minor, sub.currency,
-      sub.licence_limit, sub.term_days, sub.quota_gb, sub.traffic_total_gb, sub.validity_days,
-      sub.allow_addons ? 1 : 0, JSON.stringify(sub.line_ids), sub.started_at, sub.expires_at,
-      sub.anchor_day, sub.balance_gb, sub.remaining_gb, sub.last_settled_at,
-      sub.platform_customer_id, now, now,
+      sub.customer_id, sub.plan_id, sub.kind, sub.hold, sub.hold_reason, sub.hold_at,
+      sub.paid_minor, sub.currency, sub.licence_limit, sub.term_days, sub.quota_gb,
+      sub.traffic_total_gb, sub.validity_days, sub.allow_addons ? 1 : 0,
+      JSON.stringify(sub.line_ids), sub.started_at, sub.expires_at, sub.anchor_day,
+      sub.balance_gb, sub.remaining_gb, sub.last_settled_at, sub.platform_customer_id,
+      now, now,
     )
     .run();
-  return Number(res.meta.last_row_id ?? 0);
+  const row = await env.DB.prepare(`SELECT id FROM platform_subscriptions WHERE customer_id = ?`)
+    .bind(sub.customer_id)
+    .first<{ id: number }>();
+  return row?.id ?? 0;
 }
 
 export async function loadSubscription(env: Env, id: number): Promise<Subscription | null> {
@@ -105,64 +128,82 @@ export async function loadSubscription(env: Env, id: number): Promise<Subscripti
   return row ? rowToSubscription(row) : null;
 }
 
-/** 当前生效的主订阅（period / traffic）；`null` = 没有 */
-export async function currentMainSubscription(
+/**
+ * 这个客户的订阅（单行模型：`null` = 从没买过）。
+ *
+ * 注意它**不按状态过滤**：状态是算出来的（`statusOf`），到期/用完/冻结都还要用来
+ * 报价（续订、升级、退款），所以库里这一行永远取得到。
+ */
+export async function customerSubscription(
   env: Env,
   customerId: number,
 ): Promise<Subscription | null> {
   const row = await env.DB.prepare(
-    `SELECT ${COLUMNS} FROM platform_subscriptions
-     WHERE customer_id = ? AND status = 'active' AND kind IN ('period','traffic')
-     ORDER BY id DESC LIMIT 1`,
+    `SELECT ${COLUMNS} FROM platform_subscriptions WHERE customer_id = ?`,
   )
     .bind(customerId)
     .first<SubscriptionRow>();
   return row ? rowToSubscription(row) : null;
 }
 
-export async function listSubscriptions(
+/** 这个客户的权益变更流水（新的在前）—— 后台客户详情用 */
+export async function listChanges(
   env: Env,
   customerId: number,
-): Promise<Subscription[]> {
+  limit = 50,
+): Promise<Record<string, unknown>[]> {
   const rows = await env.DB.prepare(
-    `SELECT ${COLUMNS} FROM platform_subscriptions WHERE customer_id = ? ORDER BY id DESC`,
+    `SELECT * FROM subscription_changes WHERE customer_id = ? ORDER BY id DESC LIMIT ?`,
   )
-    .bind(customerId)
-    .all<SubscriptionRow>();
-  return (rows.results ?? []).map(rowToSubscription);
+    .bind(customerId, limit)
+    .all<Record<string, unknown>>();
+  return rows.results ?? [];
 }
 
+/**
+ * 记一条权益变更流水。
+ *
+ * 单行模型下"改之前"会被覆盖，所以 **before / after 必须传**（退款回滚的唯一依据）。
+ */
 export async function logChange(
   env: Env,
   change: {
     customer_id: number;
-    action: string;
-    from_subscription_id?: number | null;
-    to_subscription_id?: number | null;
+    subscription_id: number;
+    action: "new" | "renewal" | "upgrade" | "addon" | "settle" | "hold";
+    before?: Subscription | null;
+    after?: Subscription | null;
     paid_minor?: number | null;
     residual_minor?: number | null;
     payable_minor?: number | null;
-    balance_before?: number | null;
-    balance_after?: number | null;
     detail?: unknown;
   },
 ): Promise<void> {
+  const b = change.before ?? null;
+  const a = change.after ?? null;
   await env.DB.prepare(
-    `INSERT INTO subscription_changes (at, customer_id, from_subscription_id, to_subscription_id,
-       action, paid_minor, residual_minor, payable_minor, balance_before, balance_after, detail)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO subscription_changes (at, customer_id, subscription_id, action,
+       paid_minor, residual_minor, payable_minor,
+       kind_before, kind_after, plan_before, plan_after, expires_before, expires_after,
+       balance_before, balance_after, detail)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       new Date().toISOString(),
       change.customer_id,
-      change.from_subscription_id ?? null,
-      change.to_subscription_id ?? null,
+      change.subscription_id,
       change.action,
       change.paid_minor ?? null,
       change.residual_minor ?? null,
       change.payable_minor ?? null,
-      change.balance_before ?? null,
-      change.balance_after ?? null,
+      b?.kind ?? null,
+      a?.kind ?? null,
+      b?.plan_id ?? null,
+      a?.plan_id ?? null,
+      b?.expires_at ?? null,
+      a?.expires_at ?? null,
+      b?.balance_gb ?? null,
+      a?.balance_gb ?? null,
       change.detail === undefined ? null : JSON.stringify(change.detail),
     )
     .run();
@@ -196,15 +237,21 @@ export async function runSettlement(
     items: [],
   };
 
+  // 状态是算出来的，所以这里直接按"没被人为停掉 + 还没到期"筛：
+  //   hold = 'none' ⇒ 没冻结、没作废；expires_at 为空 = 永久。
+  const nowIso = now.toISOString();
   const rows = opts.customerId
     ? await env.DB.prepare(
       `SELECT ${COLUMNS} FROM platform_subscriptions
-       WHERE status = 'active' AND kind = 'period' AND customer_id = ?`,
-    ).bind(opts.customerId).all<SubscriptionRow>()
+       WHERE hold = 'none' AND kind = 'period' AND customer_id = ?
+         AND (expires_at IS NULL OR expires_at > ?)`,
+    ).bind(opts.customerId, nowIso).all<SubscriptionRow>()
     : await env.DB.prepare(
       `SELECT ${COLUMNS} FROM platform_subscriptions
-       WHERE status = 'active' AND kind = 'period' ORDER BY id`,
-    ).all<SubscriptionRow>();
+       WHERE hold = 'none' AND kind = 'period'
+         AND (expires_at IS NULL OR expires_at > ?)
+       ORDER BY id`,
+    ).bind(nowIso).all<SubscriptionRow>();
 
   for (const row of rows.results ?? []) {
     report.scanned += 1;
@@ -262,10 +309,10 @@ export async function runSettlement(
 
     await logChange(env, {
       customer_id: sub.customer_id,
+      subscription_id: sub.id,
       action: "settle",
-      to_subscription_id: sub.id,
-      balance_before: sub.balance_gb,
-      balance_after: result.balance_gb,
+      before: sub,
+      after: { ...sub, balance_gb: result.balance_gb, last_settled_at: result.last_settled_at },
       detail: { skipped_periods: result.skipped_periods, quota_gb: sub.quota_gb },
     });
 

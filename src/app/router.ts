@@ -24,7 +24,7 @@ import { listLiveGateways, visibleMethods } from "../payments/gateways";
 import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
-import { currentMainSubscription } from "../subscriptions/store";
+import { customerSubscription } from "../subscriptions/store";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
 import type { Env } from "../env";
@@ -284,7 +284,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
       )
       .run();
 
-    const sub = await currentMainSubscription(env, customerId);
+    const sub = await customerSubscription(env, customerId);
     return json({
       session_token: token,
       user: { id: customerId, email, name: existing?.display_name ?? null },
@@ -309,7 +309,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
   // ── 套餐列表（免登录；带 session 时可算出可买性）──
   if (method === "GET" && path === "/plans") {
     const customer = await resolveSession(env, request);
-    const current = customer ? await currentMainSubscription(env, customer.id) : null;
+    const current = customer ? await customerSubscription(env, customer.id) : null;
     const plans = await loadActivePlans(env);
     const now = new Date();
 
@@ -329,7 +329,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
   if (method === "GET" && path === "/me") {
     if (!customer) return err(401, "unauthorized");
-    const sub = await currentMainSubscription(env, customer.id);
+    const sub = await customerSubscription(env, customer.id);
     return json({
       user: { id: customer.id, email: customer.email, name: customer.display_name },
       subscription: subscriptionView(sub),
@@ -338,7 +338,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
   if (method === "GET" && path === "/subscription") {
     if (!customer) return err(401, "unauthorized");
-    const sub = await currentMainSubscription(env, customer.id);
+    const sub = await customerSubscription(env, customer.id);
     return json(subscriptionView(sub));
   }
 
@@ -349,7 +349,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const plan = (await loadActivePlans(env)).find((p) => p.id === toPlanId);
     if (!plan) return err(404, "not_found", "套餐不存在或已下架");
 
-    const sub = await currentMainSubscription(env, customer.id);
+    const sub = await customerSubscription(env, customer.id);
     const quote = quotePurchase(sub ? toQuoteInput(sub) : null, plan);
     return json({
       allowed: quote.allowed,
@@ -392,7 +392,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
     if (!plan) return err(404, "not_found", "套餐不存在或已下架");
 
     // 可买性用**同一个纯函数**（与 /plans、后台预览、报价一致）
-    const sub = await currentMainSubscription(env, customer.id);
+    const sub = await customerSubscription(env, customer.id);
     const quote = quotePurchase(sub ? toQuoteInput(sub) : null, plan);
     if (!quote.allowed) return err(409, "not_purchasable", quote.reason ?? "当前不可购买");
 

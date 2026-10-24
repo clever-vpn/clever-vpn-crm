@@ -18,12 +18,18 @@ import {
   type GatewayMapping,
 } from "./mapping";
 import { gatewaySecret } from "./checkout";
-import { insertSubscription, logChange } from "../subscriptions/store";
-import { subscriptionFromPlan } from "../plans/subscription";
+import { customerSubscription, logChange, upsertSubscription } from "../subscriptions/store";
+import {
+  isOver,
+  renewSubscription,
+  subscriptionFromPlan,
+  upgradeSubscription,
+} from "../plans/subscription";
 
 import type { Env } from "../env";
 import type { GatewayRow } from "./gateways";
 import type { Plan } from "../plans/model";
+import type { Subscription } from "../plans/subscription";
 
 interface OrderRow {
   id: number;
@@ -64,18 +70,45 @@ async function grant(env: Env, order: OrderRow, tradeNo: string | null, raw: str
     .run();
 
   try {
-    const draft = subscriptionFromPlan(plan, {
-      customerId: order.customer_id,
-      paidMinor: order.amount_minor,
-      now,
-    });
-    const subscriptionId = await insertSubscription(env, draft);
+    // 一个客户只有一行订阅（domain.md §1.2），所以发放 = "算出新快照 → 覆盖这一行"。
+    // 动作只看两件事：这份订阅还在不在、是不是同一个套餐。
+    const before = await customerSubscription(env, order.customer_id);
+    const paid = order.amount_minor;
+    let action: "new" | "renewal" | "upgrade" | "addon";
+    let next: Subscription;
+
+    if (plan.kind === "addon") {
+      // 加购包不产生订阅，只往余额上加 GB（应付里也不含它）
+      if (!before) throw new Error("加购包需要一条已存在的订阅");
+      action = "addon";
+      next = renewSubscription(before, plan, { paidMinor: paid, now });
+    } else if (before && !isOver(before, now) && before.plan_id === plan.id) {
+      // 续订：同一个套餐再来一份，全款，到期日顺延
+      action = "renewal";
+      next = renewSubscription(before, plan, { paidMinor: paid, now });
+    } else if (before && !isOver(before, now)) {
+      // 升级：换成别的套餐（可跨 kind），旧残值已在报价里抵扣
+      action = "upgrade";
+      next = upgradeSubscription(before, plan, { paidMinor: paid, now });
+    } else if (before) {
+      // 上一次已经结束（到期 / 作废）：按新购重开。hold 保留，付款不解冻。
+      action = "new";
+      next = upgradeSubscription(before, plan, { paidMinor: paid, now });
+    } else {
+      action = "new";
+      next = { ...subscriptionFromPlan(plan, { customerId: order.customer_id, paidMinor: paid, now }), id: 0 };
+    }
+
+    const subscriptionId = await upsertSubscription(env, next);
     await logChange(env, {
       customer_id: order.customer_id,
-      action: "new",
-      to_subscription_id: subscriptionId,
-      paid_minor: order.amount_minor,
-      detail: { order_id: order.id, order_code: order.code, plan_id: order.plan_id },
+      subscription_id: subscriptionId,
+      action,
+      before,
+      after: { ...next, id: subscriptionId },
+      paid_minor: paid,
+      residual_minor: action === "upgrade" ? Math.max(0, plan.price_minor - paid) : null,
+      detail: { order_id: order.id, order_code: order.code, plan_id: plan.id, kind: plan.kind },
     });
     await env.DB.prepare(
       `UPDATE orders SET status = 'active', subscription_id = ?, provisioned_at = ?, updated_at = ?

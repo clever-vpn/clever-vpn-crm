@@ -173,7 +173,9 @@ CREATE TABLE `platform_subscriptions` (
 	`order_id` integer,
 	`plan_id` text NOT NULL,
 	`kind` text NOT NULL,
-	`status` text DEFAULT 'active' NOT NULL,
+	`hold` text DEFAULT 'none' NOT NULL,
+	`hold_reason` text,
+	`hold_at` text,
 	`paid_minor` integer NOT NULL,
 	`currency` text NOT NULL,
 	`licence_limit` integer NOT NULL,
@@ -192,14 +194,12 @@ CREATE TABLE `platform_subscriptions` (
 	`platform_customer_id` integer,
 	`code` text,
 	`params_version` integer DEFAULT 0 NOT NULL,
-	`revoked_at` text,
-	`revoke_reason` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_subs_customer` ON `platform_subscriptions` (`customer_id`,`status`);--> statement-breakpoint
-CREATE INDEX `idx_subs_due` ON `platform_subscriptions` (`kind`,`status`,`last_settled_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_subs_customer` ON `platform_subscriptions` (`customer_id`);--> statement-breakpoint
+CREATE INDEX `idx_subs_due` ON `platform_subscriptions` (`kind`,`last_settled_at`);--> statement-breakpoint
 CREATE INDEX `idx_subs_order` ON `platform_subscriptions` (`order_id`);--> statement-breakpoint
 CREATE TABLE `refunds` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -218,12 +218,17 @@ CREATE TABLE `subscription_changes` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`at` text NOT NULL,
 	`customer_id` integer NOT NULL,
-	`from_subscription_id` integer,
-	`to_subscription_id` integer,
+	`subscription_id` integer NOT NULL,
 	`action` text NOT NULL,
 	`paid_minor` integer,
 	`residual_minor` integer,
 	`payable_minor` integer,
+	`kind_before` text,
+	`kind_after` text,
+	`plan_before` text,
+	`plan_after` text,
+	`expires_before` text,
+	`expires_after` text,
 	`balance_before` real,
 	`balance_after` real,
 	`detail` text
