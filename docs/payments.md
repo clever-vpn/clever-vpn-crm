@@ -113,6 +113,27 @@ draft ──测试支付真收到钱──▶ live ──▶ disabled
 
 这条闸门挡掉三类最常见事故：**签名算错、金额单位错（元/分）、`notify_url` 不可达**。
 
+> 现状：`draft → live` 目前由后台「发布」按钮触发，**发布时只校验配置自洽**
+> （驱动能力、映射能通过 `validateMapping`、易支付类必须有密钥、测试网关必须有白名单 + 环境开关）；
+> “必须真收到一次钱才能发布”这道闸门还没做，见 §8 待做第 2 条。
+
+### 4.0 在哪配：后台「支付」页
+
+侧栏 `支付`（`web/src/pages/Gateways.tsx`）是**唯一能创建网关的地方**，接口是
+`/api/admin/gateways*`（`src/admin/gateways.ts`）。列表列的是**网关**而不是支付方式：
+名称、驱动、支持的方式、状态、优先级、有没有密钥、最近成功时间、`last_error`。
+
+三条规则写在后端，不靠前端自觉：
+
+1. `driver` 决定它**能卖哪些方式**（`DRIVER_METHODS`）—— 不允许“Stripe 卖支付宝”这种配置，
+   否则显示名与真实能力会打架；
+2. 密钥只接受明文 `secret` 字段，进来即加密入库，**任何响应都只回 `has_secret`**；
+   `PATCH` 留空 = 不改，要清空用 `clear_secret`；
+3. 没配 `PAYMENT_SECRET_KEY` 时**拒绝保存密钥**（`secret_key_missing`），不退化成存明文。
+
+映射输入分两种口径：`epay_v1` 的 `mapping` 是**覆盖项**（与内置映射深合并，租户只写差异），
+`generic_json_v1` 的 `mapping` 是**完整配置**（必须整体通过校验）。
+
 ### 4.1 路由与降级
 
 ```
@@ -439,15 +460,16 @@ v1:<base64(iv(12B) || AES-GCM 密文+tag)>
 7. 闸门集中在 `src/payments/gateways.ts`（status / methods / 白名单 / 环境开关）
 8. **密钥加密**：`src/payments/secret.ts`（AES-GCM + `PAYMENT_SECRET_KEY`，`v1:` 前缀）
    —— 真实网关的 epay 路径已用加密密钥跑通（下单签名、回调验签、查单复核）
+9. **后台「支付」页**：`src/admin/gateways.ts` + `web/src/pages/Gateways.tsx`
+   （列表 / 新建草稿 / 编辑 / 发布 / 停用；密钥只写不读；映射可覆盖）
 
 待做：
 
-1. 网关配置的后台表单（含“设置密钥”）+ 「高级：覆盖映射」入口
-2. 真实网关的 ¥1 测试支付（`draft → live` 闸门）
-3. cron 兜底扫 `pending`（`expires_at` 过期 + `hasQuery` 的网关才查单）
-4. `stripe` / `paypal` 薄 driver
-5. AI 生成映射草稿
-6. 退款走网关（`refunds.channel_refund_id`）
+1. 真实网关的 ¥1 测试支付（`draft → live` 闸门：先真收到钱再允许发布）
+2. cron 兜底扫 `pending`（`expires_at` 过期 + `hasQuery` 的网关才查单）
+3. `stripe` / `paypal` 薄 driver
+4. AI 生成映射草稿
+5. 退款走网关（`refunds.channel_refund_id`）
 
 ## 9. 参考
 
