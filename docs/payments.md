@@ -216,15 +216,18 @@ method = alipay
    重试，`live` 之前必须实测 `notify_url` 真的可达。
 
 
-### 5.2 让映射覆盖虎皮椒还缺 5 个小开关（都不改变模型）
+### 5.2 覆盖虎皮椒的 5 个开关（已实现）
 
-| 缺口 | 补法 |
+| 开关 | 解决什么 |
 |---|---|
-| 签名字段名不一定是 `sign` | `sign.field`（默认 `"sign"`，可设 `"hash"`） |
-| `nonce_str` 每次必须随机 | `fields.nonce` + 模板变量 `{nonce}` |
-| **渠道码可以是空**（虎皮椒：支付宝不传 `type`） | `channel_codes` 允许空串；为空时**整个参数不发** |
-| 有些网关**没有查单接口** | `query` 改为可选；为空时禁用 cron 兜底，并在面板上明确提示"只能靠回调" |
-| 金额单位可能**按方向不同** | 下单按元、回调按分（XArrPay 原生协议就是这样）⇒ `notify_amount_unit` / `query_amount_unit`，缺省跟随 `amount_unit` |
+| `sign.field` | 签名字段名不一定是 `sign`（虎皮椒：`hash`）；默认 `"sign"` |
+| `fields.nonce` | `nonce_str` 每次请求重新生成 32 位 hex（防重放） |
+| `channel_codes` 允许空串 | 渠道码为空时**整个参数不发**（虎皮椒：支付宝不传 `type`） |
+| `query` 可选 | 没有查单接口时就不写；`hasQuery()` 为 false，cron 兜底跳过并告警 |
+| `notify_amount_unit` / `query_amount_unit` | 金额单位可以**按方向不同**（下单按元、回调按分） |
+
+这 5 个都是**可选字段 / 默认值不变**，所以已有四家的行为一个字都没改。
+`test/payments/fixtures.ts` 里现在有五份夹具（含虎皮椒），跑的是同一份解释器。
 
 > 易支付 V2（`epayn`）用 **RSA-SHA256 双向签名**，属于非对称签名，是另一档能力，
 > 暂不支持（也不违反"签名本地一次算完"的判据，将来要支持时按 `sign.algo` 扩展即可）。
@@ -268,11 +271,13 @@ method = alipay
 | 键 | 说明 |
 |---|---|
 | `create.method` / `create.path` / `create.format` | 下单请求：`POST`/`GET`、路径、`form`/`json` |
-| `fields.*` | 参数名映射：`merchant` `order_no` `amount` `subject` `body` `notify_url` `return_url` `client_ip` `channel` `timestamp` |
+| `fields.*` | 参数名映射：`merchant` `order_no` `amount` `subject` `body` `notify_url` `return_url` `client_ip` `channel` `timestamp` `nonce` |
 | `amount_unit` | **必填**：`yuan`（元，两位小数字符串）/ `cent`（整数分） |
+| `notify_amount_unit` / `query_amount_unit` | 回调/查单的金额单位，缺省跟随 `amount_unit` |
 | `timestamp_format` | `s` / `ms` / `ymdhms`（`YYYYMMDDHHmmss`，**北京时间**） |
 | `constants` | 固定参数，如 `{"sign_type":"MD5"}` |
-| `channel_codes` | 方式 → 渠道码：`{"alipay":"alipay","wechat":"wxpay"}` |
+| `channel_codes` | 方式 → 渠道码：`{"alipay":"alipay","wechat":"wxpay"}`；**值为空串时不发该参数** |
+| `sign.field` | 签名字段名，默认 `"sign"`（虎皮椒用 `"hash"`） |
 | `sign.algo` | `md5` / `sha256` |
 | `sign.key_append` | 密钥前的拼接串：`""`（直接拼）或 `"&key="` |
 | `sign.exclude` | 不参与签名的字段，默认 `["sign"]` |
@@ -287,7 +292,7 @@ method = alipay
 | `notify.order_no` / `trade_no` / `amount` | 回调里这些值的字段名 |
 | `notify.paid_when` | 回调"已付款"判定（**与查单分开配**，亿宏就是两套码） |
 | `notify.reply` | 应答原文，**必须逐字一致**（写错会被无限重发） |
-| `query.method` / `path` / `format` | 查单请求形状 |
+| `query.method` / `path` / `format` | 查单请求形状（**整个 `query` 可以不写** = 没有查单接口） |
 | `query.fields` | 查单参数，值支持 `{merchant}` `{secret}` `{order_no}` `{amount}` `{channel}` `{timestamp}` |
 | `query.sign` | `"same"`（与下单同套签名）/ `"none"`（易支付查单自带 key，不签名） |
 | `query.ok` / `paid_when` | 查单成功 / 已付判定 |
@@ -353,7 +358,8 @@ method = alipay
 1. `src/payments/sign.ts` —— 排序拼接签名（md5/sha256、`key_append`、排除集合与多集合验签）
 2. `src/payments/mapping.ts` —— 映射解释器（含校验、取值、金额/时间戳换算、多字段择优）
 3. `src/payments/builtin/epay.ts` —— 内置易支付映射
-4. `test/payments/*` —— 四份协议的夹具，同一份解释器全过（签名用 `node:crypto` 交叉验证）
+4. `test/payments/*` —— 五份协议的夹具（易支付/青蛙/亿宏/华俊/虎皮椒），同一份解释器全过（签名用 `node:crypto` 交叉验证）
+5. 覆盖虎皮椒的 5 个开关：`sign.field` / `fields.nonce` / 空渠道码 / `query` 可选 / 分方向金额单位
 
 待做：
 
@@ -364,7 +370,6 @@ method = alipay
 5. `stripe` / `paypal` 薄 driver
 6. AI 生成映射草稿
 7. 退款走网关（`refunds.channel_refund_id`）
-8. §5.2 的四个小开关（`sign.field` / `{nonce}` / `query` 可选 / 分方向金额单位）
 
 ## 9. 参考
 

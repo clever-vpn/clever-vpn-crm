@@ -21,6 +21,7 @@ import {
   parseCreateResponse,
   parseNotify,
   parseQueryResponse,
+  hasQuery,
   readNotifyParams,
   readPath,
   validateMapping,
@@ -28,7 +29,7 @@ import {
   type GatewayMapping,
 } from "../../src/payments/mapping";
 
-import { HUAJUN_MAPPING, QWGUA_MAPPING, YIHONG_MAPPING } from "./fixtures";
+import { HUAJUN_MAPPING, HUPIJIAO_MAPPING, QWGUA_MAPPING, YIHONG_MAPPING } from "./fixtures";
 
 const KEY = "secret-key";
 /** 北京时间 2026-10-24 12:00:00 */
@@ -385,5 +386,115 @@ describe("校验（错误必须说清哪个键不对）", () => {
     const r = validateMapping({ ...base, response: { ok: { path: "code", equals: 1 } } });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.join()).toContain("pay_url");
+  });
+});
+
+describe("夹具：虎皮椒（hash / errcode=0 / nonce_str / 无查单）", () => {
+  it("自校验通过（没有 query 也合法）", () => {
+    const r = validateMapping(HUPIJIAO_MAPPING);
+    if (!r.ok) throw new Error(r.errors.join("; "));
+    expect(hasQuery(HUPIJIAO_MAPPING)).toBe(false);
+  });
+
+  it("支付宝：type 整个参数不出现；微信用 WAP", () => {
+    const ali = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx()).body, "form");
+    expect("type" in ali).toBe(false);
+
+    const wx = bodyParams(
+      buildCreateRequest(HUPIJIAO_MAPPING, ctx({ method: "wechat" })).body,
+      "form",
+    );
+    expect(wx.type).toBe("WAP");
+  });
+
+  it("nonce_str 每次不同，且是 32 位 hex", () => {
+    const a = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx()).body, "form");
+    const b = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx()).body, "form");
+    expect(a.nonce_str).toMatch(/^[0-9a-f]{32}$/);
+    expect(a.nonce_str).not.toBe(b.nonce_str);
+  });
+
+  it("签名写进 hash（不是 sign），算法仍是直接拼密钥", () => {
+    const p = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx()).body, "form");
+    expect("sign" in p).toBe(false);
+    expect(p.hash).toBe(refSign(p, ["hash"], ""));
+  });
+
+  it("响应：errcode=0 成功，url 优先于 url_qrcode", () => {
+    const both = parseCreateResponse(HUPIJIAO_MAPPING, {
+      errcode: "0",
+      url: "https://pay.example.com/h5/1",
+      url_qrcode: "https://pay.example.com/qr/1",
+    });
+    expect(both.ok).toBe(true);
+    expect(both.payUrl).toBe("https://pay.example.com/h5/1");
+
+    const qrOnly = parseCreateResponse(HUPIJIAO_MAPPING, { errcode: "0", url_qrcode: "https://pay.example.com/qr/1" });
+    expect(qrOnly.payUrl).toBe("https://pay.example.com/qr/1");
+
+    expect(parseCreateResponse(HUPIJIAO_MAPPING, { errcode: "402", errmsg: "校验信息错误" }).ok).toBe(false);
+  });
+
+  it("回调：status=OD 才算已付，金额按元解析", () => {
+    const params: Record<string, unknown> = {
+      appid: "M1000",
+      trade_order_id: "ORD-20261024-0001",
+      transaction_id: "PAY20231016001",
+      total_fee: "0.01",
+      order_title: "月付 · 100GB",
+      status: "OD",
+      time: "1697452800",
+      nonce_str: "abc123def456",
+    };
+    params.hash = refSign(params, ["hash"], "");
+
+    const n = parseNotify(HUPIJIAO_MAPPING, params, KEY);
+    expect(n.signOk).toBe(true);
+    expect(n.paid).toBe(true);
+    expect(n.orderNo).toBe("ORD-20261024-0001");
+    expect(n.tradeNo).toBe("PAY20231016001");
+    expect(n.amountMinor).toBe(1);
+
+    // 未支付的通知（status 不是 OD）
+    const unpaid: Record<string, unknown> = { ...params, status: "WAIT" };
+    unpaid.hash = refSign(unpaid, ["hash"], "");
+    expect(parseNotify(HUPIJIAO_MAPPING, unpaid, KEY).paid).toBe(false);
+  });
+
+  it("没有查单接口：buildQueryRequest 会抛错", () => {
+    expect(() => buildQueryRequest(HUPIJIAO_MAPPING, { ...ctx(), amountMinor: 100 })).toThrow(/没有配置查单/);
+    expect(parseQueryResponse(HUPIJIAO_MAPPING, {}).message).toContain("不支持查单");
+  });
+});
+
+describe("分方向金额单位（下单按元、回调按分）", () => {
+  // XArrPay 原生协议的形状：下单 money 是元，回调 amount 是分
+  const mixed: GatewayMapping = {
+    ...HUPIJIAO_MAPPING,
+    amount_unit: "yuan",
+    notify_amount_unit: "cent",
+    notify: { ...HUPIJIAO_MAPPING.notify, amount: "amount" },
+  };
+
+  it("下单仍是元", () => {
+    const p = bodyParams(buildCreateRequest(mixed, ctx()).body, "form");
+    expect(p.total_fee).toBe("12.34");
+  });
+
+  it("回调按分解析，不会放大 100 倍", () => {
+    const params: Record<string, unknown> = {
+      trade_order_id: "ORD-20261024-0001",
+      amount: "1234",
+      status: "OD",
+    };
+    params.hash = refSign(params, ["hash"], "");
+    expect(parseNotify(mixed, params, KEY).amountMinor).toBe(1234);
+  });
+
+  it("不配 notify_amount_unit 时才跟随 amount_unit（这里会错成 123400，说明为什么必须配）", () => {
+    const wrong = { ...mixed, notify_amount_unit: undefined };
+    const params: Record<string, unknown> = { trade_order_id: "X", amount: "1234", status: "OD" };
+    params.hash = refSign(params, ["hash"], "");
+    expect(parseNotify(wrong, params, KEY).amountMinor).toBe(123400);
   });
 });

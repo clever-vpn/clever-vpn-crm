@@ -157,3 +157,50 @@ export const HUAJUN_MAPPING: GatewayMapping = {
     trade_no: "data.tradeNo",
   },
 };
+
+/**
+ * 虎皮椒（XunHuPay）：与易支付共用签名主干，但有四处"语义相同、字面相反"的差异。
+ *
+ * 关键点（都来自 `https://docs.xarr.cn/merchant/api/xunhupay.html`）：
+ *   - 签名字段叫 `hash`，排除的也是 `hash`
+ *   - 成功码是 `errcode = "0"`（易支付是 `code = 1`）
+ *   - 回调已付是 `status = "OD"`（固定字面量）
+ *   - **`type` 为空 = 支付宝**，`WAP` / `JSAPI` = 微信 ⇒ 渠道码可以是空串
+ *   - **没有查单接口**（官方"开发中"）⇒ 不配置 `query`
+ */
+export const HUPIJIAO_MAPPING: GatewayMapping = {
+  create: { method: "POST", path: "/xpay/hupijiao/payment/do.html", format: "form" },
+  fields: {
+    merchant: "appid",
+    order_no: "trade_order_id",
+    amount: "total_fee",
+    subject: "title",
+    notify_url: "notify_url",
+    return_url: "return_url",
+    channel: "type",
+    timestamp: "time",
+    nonce: "nonce_str",
+  },
+  amount_unit: "yuan",
+  timestamp_format: "s",
+  constants: { version: "1.1" },
+  // 支付宝 = 不传 type；微信 H5 = WAP（小程序是 JSAPI，租户按需改）
+  channel_codes: { alipay: "", wechat: "WAP" },
+  sign: { field: "hash", algo: "md5", key_append: "", exclude: ["hash"] },
+  response: {
+    ok: { path: "errcode", equals: "0" },
+    message: "errmsg",
+    // PC 端要 url_qrcode 自己出二维码；移动端直接用 url
+    pay_url_from: ["url", "url_qrcode"],
+  },
+  notify: {
+    method: "POST",
+    format: "form",
+    order_no: "trade_order_id",
+    trade_no: "transaction_id",
+    amount: "total_fee",
+    paid_when: { path: "status", in: ["OD"] },
+    reply: "success",
+  },
+  // query 故意不写：官方查单接口"开发中"，只能靠回调
+};
