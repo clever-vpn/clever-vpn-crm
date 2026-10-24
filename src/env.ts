@@ -50,4 +50,13 @@ export interface Env {
    * **未配置 = 不做人机校验**：本地开发和不想开自托管的租户都不受影响。
    */
   TURNSTILE_SECRET?: string;
+
+  /**
+   * **测试网关（`driver = 'mock'`）的总开关**，默认关闭（`docs/payments.md` §5.3）。
+   *
+   * 为 `"true"` 时，mock 网关才能创建/发布并参与路由。
+   * **租户业务正式上线时改回 false** —— 这是防止"上线后还能免费开通"的第一道闸门
+   * （第二道是网关自身的 `allowed_emails` 白名单）。
+   */
+  ALLOW_MOCK_PAYMENTS?: string;
 }

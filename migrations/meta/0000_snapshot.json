@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4ca3444f-5d7b-49a3-9a73-d7684a91b20f",
+  "id": "3aa28eef-6254-43d7-a2b5-fca996be660a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "adjustments": {
@@ -868,6 +868,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'draft'"
+        },
+        "allowed_emails": {
+          "name": "allowed_emails",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "currency": {
           "name": "currency",

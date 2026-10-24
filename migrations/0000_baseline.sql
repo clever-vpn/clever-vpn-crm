@@ -131,6 +131,7 @@ CREATE TABLE `payment_gateways` (
 	`mapping` text,
 	`priority` integer DEFAULT 100 NOT NULL,
 	`status` text DEFAULT 'draft' NOT NULL,
+	`allowed_emails` text,
 	`currency` text DEFAULT 'CNY' NOT NULL,
 	`last_test_order_id` integer,
 	`last_ok_at` text,

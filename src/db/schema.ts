@@ -397,7 +397,9 @@ export const adjustments = sqliteTable(
  *   - `epay_v1`：易支付协议族（内置一份映射，租户只填 endpoint/pid/key）；
  *   - `generic_json_v1`：任意私有协议（租户/AI 填 `mapping`）；
  *   - `stripe` / `paypal`：品牌 PSP，独立薄 driver（OAuth/二次 capture 不属于映射）；
- *   - `manual`：对公转账，人工确认。
+ *   - `manual`：对公转账，人工确认；
+ *   - `mock`：**自带的测试网关**（`docs/payments.md` §5.3），不连真实渠道，
+ *     有**两道闸门**：`env.ALLOW_MOCK_PAYMENTS` 与 `allowed_emails`。
  *
  * 判据（`docs/payments.md` §6）：**签名能在本地一次算完 → 映射；否则 → driver**。
  *
@@ -429,6 +431,15 @@ export const paymentGateways = sqliteTable(
     priority: integer("priority").notNull().default(100),
     /** draft | live | disabled */
     status: text("status").notNull().default("draft"),
+    /**
+     * 客户白名单（JSON 数组，邮箱小写）。`null` / 空数组 = **不限**。
+     *
+     * 两个用途：
+     *   1. `driver = 'mock'` 时**必须非空**才能 `live` —— 否则等于向所有真实用户
+     *      免费开通（两道闸门的第二道，见 `docs/payments.md` §5.3）；
+     *   2. 真实网关的**灰度发布**：新渠道先只给几个老用户体验。
+     */
+    allowed_emails: text("allowed_emails"),
     currency: text("currency").notNull().default("CNY"),
     /** 最近一次成功的测试支付（`orders.id`，那条订单 `plan_id IS NULL`） */
     last_test_order_id: integer("last_test_order_id"),
