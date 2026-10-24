@@ -17,6 +17,13 @@ export const SIGN_ALGOS = ["md5", "sha256"] as const;
 export type SignAlgo = (typeof SIGN_ALGOS)[number];
 
 export interface SignSpec {
+  /**
+   * 签名字段名，默认 `"sign"`。
+   *
+   * 虎皮椒（XunHuPay）用 `"hash"` —— 这是它与易支付唯一的签名差异（算法完全相同），
+   * 但写错就是“对方读不到签名” ⇒ 永远验签失败。
+   */
+  field?: string;
   /** 摘要算法，默认 `md5` */
   algo?: SignAlgo;
   /**
@@ -43,6 +50,12 @@ export interface SignSpec {
 }
 
 export const DEFAULT_EXCLUDE = ["sign"];
+
+/** 签名字段自己永远不参与签名（否则自指），不管 `exclude` 写没写 */
+function withField(spec: SignSpec, exclude: readonly string[]): string[] {
+  const field = spec.field ?? "sign";
+  return exclude.includes(field) ? [...exclude] : [field, ...exclude];
+}
 
 function isEmptyValue(v: unknown): boolean {
   return v === undefined || v === null || String(v) === "";
@@ -91,7 +104,8 @@ export function signParams(
   key: string,
   spec: SignSpec = {},
 ): string {
-  const hex = digest(spec.algo ?? "md5", signPlaintext(params, key, spec));
+  const exclude = withField(spec, spec.exclude ?? DEFAULT_EXCLUDE);
+  const hex = digest(spec.algo ?? "md5", signPlaintext(params, key, spec, exclude));
   return spec.upper ? hex.toUpperCase() : hex;
 }
 
@@ -107,12 +121,15 @@ export function verifyParams(
   spec: SignSpec = {},
 ): boolean {
   if (!key) return false;
-  const got = String(params.sign ?? "").trim();
+  const got = String(params[spec.field ?? "sign"] ?? "").trim();
   if (!got) return false;
 
-  const base = spec.exclude ?? DEFAULT_EXCLUDE;
+  const base = withField(spec, spec.exclude ?? DEFAULT_EXCLUDE);
   // 每个候选都是**完整的**排除集合（基集与变体并列）
-  const candidates: string[][] = [base, ...(spec.exclude_variants ?? [])]
+  const candidates: string[][] = [
+    base,
+    ...(spec.exclude_variants ?? []).map((v) => withField(spec, v)),
+  ];
 
   return candidates.some((exclude) => {
     const hex = digest(spec.algo ?? "md5", signPlaintext(params, key, spec, exclude));

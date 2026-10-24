@@ -50,10 +50,12 @@ export interface FieldMap {
   notify_url?: string;
   return_url?: string;
   client_ip?: string;
-  /** 支付方式字段名（值来自 `channel_codes`） */
+  /** 支付方式字段名（值来自 `channel_codes`）；**值为空时整个参数不发** */
   channel?: string;
   /** 时间戳字段名（格式由 `timestamp_format` 决定） */
   timestamp?: string;
+  /** 随机串字段名（每次请求重新生成 32 位 hex，虎皮椒的 `nonce_str`） */
+  nonce?: string;
 }
 
 /** 认证头：`{key}` 会被替换成密钥 */
@@ -62,10 +64,33 @@ export interface AuthSpec {
   value: string;
 }
 
+/** 查单配置。**整个 `query` 都可以不写** —— 有的网关没有查单接口（虎皮椒） */
+export interface QuerySpec {
+  method?: HttpMethod;
+  format?: BodyFormat;
+  path: string;
+  /** 请求参数，值支持 `{merchant}` `{secret}` `{order_no}` `{amount}` `{channel}` `{timestamp}` `{nonce}` */
+  fields: Record<string, string>;
+  /** 是否与下单用同一套签名；易支付的查单接口自带 key、不签名 ⇒ `"none"` */
+  sign?: "same" | "none";
+  ok?: WhenSpec;
+  paid_when: WhenSpec;
+  /** 明确失败/过期/撤销：命中即收尾，不再重试 */
+  terminal_when?: WhenSpec;
+  amount?: string;
+  trade_no?: string;
+  message?: string;
+}
+
 export interface GatewayMapping {
   create: { method?: HttpMethod; path: string; format?: BodyFormat };
   fields: FieldMap;
+  /** **下单**金额单位。必填 —— 写错就是 100 倍事故 */
   amount_unit: AmountUnit;
+  /** 回调金额单位，缺省跟随 `amount_unit`（有网关下单按元、回调按分） */
+  notify_amount_unit?: AmountUnit;
+  /** 查单金额单位，缺省跟随 `amount_unit` */
+  query_amount_unit?: AmountUnit;
   /**
    * 时间戳格式：
    *   - `s` 秒级（10 位）
@@ -103,22 +128,8 @@ export interface GatewayMapping {
     /** 应答原文，必须与厂商要求**逐字**一致，否则会被无限重发 */
     reply: string;
   };
-  query: {
-    method?: HttpMethod;
-    format?: BodyFormat;
-    path: string;
-    /** 请求参数，值支持 `{merchant}` `{secret}` `{order_no}` `{amount}` `{channel}` `{timestamp}` */
-    fields: Record<string, string>;
-    /** 是否与下单用同一套签名；易支付的查单接口自带 key、不签名 ⇒ `"none"` */
-    sign?: "same" | "none";
-    ok?: WhenSpec;
-    paid_when: WhenSpec;
-    /** 明确失败/过期/撤销：命中即收尾，不再重试 */
-    terminal_when?: WhenSpec;
-    amount?: string;
-    trade_no?: string;
-    message?: string;
-  };
+  /** 可选：不写就是"没有查单接口"，cron 兜底会自动跳过这个网关并告警 */
+  query?: QuerySpec;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -221,6 +232,15 @@ export function validateMapping(input: unknown): MappingValidation {
   if (!m.amount_unit || !AMOUNT_UNITS.includes(m.amount_unit)) {
     errors.push("amount_unit 必填，且只能是 yuan（元）/ cent（分）");
   }
+  for (const [key, label] of [
+    ["notify_amount_unit", "notify_amount_unit"],
+    ["query_amount_unit", "query_amount_unit"],
+  ] as const) {
+    const v = m[key];
+    if (v !== undefined && !AMOUNT_UNITS.includes(v)) {
+      errors.push(`${label} 只能是 yuan / cent（不写则跟随 amount_unit）`);
+    }
+  }
   if (m.timestamp_format && !["s", "ms", "ymdhms"].includes(m.timestamp_format)) {
     errors.push("timestamp_format 只能是 s / ms / ymdhms");
   }
@@ -253,13 +273,16 @@ export function validateMapping(input: unknown): MappingValidation {
   if (!isNonEmptyStr(n?.reply)) errors.push("notify.reply 必填（应答原文，写错会被无限重发）");
   if (n?.format && !["form", "json"].includes(n.format)) errors.push("notify.format 只能是 form / json");
 
+  // `query` 整体可选：网关没有查单接口时（官方"开发中"）就不写
   const q = m.query;
-  if (!isNonEmptyStr(q?.path)) errors.push("query.path 必填（查单接口路径）");
-  const qPaid = whenError("query.paid_when", q?.paid_when);
-  if (qPaid) errors.push(`${qPaid}（怎么判断查单结果已付款）`);
-  const qTerm = q?.terminal_when ? whenError("query.terminal_when", q.terminal_when) : null;
-  if (qTerm) errors.push(qTerm);
-  if (q?.sign && !["same", "none"].includes(q.sign)) errors.push('query.sign 只能是 "same" / "none"');
+  if (q) {
+    if (!isNonEmptyStr(q.path)) errors.push("query.path 必填（查单接口路径）");
+    const qPaid = whenError("query.paid_when", q.paid_when);
+    if (qPaid) errors.push(`${qPaid}（怎么判断查单结果已付款）`);
+    const qTerm = q.terminal_when ? whenError("query.terminal_when", q.terminal_when) : null;
+    if (qTerm) errors.push(qTerm);
+    if (q.sign && !["same", "none"].includes(q.sign)) errors.push('query.sign 只能是 "same" / "none"');
+  }
 
   if (errors.length) return { ok: false, errors };
   return { ok: true, mapping: m as GatewayMapping };
@@ -308,6 +331,13 @@ function baseHeaders(mapping: GatewayMapping, secret: string): Record<string, st
   return headers;
 }
 
+/** 随机串（hex）——用于 `nonce_str` 这类防重放字段 */
+function randomHex(bytes = 16): string {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** 组装下单请求（参数 + 签名 + body） */
 export function buildCreateRequest(mapping: GatewayMapping, ctx: ChargeContext): BuiltRequest {
   const params: Record<string, string | number> = {};
@@ -321,11 +351,19 @@ export function buildCreateRequest(mapping: GatewayMapping, ctx: ChargeContext):
   if (f.notify_url) params[f.notify_url] = ctx.notifyUrl;
   if (f.return_url && ctx.returnUrl) params[f.return_url] = ctx.returnUrl;
   if (f.client_ip && ctx.clientIp) params[f.client_ip] = ctx.clientIp;
-  if (f.channel) params[f.channel] = mapping.channel_codes?.[ctx.method] ?? ctx.method;
+  if (f.channel) {
+    // 渠道码为空 = "这个渠道不传该参数"（虎皮椒：支付宝不传 type）。
+    // 不能发 `type=` 空串 —— 会被算进签名、或被当成非法渠道。
+    const code = mapping.channel_codes?.[ctx.method] ?? ctx.method;
+    if (String(code) !== "") params[f.channel] = code;
+  }
   if (f.timestamp) params[f.timestamp] = formatTimestamp(ctx.now, mapping.timestamp_format);
+  if (f.nonce) params[f.nonce] = randomHex();
 
   const signed: Record<string, unknown> = { ...params };
-  if (mapping.sign) signed.sign = signParams(signed, ctx.secret, mapping.sign);
+  if (mapping.sign) {
+    signed[mapping.sign.field ?? "sign"] = signParams(signed, ctx.secret, mapping.sign);
+  }
 
   const headers = baseHeaders(mapping, ctx.secret);
   const method = mapping.create.method ?? "POST";
@@ -439,7 +477,9 @@ export function parseNotify(
     paid: matchesWhen(n.paid_when, params),
     orderNo: orderNoRaw === undefined || orderNoRaw === null ? null : String(orderNoRaw),
     tradeNo: tradeRaw === undefined || tradeRaw === null ? null : String(tradeRaw),
-    amountMinor: n.amount ? parseAmount(params[n.amount], mapping.amount_unit) : null,
+    amountMinor: n.amount
+      ? parseAmount(params[n.amount], mapping.notify_amount_unit ?? mapping.amount_unit)
+      : null,
     raw: JSON.stringify(params),
   };
 }
@@ -459,8 +499,19 @@ export interface QueryContext {
   now: Date;
 }
 
-/** 组装查单请求（`fields` 的值支持模板占位） */
+/** 这个网关能不能查单（`query` 没配 = 只能靠回调） */
+export function hasQuery(mapping: GatewayMapping): boolean {
+  return !!mapping.query && typeof mapping.query.path === "string" && mapping.query.path !== "";
+}
+
+/**
+ * 组装查单请求（`fields` 的值支持模板占位）。
+ * @throws 网关没有查单接口时 —— 调用方应先用 `hasQuery()` 判断
+ */
 export function buildQueryRequest(mapping: GatewayMapping, ctx: QueryContext): BuiltRequest {
+  const q = mapping.query;
+  if (!q) throw new Error("该网关没有配置查单接口（只能靠回调）");
+
   const vars: Record<string, string> = {
     merchant: ctx.merchant,
     secret: ctx.secret,
@@ -469,19 +520,22 @@ export function buildQueryRequest(mapping: GatewayMapping, ctx: QueryContext): B
     subject: ctx.subject,
     channel: String(mapping.channel_codes?.[ctx.method] ?? ctx.method),
     timestamp: formatTimestamp(ctx.now, mapping.timestamp_format),
+    nonce: randomHex(),
   };
   const params: Record<string, unknown> = {};
-  for (const [k, template] of Object.entries(mapping.query.fields)) {
-    params[k] = template.replace(/\{(\w+)\}/g, (_, name: string) => vars[name] ?? "");
+  for (const [k, template] of Object.entries(q.fields)) {
+    const value = template.replace(/\{(\w+)\}/g, (_, name: string) => vars[name] ?? "");
+    // 模板里引用的变量为空 ⇒ 整个参数不发（同渠道码的处理）
+    if (value !== "") params[k] = value;
   }
-  if ((mapping.query.sign ?? "same") === "same" && mapping.sign) {
-    params.sign = signParams(params, ctx.secret, mapping.sign);
+  if ((q.sign ?? "same") === "same" && mapping.sign) {
+    params[mapping.sign.field ?? "sign"] = signParams(params, ctx.secret, mapping.sign);
   }
 
   const headers = baseHeaders(mapping, ctx.secret);
-  const method = mapping.query.method ?? "POST";
-  const format = mapping.query.format ?? "form";
-  const url = joinUrl(ctx.endpoint, mapping.query.path);
+  const method = q.method ?? "POST";
+  const format = q.format ?? "form";
+  const url = joinUrl(ctx.endpoint, q.path);
 
   if (method === "GET") {
     const qs = new URLSearchParams();
@@ -512,13 +566,17 @@ export interface QueryResult {
 /** 解析查单响应 —— **这是"钱到了没有"的唯一权威来源** */
 export function parseQueryResponse(mapping: GatewayMapping, payload: unknown): QueryResult {
   const q = mapping.query;
+  if (!q) {
+    return { ok: false, paid: false, terminal: false, amountMinor: null, tradeNo: null, message: "该网关不支持查单" };
+  }
+  const unit = mapping.query_amount_unit ?? mapping.amount_unit;
   const ok = q.ok ? matchesWhen(q.ok, payload) : true;
   const tradeRaw = q.trade_no ? readPath(payload, q.trade_no) : undefined;
   return {
     ok,
     paid: matchesWhen(q.paid_when, payload),
     terminal: matchesWhen(q.terminal_when, payload),
-    amountMinor: q.amount ? parseAmount(readPath(payload, q.amount), mapping.amount_unit) : null,
+    amountMinor: q.amount ? parseAmount(readPath(payload, q.amount), unit) : null,
     tradeNo: tradeRaw === undefined || tradeRaw === null ? null : String(tradeRaw),
     message: q.message ? String(readPath(payload, q.message) ?? "") || undefined : undefined,
   };
