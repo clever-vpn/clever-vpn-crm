@@ -100,7 +100,7 @@ INSERT INTO orders
    payment_method, status, paid_at, created_at, updated_at)
 SELECT 'ORD-DEV-0001', c.id, 'dev_period_100g', 'period',
        '{"name":"月付 · 100GB · 1 设备","kind":"period","price_minor":1500,"quota_gb":100,"term_days":30}',
-       1500, 'CNY', 'purchase', 'manual', 'paid',
+       1500, 'CNY', 'manual', 'manual', 'paid',
        strftime('%Y-%m-%dT%H:%M:%fZ','now'),
        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
 FROM customers c WHERE c.email = 'alice@example.com'

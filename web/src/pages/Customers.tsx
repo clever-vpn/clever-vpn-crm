@@ -181,14 +181,28 @@ export default function Customers() {
               render: (s: AdminCustomer["subscription"]) => (s?.expires_at ? day(s.expires_at) : s ? "永久" : "—"),
             },
             {
-              title: "剩余 / 额度",
+              title: "额度 / 剩余",
               dataIndex: "subscription",
-              render: (s: AdminCustomer["subscription"]) =>
-                s ? (
+              render: (s: AdminCustomer["subscription"]) => {
+                if (!s) return "—";
+                // 不限量只看 quota_gb（period 才有）；remaining_gb 为 null 只是"还没同步 cf-api"
+                const unlimited = s.kind === "period" && s.quota_gb === null;
+                const quota =
+                  s.quota_gb !== null
+                    ? `${s.quota_gb} GB/月`
+                    : s.traffic_total_gb !== null
+                      ? `${s.traffic_total_gb} GB`
+                      : "不限量";
+                const remaining = unlimited
+                  ? null
+                  : s.remaining_gb === null
+                    ? "余额待同步"
+                    : `剩 ${s.remaining_gb} GB`;
+                return (
                   <Space direction="vertical" size={0}>
                     <span>
-                      {s.remaining_gb === null ? "不限量" : `${s.remaining_gb} GB`}
-                      {s.quota_gb !== null ? ` / ${s.quota_gb}` : ""}
+                      {quota}
+                      {remaining ? ` · ${remaining}` : ""}
                     </span>
                     {!!s.balance_gb && (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -196,9 +210,8 @@ export default function Customers() {
                       </Typography.Text>
                     )}
                   </Space>
-                ) : (
-                  "—"
-                ),
+                );
+              },
             },
             {
               title: "设备",
@@ -226,7 +239,7 @@ export default function Customers() {
         onOk={() => void submitGrant()}
         confirmLoading={busy}
         okText="写入订阅"
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
           这是**运营补单**通道：不会走支付网关，直接按套餐快照写入订阅（同套餐=延续，别的套餐=覆盖）。

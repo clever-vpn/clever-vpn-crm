@@ -61,8 +61,8 @@ export async function handleAdminSubscriptions(
     const rows = await env.DB.prepare(
       `SELECT c.id, c.email, c.display_name, c.status, c.created_at,
               s.plan_id, s.kind AS sub_kind, s.expires_at, s.hold, s.hold_reason,
-              s.anchor_day, s.remaining_gb, s.quota_gb, s.balance_gb,
-              s.licence_limit, s.paid_minor
+              s.anchor_day, s.remaining_gb, s.quota_gb, s.traffic_total_gb,
+              s.balance_gb, s.licence_limit, s.paid_minor
          FROM customers c
          LEFT JOIN platform_subscriptions s ON s.customer_id = c.id
         ORDER BY c.id DESC LIMIT 200`,
@@ -80,6 +80,7 @@ export async function handleAdminSubscriptions(
       anchor_day: number | null;
       remaining_gb: number | null;
       quota_gb: number | null;
+      traffic_total_gb: number | null;
       balance_gb: number | null;
       licence_limit: number | null;
       paid_minor: number | null;
@@ -111,6 +112,7 @@ export async function handleAdminSubscriptions(
           expires_at: r.expires_at,
           licence_limit: r.licence_limit,
           quota_gb: r.quota_gb,
+          traffic_total_gb: r.traffic_total_gb,
           remaining_gb: r.remaining_gb,
           balance_gb: r.balance_gb,
           paid_minor: r.paid_minor,

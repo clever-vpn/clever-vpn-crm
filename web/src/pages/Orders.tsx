@@ -15,6 +15,7 @@ const STATUS: Record<string, { color: string; text: string }> = {
 };
 
 const SOURCE: Record<string, string> = { purchase: "自助", gift: "赠送", manual: "后台" };
+const KIND: Record<string, string> = { period: "周期", traffic: "流量包", addon: "加购包" };
 const METHOD: Record<string, string> = {
   alipay: "支付宝",
   wechat: "微信",
@@ -112,7 +113,7 @@ export default function Orders() {
                 <Space direction="vertical" size={0}>
                   <span>{planId}</span>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {o.kind} · {SOURCE[o.source] ?? o.source}
+                    {KIND[o.kind] ?? o.kind} · {SOURCE[o.source] ?? o.source}
                   </Typography.Text>
                 </Space>
               ),

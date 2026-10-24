@@ -226,6 +226,8 @@ export interface AdminSubscriptionSummary {
   expires_at: string | null;
   licence_limit: number | null;
   quota_gb: number | null;
+  /** traffic 包的整包容量（period 为 null） */
+  traffic_total_gb: number | null;
   remaining_gb: number | null;
   balance_gb: number | null;
   paid_minor: number | null;
