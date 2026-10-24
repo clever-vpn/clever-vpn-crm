@@ -104,6 +104,7 @@ export async function handlePayNotify(
   env: Env,
   request: Request,
   gatewayIdRaw: string,
+  deps: { fetch?: typeof fetch } = {},
 ): Promise<Response> {
   const gatewayId = Number(gatewayIdRaw);
   if (!Number.isInteger(gatewayId) || gatewayId <= 0) return text("bad gateway", 400);
@@ -118,9 +119,9 @@ export async function handlePayNotify(
   const mapping: GatewayMapping | null = mappingOf(gateway);
   if (!mapping) return text("gateway misconfigured", 500);
 
-  const secret = gatewaySecret(env, gateway.driver);
+  const secret = await gatewaySecret(env, gateway);
   if (!secret) {
-    // 密钥加密尚未实现 ⇒ 无法验签，绝不"先记上再补"
+    // 密钥解不开 ⇒ 无法验签，绝不"先记上再补"
     return text("gateway not ready", 501);
   }
 
@@ -163,6 +164,7 @@ export async function handlePayNotify(
 
   // 复核："回调只当触发器"。有查单接口就以查单为准（没有则只能信回调）
   if (hasQuery(mapping)) {
+    const doFetch = deps.fetch ?? fetch;
     const secretForQuery = secret;
     const qreq = buildQueryRequest(mapping, {
       merchant: gateway.merchant_id ?? "",
@@ -175,7 +177,7 @@ export async function handlePayNotify(
       now: new Date(),
     });
     try {
-      const res = await fetch(qreq.url, {
+      const res = await doFetch(qreq.url, {
         method: qreq.method,
         headers: qreq.headers,
         body: qreq.body,

@@ -8,6 +8,7 @@
 import { listLiveGateways, mappingOf, pickGateway } from "./gateways";
 import { buildCreateRequest, parseCreateResponse } from "./mapping";
 import { MOCK_DRIVER, mockSecret } from "./mock";
+import { decryptSecret } from "./secret";
 
 import type { Env } from "../env";
 import type { Plan } from "../plans/model";
@@ -31,14 +32,18 @@ export function newOrderCode(now: Date = new Date()): string {
 }
 
 /**
- * 网关密钥（明文，只在内存里）。
+ * 取网关密钥（明文，只在内存里）。
  *
- * 真实网关需要 `secret_enc` 解密 —— 那一步（AES-GCM + `PAYMENT_SECRET_KEY`）
- * 还没做，所以这里先返回 `null`，调用方据此明确拒绝（而不是静默用空密钥去签名）。
+ * - `mock`：派生自 `SESSION_SECRET`；
+ * - 其它：解密 `secret_enc`。解不开（没配主密钥 / 换过主密钥 / 密文被改）→ `null`，
+ *   调用方必须明确报错，**不能**拿空密钥去签名（那样会静默签错）。
  */
-export function gatewaySecret(env: Env, driver: string): string | null {
-  if (driver === MOCK_DRIVER) return mockSecret(env);
-  return null;
+export async function gatewaySecret(
+  env: Env,
+  gw: { driver: string; secret_enc: string | null },
+): Promise<string | null> {
+  if (gw.driver === MOCK_DRIVER) return mockSecret(env);
+  return decryptSecret(env, gw.secret_enc);
 }
 
 export interface CreateChargeInput {
@@ -51,6 +56,8 @@ export interface CreateChargeInput {
   origin: string;
   clientIp?: string;
   now?: Date;
+  /** 仅测试注入：默认用全局 fetch */
+  fetch?: typeof fetch;
 }
 
 export type CreateChargeResult =
@@ -117,16 +124,17 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   if (route.gateway.driver === MOCK_DRIVER) {
     payUrl = `${origin}/pay/mock/${orderCode}`;
   } else {
-    const secret = gatewaySecret(env, route.gateway.driver);
+    const secret = await gatewaySecret(env, route.gateway);
     if (!secret) {
-      // 密钥加密还没做 ⇒ 明确拒绝，不拿空密钥去签名（那样会静默签错）
+      // 密钥解不开 ⇒ 明确拒绝，不拿空密钥去签名
       return {
         ok: false,
         status: 501,
         code: "gateway_not_ready",
-        message: "真实网关的自动下单尚未开放（需要先完成密钥加密）",
+        message: "网关密钥不可用（未配置 PAYMENT_SECRET_KEY 或密文无法解密）",
       };
     }
+    const doFetch = input.fetch ?? fetch;
     const req = buildCreateRequest(mapping, {
       merchant: route.gateway.merchant_id ?? "",
       secret,
@@ -144,7 +152,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
 
     let text = "";
     try {
-      const res = await fetch(req.url, {
+      const res = await doFetch(req.url, {
         method: req.method,
         headers: req.headers,
         body: req.body,

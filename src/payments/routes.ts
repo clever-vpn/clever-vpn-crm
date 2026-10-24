@@ -74,7 +74,8 @@ export async function handlePayRoutes(request: Request, env: Env): Promise<Respo
 
   const notify = NOTIFY_RE.exec(path);
   if (notify) {
-    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    // 不限制 GET/POST：易支付族用 **GET** 回调，青蛙系用 POST JSON
+    // （由 `mapping.notify.method` 决定从哪里取参数）
     return handlePayNotify(env, request, notify[1] ?? "");
   }
 

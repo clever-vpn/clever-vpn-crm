@@ -10,7 +10,14 @@ import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { sha256Hex } from "../../src/admin/crypto";
+import { createCharge } from "../../src/payments/checkout";
+import { handlePayNotify } from "../../src/payments/notify";
+import { EPAY_V1_MAPPING } from "../../src/payments/builtin/epay";
+import { encryptSecret } from "../../src/payments/secret";
+import { signParams } from "../../src/payments/sign";
 import { env } from "./apply-migrations";
+
+import type { Plan } from "../../src/plans/model";
 
 const BASE = "https://crm.test";
 const PAYER = "payer@test.com";
@@ -225,5 +232,190 @@ describe("mock 支付全链路", () => {
       .bind(order.order_code)
       .first<{ status: string }>();
     expect(row?.status).toBe("pending");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// 真实网关（epay_v1）：证明"解密 → 签名 → 下单 → 回调 → 查单"整条路径可用
+// 出网请求用 stub 替代（测试环境不联外网）
+// ─────────────────────────────────────────────────────────────
+
+describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
+  const EPAY_KEY = "epay-secret-xyz";
+  const EPAY_MERCHANT = "M9";
+  const EPAY_PAYER = "epay@test.com";
+  const EPAY_TOKEN = "test-session-token-epay";
+  let gatewayId = 0;
+  let customerId = 0;
+
+  const plan: Plan = {
+    id: "pay_plan_30d",
+    name: "月付 · 测试",
+    kind: "period",
+    price_minor: 1500,
+    currency: "CNY",
+    licence_limit: 1,
+    term_days: 30,
+    monthly_quota_gb: 100,
+    traffic_gb: null,
+    validity_days: null,
+    allow_addons: false,
+    line_ids: [],
+    up_mbps: null,
+    down_mbps: null,
+    sales_channels: [{ channel: "web_checkout", methods: ["alipay"] }],
+    store_product_id: {},
+    sort_order: 1,
+    status: "active",
+    retired_at: null,
+  };
+
+  beforeAll(async () => {
+    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "master-key-for-tests";
+    const cipher = await encryptSecret(env, EPAY_KEY);
+    expect(cipher).toMatch(/^v1:/);
+
+    const res = await env.DB.prepare(
+      `INSERT INTO payment_gateways (driver, name, endpoint, merchant_id, secret_enc, methods,
+         mapping, priority, status, currency, allowed_emails, created_at, updated_at)
+       VALUES ('epay_v1', '易支付-测试', 'https://pay.example.com', ?, ?, '["alipay"]',
+         NULL, 500, 'live', 'CNY', ?, ?, ?)`,
+    )
+      .bind(EPAY_MERCHANT, cipher, JSON.stringify([EPAY_PAYER]), now(), now())
+      .run();
+    gatewayId = Number(res.meta.last_row_id ?? 0);
+
+    customerId = await seedCustomer(EPAY_PAYER, EPAY_TOKEN);
+  });
+
+  it("没有主密钥时明确拒绝，不拿空密钥去签名", async () => {
+    const saved = (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY;
+    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "";
+    const r = await createCharge(env, {
+      customerId,
+      customerEmail: EPAY_PAYER,
+      plan,
+      method: "alipay",
+      origin: BASE,
+    });
+    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = saved;
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("gateway_not_ready");
+  });
+
+  it("下单：请求带正确签名，pay_url 取自网关响应", async () => {
+    let sent = "";
+    let sentUrl = "";
+    const stub = (async (url: string, init: RequestInit) => {
+      sentUrl = url;
+      sent = String(init.body ?? "");
+      return new Response(JSON.stringify({ code: 1, payurl: "https://cashier.example.com/p/1", trade_no: "T1" }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const r = await createCharge(
+      env,
+      { customerId, customerEmail: EPAY_PAYER, plan, method: "alipay", origin: BASE, fetch: stub },
+      );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    expect(sentUrl).toBe("https://pay.example.com/mapi.php");
+    const body = new URLSearchParams(sent);
+    expect(body.get("pid")).toBe(EPAY_MERCHANT);
+    expect(body.get("money")).toBe("15.00");
+    expect(body.get("type")).toBe("alipay");
+    // 签名用解密出来的密钥（而不是密文）
+    expect(body.get("sign")).toBe(signParams(Object.fromEntries(body), EPAY_KEY, EPAY_V1_MAPPING.sign!));
+
+    const row = await env.DB.prepare(
+      `SELECT pay_url, provider_order_no, status, gateway_id FROM orders WHERE code = ?`,
+    )
+      .bind(r.orderCode)
+      .first<{ pay_url: string; provider_order_no: string; status: string; gateway_id: number }>();
+    expect(row).toMatchObject({
+      pay_url: "https://cashier.example.com/p/1",
+      provider_order_no: r.orderCode,
+      status: "pending",
+      gateway_id: gatewayId,
+    });
+  });
+
+  it("回调：签名对但**查单说未付** ⇒ 不认账（回调只是触发器）", async () => {
+    const r = await createCharge(env, {
+      customerId, customerEmail: EPAY_PAYER, plan, method: "alipay", origin: BASE,
+      fetch: (async () =>
+        new Response(JSON.stringify({ code: 1, payurl: "https://cashier.example.com/p/2", trade_no: "T2" }), {
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const params: Record<string, string> = {
+      pid: EPAY_MERCHANT,
+      trade_no: "T3",
+      out_trade_no: r.orderCode,
+      type: "alipay",
+      money: "15.00",
+      trade_status: "TRADE_SUCCESS",
+    };
+    params.sign = signParams(params, EPAY_KEY, EPAY_V1_MAPPING.sign!);
+    params.sign_type = "MD5";
+
+    const req = new Request(`${BASE}/api/pay/notify/${gatewayId}?${new URLSearchParams(params)}`);
+    const queryStub = (async () =>
+      new Response(JSON.stringify({ code: 1, status: 0, money: "15.00" }), {
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const res = await handlePayNotify(env, req, String(gatewayId), { fetch: queryStub });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("success"); // 应答要逐字一致，否则对方一直重发
+
+    const row = await env.DB.prepare(`SELECT status FROM orders WHERE code = ?`)
+      .bind(r.orderCode)
+      .first<{ status: string }>();
+    expect(row?.status).toBe("pending");
+  });
+
+  it("回调：查单说已付 ⇒ 认账并发权益", async () => {
+    const r = await createCharge(env, {
+      customerId, customerEmail: EPAY_PAYER, plan, method: "alipay", origin: BASE,
+      fetch: (async () =>
+        new Response(JSON.stringify({ code: 1, payurl: "https://cashier.example.com/p/3", trade_no: "T4" }), {
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const params: Record<string, string> = {
+      pid: EPAY_MERCHANT,
+      trade_no: "T5",
+      out_trade_no: r.orderCode,
+      type: "alipay",
+      money: "15.00",
+      trade_status: "TRADE_SUCCESS",
+    };
+    params.sign = signParams(params, EPAY_KEY, EPAY_V1_MAPPING.sign!);
+    params.sign_type = "MD5";
+
+    const req = new Request(`${BASE}/api/pay/notify/${gatewayId}?${new URLSearchParams(params)}`);
+    const queryStub = (async () =>
+      new Response(JSON.stringify({ code: 1, status: 1, money: "15.00" }), {
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const res = await handlePayNotify(env, req, String(gatewayId), { fetch: queryStub });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("success");
+
+    const row = await env.DB.prepare(`SELECT status, subscription_id FROM orders WHERE code = ?`)
+      .bind(r.orderCode)
+      .first<{ status: string; subscription_id: number | null }>();
+    expect(row?.status).toBe("active");
+    expect(row?.subscription_id).toBeGreaterThan(0);
   });
 });

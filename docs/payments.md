@@ -398,10 +398,30 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 
 ## 7. 安全
 
-- 密钥存 `secret_enc`（AES-GCM，主密钥在 Worker secret `PAYMENT_SECRET_KEY`）；
-  明文密钥**不入库、不进日志、不进任何 API 响应**。
-- 回调必须验签；验签失败一律拒绝并记审计，**绝不发货**。
-- 金额三处核对：下单时 / 回调时 / 查单时，与 `orders.amount_minor` 比对。
+### 7.1 密钥怎么存
+
+商户密钥存 `payment_gateways.secret_enc`，**不留明文**：
+
+```
+v1:<base64(iv(12B) || AES-GCM 密文+tag)>
+```
+
+- 主密钥来自 Worker secret **`PAYMENT_SECRET_KEY`**（任意长度口令，内部 SHA-256
+  归一到 32 字节，不用记“必须 32 位”）；
+- **没配主密钥就不允许用真实网关**：下单/回调会明确返回 `gateway_not_ready`，
+  而不是退化存明文；
+- 密文自带 `v1:` 版本前缀，将来换算法可以双读（`v2:` 新写、`v1:` 仍能解）；
+- AES-GCM 是**认证加密**：密文改一个字节就解不开，换主密钥也解不开 —— 两种情况
+  都是 `null`，绝不返回半截明文。
+
+为什么必须加密：D1 的常规运维动作是 `wrangler d1 export`（备份/迁移/排障），
+明文入库等于**每次备份都在泄露商户密钥**。
+
+### 7.2 其它的线
+
+- 回调必须验签；验签失败一律拒绝并记 `last_error`，**绝不发货**。
+- 金额核对：回调金额必须等于 `orders.amount_minor`，不等则 400 + 告警；
+  有查单接口的网关还要再查一次单，**验签通过但查单说未付 → 不认账**。
 - 不存任何卡信息；PayPal / Stripe 走各自的托管收银台。
 
 ## 8. 进度
@@ -417,17 +437,17 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
    `POST /api/app/v1/orders`、`/pay/mock/:code` 演示页、`POST /api/pay/notify/:gatewayId`
    （所有网关共用的回调入口）、订单 `pending → active` + 订阅发放
 7. 闸门集中在 `src/payments/gateways.ts`（status / methods / 白名单 / 环境开关）
+8. **密钥加密**：`src/payments/secret.ts`（AES-GCM + `PAYMENT_SECRET_KEY`，`v1:` 前缀）
+   —— 真实网关的 epay 路径已用加密密钥跑通（下单签名、回调验签、查单复核）
 
 待做：
 
-1. 密钥加密（`secret_enc`，AES-GCM + `PAYMENT_SECRET_KEY`）—— **真实网关自动下单/回调
-   的前置**：在那之前，非 mock 网关会明确返回 `gateway_not_ready`
-2. 网关配置的后台表单 + 「高级：覆盖映射」入口
-3. 真实网关的 ¥1 测试支付（`draft → live` 闸门）
-4. cron 兜底扫 `pending`（`expires_at` 过期 + `hasQuery` 的网关才查单）
-5. `stripe` / `paypal` 薄 driver
-6. AI 生成映射草稿
-7. 退款走网关（`refunds.channel_refund_id`）
+1. 网关配置的后台表单（含“设置密钥”）+ 「高级：覆盖映射」入口
+2. 真实网关的 ¥1 测试支付（`draft → live` 闸门）
+3. cron 兜底扫 `pending`（`expires_at` 过期 + `hasQuery` 的网关才查单）
+4. `stripe` / `paypal` 薄 driver
+5. AI 生成映射草稿
+6. 退款走网关（`refunds.channel_refund_id`）
 
 ## 9. 参考
 
