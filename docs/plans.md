@@ -1,6 +1,6 @@
-# 套餐模型与换购规则
+# 套餐模型：续订与升级规则
 
-Last updated: 2026-10-23
+Last updated: 2026-10-24
 
 > 权威契约在 [`clever-vpn-docs` `app-crm.md` §2.4.7 / §2.4.8](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/app-crm.md)。
 > 本文只讲**本仓库怎么实现**，不复制契约正文。
@@ -33,19 +33,22 @@ Last updated: 2026-10-23
 
 ## 2. 一个用户同时只有一个主订阅
 
-| 当前状态 | 买 `period` | 买 `traffic` | 买 `addon` |
+订阅只有**一行**（`UNIQUE(customer_id)`，见 `domain.md` §1.2）。有了主订阅之后，能做的
+只剩下**续订**和**升级**：
+
+| 当前状态 | 买同一个套餐 | 买**任何**其它套餐 | 买 `addon` |
 |---|---|---|---|
-| 无主订阅 / 已到期 / 流量用尽 | ✅ | ✅ | ❌ |
-| `period` 生效中 | ✅ 续费或升档 | ❌ | ✅（`allow_addons` 且非不限量） |
-| `traffic` 生效中 | ❌ | ✅ 换更大包 | ❌ |
+| 无主订阅 / 已到期 | 新购 | 新购 | ❌ |
+| 生效中（`period` / `traffic`） | **续订**（全款、顺延） | **升级**（残值抵扣） | 仅 `period`（`allow_addons` 且非不限量） |
 
-- **不支持降档**：换购后应付 < 0 一律拒绝（否则等于返现）。
-- **不跨 `kind` 换购**：想要另一种，等当前订阅结束再买。
-- 同档续费也走换购 —— 残值直接抵扣，等于「提前续费不亏」，不需要单独的续费规则。
+- **续订不选计划**：App 上就一个“续订 ¥X / N 天”按钮，用户不用挑。
+- **升级可以跨 `kind`**（周期 ⇄ 流量都行），唯一门槛是
+  `应付 = 新价 − 残值` 必须 **> 0**。这一条同时挡住了降档（应付 ≤ 0）与 0 元白拿。
+- **加购包不折钱**：`addon` 是纯 GB 余额，升级时原样搬到新订阅。
 
-## 3. 残值换购（唯一升级规则）
+## 3. 残值换购（**只用于升级**）
 
-$$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应付} = \text{新套餐价} - \text{残值}$$
+$$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应付} = \text{新套餐价} - \text{残值} > 0$$
 
 | `kind` | 剩余比例 | 精度 |
 |---|---|---|
@@ -53,9 +56,12 @@ $$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应�
 | `traffic` | `剩余 GB / traffic_gb` | 按 GB |
 
 - **实付价**，不是目录价（促销价买的不按原价折）。用目录价折算会被促销套利。
-- 新订阅**从今天起算**，剩余时间不叠加。
-- 加购包余额**原样搬过去**，不折算。
-- 商店通道（`apple_iap` / `google_play`）的升级由商店自己做 proration，不参与残值换购。
+- **续订不走残值**：续订是“按当前计划再来一份”，付全款，
+  `到期日 = max(现在, 原到期日) + 期限`。用户不亏（时间照加），但也不残值抵扣 ——
+  两种口径只能选一个，我们选“一眼能看懂的顺延”。
+- **升级时新订阅从今天起算**：旧的剩余时间 / 流量已经折成钱，不再叠加。
+- **加购包余额原样搬过去**，不折算（它是 GB，不是钱）。
+- 商店通道（`apple_iap` / `google_play`）的升级由商店自己做 proration，不参与残值抵扣。
 
 实现：`src/plans/quote.ts`（纯函数，39 个单测在 `test/plans.test.ts`）。
 
@@ -77,7 +83,7 @@ plans (id, name, kind, price_minor, currency, licence_limit,
   与订阅行上的权益列。`plan_id` 因此**长期稳定**，收入统计可以直接 `GROUP BY plan_id`。
 - `id` 不可改（订单与订阅都指着它）；`status` / `retired_at` 只能由 `publish` / `retire` 改，
   不能用一次 `PATCH` 绕过状态机。
-- `retire` **只断绝「还能再卖」**，不会让老用户掉线，也不影响他们换购（换购报价读订阅快照）。
+- `retire` **只断绝「还能再卖」**，不会让老用户掉线，也不影响他们升级（升级报价读订阅快照）。
 - `line_ids`：空数组 = 不限线路。它只是**展示层过滤**（App 与 `/api/v3/key-lines` 取交集），
   不是权限边界——真要做「这个套餐不能连那条线路」得改 cf-api。
 
@@ -137,7 +143,7 @@ plans (id, name, kind, price_minor, currency, licence_limit,
 | PATCH | `/api/admin/plans/:id` | 修改（**任何状态**；不能改 `id`/`status`） |
 | POST | `/api/admin/plans/:id/publish` | 发布（`draft` → `active`） |
 | POST | `/api/admin/plans/:id/retire` | 下架（→ `retired`，只影响能否再卖） |
-| POST | `/api/admin/plans/preview` | **干跑**：返回落账控制参数 + 换购报价，不写库 |
+| POST | `/api/admin/plans/preview` | **干跑**：返回落账控制参数 + 升级报价，不写库 |
 
 `preview` 调的是服务端同一份计算，用来回答「这个套餐发布后，用户实际被写成什么」。
 
@@ -171,7 +177,7 @@ $$R = P + B, \qquad B' = \min(B, R), \qquad R' = P + B'$$
 ## 8. 待办
 
 - [ ] 对外 `POST /api/app/v1/upgrade/quote`（复用 `quotePurchase()`）
-- [ ] 下单/换购时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数 + 存 `platform_customer_id`/`code`）
+- [ ] 下单 / 续订 / 升级时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数 + 存 `platform_customer_id`/`code`）
 - [ ] App 端登录（邮箱验证码 + `session_token`）与 `/plans`（带 `purchasable`/`reason`）
 - [ ] 读 cf-api `lines` 填充线路选择器
 - [ ] 支付（网页收银台 + 商店内购）
