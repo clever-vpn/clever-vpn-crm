@@ -219,18 +219,29 @@ describe("quotePurchase", () => {
     expect(q.expires_at).toBe("2026-11-22T00:00:00.000Z");
   });
 
-  it("续费（同档）：残值抵扣，只需补差价", () => {
+  it("续订（同档）：全款、顺延、不抵扣残值", () => {
     const q = quotePurchase(makeCurrent({ expires_at: "2026-11-07T00:00:00Z" }), makePlan(), NOW);
     expect(q.allowed).toBe(true);
-    expect(q.settlement).toBe("residual_trade_in");
-    expect(q.residual_minor).toBe(750);
-    expect(q.payable_minor).toBe(750);
+    expect(q.action).toBe("renewal");
+    expect(q.settlement).toBe("renewal");
+    expect(q.residual_minor).toBe(0);
+    expect(q.payable_minor).toBe(1500); // 全款
+    // 从原到期日再往后 30 天，不是从今天起算
+    expect(q.expires_at).toBe("2026-12-07T00:00:00.000Z");
   });
 
   it("升档：应付 = 新价 − 残值", () => {
     const target = makePlan({ id: "p_30d_200g_3d", price_minor: 4000, monthly_quota_gb: 200, licence_limit: 3 });
     const q = quotePurchase(makeCurrent({ expires_at: "2026-11-07T00:00:00Z" }), target, NOW);
     expect(q.payable_minor).toBe(3250);
+  });
+
+  it("残值刚好抵满新价（应付 = 0）也要拒绝：不给 0 元单开后门", () => {
+    const target = makePlan({ id: "p_exact", price_minor: 750 });
+    const q = quotePurchase(makeCurrent({ expires_at: "2026-11-15T00:00:00Z" }), target, NOW);
+    expect(q.allowed).toBe(false);
+    expect(q.action).toBe("blocked");
+    expect(q.payable_minor).toBeNull();
   });
 
   it("降档：应付 < 0 → 拒绝，且给出可展示的原因", () => {
@@ -241,11 +252,21 @@ describe("quotePurchase", () => {
     expect(q.payable_minor).toBeNull();
   });
 
-  it("周期生效中不能换成流量包", () => {
-    const target = makePlan({ kind: "traffic", term_days: null, monthly_quota_gb: null, traffic_gb: 200 });
-    const q = quotePurchase(makeCurrent(), target, NOW);
-    expect(q.allowed).toBe(false);
-    expect(q.reason).toContain("流量套餐");
+  it("周期生效中可以**升级**成流量包（跨 kind 允许，残值抵扣）", () => {
+    const target = makePlan({
+      id: "p_traffic_200g",
+      kind: "traffic",
+      term_days: null,
+      monthly_quota_gb: null,
+      traffic_gb: 200,
+    });
+    const q = quotePurchase(makeCurrent({ expires_at: "2026-11-15T00:00:00Z" }), target, NOW);
+    expect(q.allowed).toBe(true);
+    expect(q.action).toBe("upgrade");
+    expect(q.settlement).toBe("residual_trade_in");
+    // 还剩 23 天 / 30 天 ⇒ 残值 1150，付差价 350
+    expect(q.residual_minor).toBe(1150);
+    expect(q.payable_minor).toBe(350);
   });
 
   it("到期之后可以买流量包（视为新购）", () => {
@@ -265,9 +286,17 @@ describe("quotePurchase", () => {
 
   it("流量生效中换更大包：残值抵扣", () => {
     const current = makeCurrent({ kind: "traffic", term_days: null, traffic_gb: 200, remaining_gb: 100, expires_at: null });
-    const target = makePlan({ kind: "traffic", term_days: null, monthly_quota_gb: null, traffic_gb: 400, price_minor: 2500 });
+    const target = makePlan({
+      id: "p_traffic_400g",
+      kind: "traffic",
+      term_days: null,
+      monthly_quota_gb: null,
+      traffic_gb: 400,
+      price_minor: 2500,
+    });
     const q = quotePurchase(current, target, NOW);
     expect(q.allowed).toBe(true);
+    expect(q.action).toBe("upgrade");
     expect(q.residual_minor).toBe(750);
     expect(q.payable_minor).toBe(1750);
     expect(q.expires_at).toBeNull();

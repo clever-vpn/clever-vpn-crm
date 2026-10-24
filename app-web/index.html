@@ -70,17 +70,29 @@
   </section>
 
   <section class="card" id="plans-card" hidden>
-    <h2>2 · 套餐（<code>purchasable</code> / <code>reason</code> 全部由 CRM 给）</h2>
+    <h2>2 · 套餐（<code>action</code> / <code>payable_minor</code> 全部由 CRM 给，App 不做判断）</h2>
+    <div class="row" style="margin-bottom:10px">
+      <label class="hint">支付方式 <select id="method"></select></label>
+    </div>
     <div id="plans" class="plans"></div>
   </section>
 
+  <section class="card" id="pay-card" hidden>
+    <h2>3 · 支付</h2>
+    <div id="pay-info"></div>
+    <div class="row" style="margin-top:10px">
+      <button id="open-pay">打开支付页</button>
+      <button id="refresh-me" class="ghost">我已支付，刷新状态</button>
+    </div>
+  </section>
+
   <section class="card" id="quote-card" hidden>
-    <h2>3 · 换购报价 <code>POST /upgrade/quote</code></h2>
+    <h2>4 · 报价明细 <code>POST /upgrade/quote</code></h2>
     <pre id="quote"></pre>
   </section>
 
   <section class="card" id="me-card" hidden>
-    <h2>4 · 当前状态</h2>
+    <h2>5 · 当前状态</h2>
     <dl id="me" class="kv"></dl>
     <p class="hint" style="margin:10px 0 0">session_token 存在 sessionStorage，刷新页面即失效（模拟 App 每次启动登录）。</p>
   </section>
@@ -111,6 +123,33 @@ async function call(method, path, body) {
 }
 
 const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
+/** 四种动作的按钮文案：全部由 CRM 的 action 决定 */
+const ACTION = { buy: '购买', renewal: '续订', upgrade: '升级', addon: '加购', blocked: '不可购买' };
+
+async function loadMethods() {
+  const items = await call('GET', '/payment-methods');
+  const sel = $('method');
+  sel.innerHTML = items.map((m) => `<option value="${m.method}">${m.label}</option>`).join('');
+  if (!items.length) sel.innerHTML = '<option value="">（无可用支付方式）</option>';
+}
+
+async function buy(plan) {
+  if (!plan) return;
+  flash('', '');
+  const method = $('method').value;
+  if (!method) return flash('err', '没有可用的支付方式');
+  try {
+    const r = await call('POST', '/orders', { plan_id: plan.plan_id, payment_method: method });
+    state.payUrl = r.pay_url;
+    show('pay-card', true);
+    $('pay-info').innerHTML = `<dl class="kv">
+      <dt>动作</dt><dd>${ACTION[plan.action] ?? '购买'}</dd>
+      <dt>订单号</dt><dd>${r.order_code}</dd>
+      <dt>应付</dt><dd>${yuan(r.amount_minor)}</dd>
+      <dt>说明</dt><dd>${r.reused ? '复用了 60 秒内的未支付单（防双击）' : '新建订单'}</dd>
+    </dl>`;
+  } catch (e) { flash('err', e.message); }
+}
 const kindName = { period: '周期套餐', traffic: '流量套餐', addon: '加购包' };
 const quotaText = (p) =>
   p.kind === 'period'
@@ -135,13 +174,26 @@ function renderPlans(plans) {
         <span class="badge">${p.kind === 'period' ? p.term_days + ' 天' : (p.validity_days ? p.validity_days + ' 天' : '永久')}</span>
         <span class="badge">${p.licence_limit} 台设备</span>
       </div>
-      <div class="meta">${p.purchasable ? '可购买' : '不可购买：' + (p.reason ?? '')}</div>
-      ${p.purchasable ? `<div class="row"><button class="ghost" data-plan="${p.plan_id}">查看换购报价</button></div>` : ''}
+      <div class="meta">${p.purchasable
+        ? `${ACTION[p.action] ?? '购买'} · 应付 ${yuan(p.payable_minor)}` +
+          (p.action === 'renewal' && p.next_expires_at ? ` · 续订后有效期至 ${p.next_expires_at.slice(0, 10)}` : '') +
+          (p.action === 'upgrade' && p.residual_minor ? ` · 已抵残值 ${yuan(p.residual_minor)}` : '')
+        : '不可购买：' + (p.reason ?? '')}</div>
+      ${p.purchasable
+        ? `<div class="row" style="gap:8px">
+             <button data-buy="${p.plan_id}">${ACTION[p.action] ?? '购买'}</button>
+             <button class="ghost" data-plan="${p.plan_id}">查看报价</button>
+           </div>`
+        : ''}
     `;
     box.appendChild(el);
   }
   box.querySelectorAll('button[data-plan]').forEach((btn) => {
     btn.addEventListener('click', () => quote(btn.dataset.plan));
+  });
+  box.querySelectorAll('button[data-buy]').forEach((btn) => {
+    const plan = plans.find((p) => p.plan_id === btn.dataset.buy);
+    btn.addEventListener('click', () => buy(plan));
   });
 }
 
@@ -174,6 +226,7 @@ async function loadMe() {
     const plans = await call('GET', '/plans');
     show('plans-card', true);
     renderPlans(plans);
+    await loadMethods().catch(() => {});
   } catch (e) {
     flash('err', e.message);
     if (/unauthorized/i.test(e.message) || /401/.test(e.message)) doLogout();
@@ -224,6 +277,14 @@ $('verify').addEventListener('click', async () => {
   } catch (e) {
     flash('err', e.message);
   }
+});
+
+$('open-pay').addEventListener('click', () => {
+  if (state.payUrl) window.open(state.payUrl, '_blank');
+});
+$('refresh-me').addEventListener('click', async () => {
+  flash('ok', '已刷新（支付完成的话订阅会变长）');
+  await loadMe();
 });
 
 $('logout').addEventListener('click', async () => {

@@ -1,15 +1,19 @@
 /**
- * 换购报价 —— **唯一的升级规则**（`app-crm.md` §2.4.8）
+ * 报价 —— **用户能看到的所有结论都从这里出**（`docs/plans.md` §2 / §3）
  *
- *   残值 = 实付价 × 剩余比例
- *   应付 = 新套餐价 − 残值
+ * 四种动作，App 不判断，只按 `action` 渲染按钮：
  *
- * 三条硬规则，全部在这里表达，App 里不许出现：
- *   1. 同时只有一个主订阅；不跨 `kind` 换购（周期 ⇄ 流量要等当前结束）；
- *   2. 不支持降档：应付 < 0 一律拒绝（否则等于给用户返现）；
- *   3. 残值按**实付价**算（促销价买的不按目录价折），period 按小时、traffic 按 GB。
+ *   buy     没有订阅 / 已结束 → 目录价，从今天起算
+ *   renewal 同一个套餐再来一份 → **目录价全款**，到期日顺延（不走残值）
+ *   upgrade 换成任何其它套餐（含跨 kind）→ 新价 − 残值，**必须 > 0**
+ *   addon   往周期套餐上加流量包 → 目录价，不动到期日
  *
- * 为什么把时间放在这里而不是 cf-api：平台只认"到期日 + 余额"这两个数，
+ * 两条硬规则：
+ *   1. 应付必须 > 0：这一条同时挡住了降档（应付 ≤ 0）和 0 元白拿；
+ *   2. 残值按**实付价**算（促销价不按目录价折），period 按小时、traffic 按 GB。
+ *
+ * "降级"不是动作，是 upgrade 被拒的一个分支。
+ * 为什么把时间放在这里而不是 cf-api：平台只认"到期日 + 余额"，
  * 怎么从"还剩多少价值"推导出新订单，是纯粹的商业逻辑，属于 CRM。
  */
 
@@ -36,12 +40,16 @@ export interface CurrentSubscription {
   allow_addons: boolean;
 }
 
-export type Settlement = "new" | "residual_trade_in" | "store_proration";
+export type Settlement = "new" | "renewal" | "residual_trade_in" | "store_proration";
+
+/** 给 App 直接照着渲染的动作；`blocked` = 不能买，`reason` 说明为什么 */
+export type QuoteAction = "buy" | "renewal" | "upgrade" | "addon" | "blocked";
 
 export interface Quote {
   allowed: boolean;
   /** `allowed === false` 时必填：直接给终端用户看的整句中文 */
   reason: string | null;
+  action: QuoteAction;
   settlement: Settlement;
   residual_minor: number | null;
   payable_minor: number | null;
@@ -58,6 +66,7 @@ function reject(reason: string): Quote {
   return {
     allowed: false,
     reason,
+    action: "blocked",
     settlement: "new",
     residual_minor: null,
     payable_minor: null,
@@ -112,6 +121,7 @@ export function quotePurchase(current: CurrentSubscription | null, target: Plan,
     return {
       allowed: true,
       reason: null,
+      action: "buy",
       settlement: "new",
       residual_minor: 0,
       payable_minor: target.price_minor,
@@ -131,6 +141,7 @@ export function quotePurchase(current: CurrentSubscription | null, target: Plan,
     return {
       allowed: true,
       reason: null,
+      action: "addon",
       settlement: "new",
       residual_minor: 0,
       payable_minor: target.price_minor,
@@ -139,24 +150,47 @@ export function quotePurchase(current: CurrentSubscription | null, target: Plan,
     };
   }
 
-  // ── 主订阅换购 ──
-  if (target.kind !== current.kind) {
-    return reject(
-      current.kind === "period"
-        ? "周期套餐到期前不能换成流量套餐"
-        : "流量套餐用尽前不能换成周期套餐",
-    );
+  // ── 续订：同一个套餐再来一份（**全款**，不走残值，到期日顺延）──
+  if (target.id === current.plan_id && target.kind === current.kind) {
+    const base = Math.max(now.getTime(), current.expires_at ? Date.parse(current.expires_at) : 0);
+    const expires =
+      target.kind === "period"
+        ? new Date(base + (target.term_days ?? 0) * DAY_MS).toISOString()
+        : target.validity_days === null
+          ? current.expires_at === null
+            ? null
+            : new Date(base).toISOString()
+          : new Date(base + target.validity_days * DAY_MS).toISOString();
+    return {
+      allowed: true,
+      reason: null,
+      action: "renewal",
+      settlement: "renewal",
+      residual_minor: 0,
+      payable_minor: target.price_minor,
+      expires_at: expires,
+      remaining_hours: current.kind === "period" && current.expires_at
+        ? Math.max(0, Math.round((Date.parse(current.expires_at) - now.getTime()) / HOUR_MS))
+        : undefined,
+    };
   }
 
+  // ── 升级：换成任何其它套餐（**可以跨 kind**）──
+  //    唯一的门槛是应付必须 > 0：一条规则同时挡住降档和 0 元白拿。
   const residual = residualMinor(current, now);
   const payable = target.price_minor - residual;
-  if (payable < 0) {
-    return reject(`不支持降档：当前订阅残值 ${(residual / 100).toFixed(2)} 已超过新套餐价格`);
+  if (payable <= 0) {
+    return reject(
+      residual >= target.price_minor
+        ? `降档请等到期：当前订阅残值 ${(residual / 100).toFixed(2)} 已抵满新套餐`
+        : "应付金额必须大于 0",
+    );
   }
 
   return {
     allowed: true,
     reason: null,
+    action: "upgrade",
     settlement: "residual_trade_in",
     residual_minor: residual,
     payable_minor: payable,
