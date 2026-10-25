@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, ApiError, type PromotionDraft, type PromotionKind, type PromotionView } from "../api";
 import { AUDIENCE_OPTIONS, PromotionForm, emptyDraft } from "./promotion/Form";
+import type { CodeMode } from "./promotion/Form";
 
 const PLAN_KINDS: { value: string; label: string }[] = [
   { value: "period", label: "周期套餐" },
@@ -63,10 +64,20 @@ function windowLabel(p: PromotionView): string {
   return `${d(p.starts_at)} → ${d(p.ends_at)}`;
 }
 
-/** 礼包「怎么送出去」：从人群与码推导，不让用户猜 */
+/**
+ * 「怎么送出去」：从 auto_apply / 码统计 / 人群 推导，不让用户猜。
+ *
+ * 码的形态由「每码可用几次」决定，不用再分"主码/批次码"两种概念：
+ *   1 个码 + 可用 N 次 = 共享码；N 个码 + 各 1 次 = 一人一码
+ */
 function deliveryLabel(p: PromotionView): string {
   const ways: string[] = [];
-  if (p.code) ways.push(`码 ${p.code}`);
+  const stats = p.code_stats;
+  if (stats && stats.codes > 0) {
+    if (stats.codes === 1) ways.push(`共享码（${stats.capacity ?? "不限"} 人）`);
+    else ways.push(`${stats.codes} 个码（一码一人）`);
+  }
+  if (p.auto_apply) ways.push("自动生效");
   if (p.audience === "new") ways.push("首单自动");
   if (p.audience === "expiring") ways.push("到期自动");
   ways.push("后台手动");
@@ -127,17 +138,36 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
     }
   }
 
-  async function save() {
+  async function save(codes: { mode: CodeMode; count: number }) {
     if (!draft) return;
-    const ok = await run(
-      () => (editingId === null ? api.createPromotion(draft) : api.updatePromotion(editingId, draft)),
-      editingId === null ? "已创建草稿（上线后才会生效）" : "已保存",
-    );
+
+    // 新建：先建活动拿到 id，再按选择生成码（码要挂在 promotions.id 上）
+    if (editingId === null) {
+      const ok = await run(async () => {
+        const created = await api.createPromotion(draft);
+        if (codes.mode !== "none" && codes.count > 0) {
+          // 共享码 = 1 个码 + 可用 N 次；一人一码 = N 个码 + 各 1 次
+          await api.generatePromotionCodes(created.promotion.id, {
+            count: codes.mode === "shared" ? 1 : codes.count,
+            max_uses: codes.mode === "shared" ? codes.count : 1,
+          });
+        }
+      }, codes.mode === "none" ? "已创建草稿（上线后才会生效）" : "已创建草稿并生成码（上线后生效）");
+      if (ok) {
+        setDraft(null);
+        setEditingId(null);
+      }
+      return;
+    }
+
+    const ok = await run(() => api.updatePromotion(editingId, draft), "已保存");
     if (ok) {
       setDraft(null);
       setEditingId(null);
     }
   }
+
+  const codeStatsOf = (id: number) => items.find((x) => x.id === id)?.code_stats ?? null;
 
   function edit(p: PromotionView) {
     const { id: _id, status: _s, uses: _u, ...rest } = p;
@@ -178,7 +208,7 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
               <thead>
                 <tr>
                   <th>名称</th>
-                  <th>{isGift ? "怎么送" : "生效方式"}</th>
+                  <th>怎么送</th>
                   <th>{isGift ? "送什么" : "力度"}</th>
                   <th>人群</th>
                   <th>范围</th>
@@ -195,13 +225,15 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
                       <strong>{p.name}</strong>
                       {p.badge_label ? <div className="mono">角标：{p.badge_label}</div> : null}
                     </td>
-                    <td className={p.code ? "mono" : ""}>{isGift ? deliveryLabel(p) : p.code ?? "自动生效"}</td>
+                    <td>{deliveryLabel(p)}</td>
                     <td>{isGift ? rewardsLabel(p.rewards) : benefitLabel(p)}</td>
                     <td>{audienceLabel(p)}</td>
                     <td>{scopeLabel(p)}</td>
                     <td>
-                      {p.uses ?? 0} / {p.max_uses ?? "不限"}
-                      <div className="mono">每人 {p.max_uses_per_customer} 次</div>
+                      {p.uses ?? 0} / {p.code_stats?.capacity ?? p.max_uses ?? "不限"}
+                      <div className="mono">
+                        {p.code_stats && p.code_stats.codes > 0 ? `${p.code_stats.codes} 个码` : "无码"}
+                      </div>
                     </td>
                     <td>{windowLabel(p)}</td>
                     <td>
@@ -296,6 +328,7 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
         <PromotionForm
           draft={draft}
           promotionId={editingId}
+          codeStats={editingId === null ? null : codeStatsOf(editingId)}
           busy={busy}
           isNew={editingId === null}
           onChange={setDraft}
@@ -304,6 +337,7 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
             setEditingId(null);
           }}
           onSave={save}
+          onCodesChanged={() => void reload()}
         />
       )}
     </div>

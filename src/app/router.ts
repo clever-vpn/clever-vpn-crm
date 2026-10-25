@@ -604,7 +604,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const plan = (await loadActivePlans(env)).find((p) => p.id === planId);
     if (!plan) return err(404, "not_found", "套餐不存在或已下架");
 
-    const promoCode = typeof body.promo_code === "string" ? body.promo_code.trim() : "";
+    // 码归一（大写）：响应里的 `applied_promotions[].code` 才是"实际用的那串"
+    const promoCode = typeof body.promo_code === "string" ? body.promo_code.trim().toUpperCase() : "";
     const { sub, current } = await currentContext(env, customer.id);
     const now = new Date();
     const quote = quotePurchase(current, plan, now);
@@ -631,7 +632,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
       discount_minor: promo.applied?.discount_minor ?? 0,
       discount_label: promo.applied?.label ?? null,
       applied_promotions: promo.applied
-        ? [{ code: promo.applied.promotion.code, label: promo.applied.promotion.name }]
+        ? [{ code: promoCode || null, label: promo.applied.promotion.name }]
         : [],
     };
 
@@ -693,7 +694,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
     if (!quote.allowed) return err(409, "not_purchasable", quote.reason ?? "当前不可购买");
 
     // ── 促销：下单时**重新校验**（不信任 /quote 的旧结论），支付成功才核销 ──
-    const promoCode = typeof body.promo_code === "string" ? body.promo_code.trim() : "";
+    // 码归一（大写）：响应里的 `applied_promotions[].code` 才是"实际用的那串"
+    const promoCode = typeof body.promo_code === "string" ? body.promo_code.trim().toUpperCase() : "";
     const entry = body.origin === "web" || body.origin === "app" ? body.origin : null;
     const promo = await resolvePromotion(env, {
       plan,

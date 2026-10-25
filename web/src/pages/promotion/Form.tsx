@@ -1,14 +1,16 @@
 /**
  * 促销编辑器（右侧抽屉）
  *
- * 为什么拆成三套字段，而不是"一张表按需灰掉"：
- *   优惠券（少收钱）、礼包（加权益）、邀请（建关系）是**三种不同的东西**。
- *   共用一张表时，礼包用户看到灰掉的「力度」「最低消费」，会以为程序坏了 ——
- *   正确做法是**不渲染不存在的字段**，而不是渲染后禁用。
+ * 三条设计原则：
  *
- * 抽屉（而不是列表下方的内联卡片）的原因：
- *   内联表单一长，用户必须滚到底才能找到「取消」；抽屉有固定的标题栏和底部条，
- *   `×` / ESC / 点遮罩 三个出口随时可用。
+ * 1. **按类型只渲染相关字段**。优惠券 / 礼包 / 邀请是三种不同的东西，
+ *    共用一张表时礼包用户会看到灰掉的「力度」，只会以为程序坏了。
+ *
+ * 2. **码不让用户看见、更不让手输**。码没有语义，人记不住也抄不对。
+ *    只管两件事：**发不发码**、**发几个 / 多少人可用**，码由系统生成。
+ *
+ * 3. **已经发出去的码 = 承诺**。编辑时实质字段锁死（服务端也会拒），
+ *    只留文案 / 人群 / 冷却 / 结束时间这些"不影响已发出的码"的字段。
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -31,18 +33,6 @@ const PLAN_KINDS: { value: PlanKind; label: string }[] = [
   { value: "addon", label: "加购包" },
 ];
 
-/** 去掉 I / O / 0 / 1：码要能被念出来、手抄下来 */
-const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-/** 生成一段无歧义的码（8 位 ≈ 1.1e12 组合，配合限流足够） */
-export function randomCode(length = 8): string {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let out = "";
-  for (const b of bytes) out += CODE_ALPHABET[b % CODE_ALPHABET.length];
-  return out;
-}
-
 const yuan = (minor: number): string => (minor / 100).toFixed(2);
 const toMinor = (text: string): number => Math.round((Number.parseFloat(text) || 0) * 100);
 const toIso = (local: string): string | null => (local ? new Date(local).toISOString() : null);
@@ -59,11 +49,26 @@ const TITLES: Record<PromotionKind, string> = {
   referral: "邀请活动",
 };
 
+/**
+ * 发码方式（契约 §2.9.7）。**先选类型，再填数字** —— 两种数字的含义不同：
+ *
+ *   shared  一个码，多少人可用（默认 100）
+ *   unique  一码一人，发多少个码（默认 1）
+ *   none    不发码
+ */
+export type CodeMode = "none" | "shared" | "unique";
+
+export const CODE_MODE_DEFAULTS: Record<CodeMode, number> = {
+  none: 0,
+  shared: 100,
+  unique: 1,
+};
+
 export function emptyDraft(kind: PromotionKind): PromotionDraft {
   return {
-    code: kind === "coupon" ? randomCode() : null,
     name: "",
     kind,
+    auto_apply: false,
     benefit_type: "amount",
     benefit_value: kind === "gift" ? 0 : 300,
     min_subtotal_minor: 0,
@@ -86,14 +91,30 @@ export function emptyDraft(kind: PromotionKind): PromotionDraft {
   };
 }
 
-// ── 小控件 ──
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+  locked,
+  lockReason,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+  locked?: boolean;
+  lockReason?: string;
+}) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, opacity: locked ? 0.75 : 1 }}>
       <span style={{ fontSize: 12, color: "var(--text-dim)" }}>{label}</span>
       {children}
-      {hint ? <small className="hint">{hint}</small> : null}
+      {locked && lockReason ? (
+        <small className="hint" style={{ color: "var(--warn, #b45309)" }}>
+          🔒 {lockReason}
+        </small>
+      ) : hint ? (
+        <small className="hint">{hint}</small>
+      ) : null}
     </label>
   );
 }
@@ -105,28 +126,49 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
         <h4 style={{ margin: 0 }}>{title}</h4>
         {hint ? <span className="hint">{hint}</span> : null}
       </div>
-      <div className="grid" style={{ margin: 0 }}>{children}</div>
+      <div className="grid" style={{ margin: 0 }}>
+        {children}
+      </div>
     </section>
   );
 }
 
 export interface PromotionFormProps {
   draft: PromotionDraft;
-  /** 已保存的活动 id；批量生成码必须有它（新建时是 null） */
+  /** 已保存的活动 id；新建时为 null */
   promotionId: number | null;
+  /** 已生成的码统计（编辑态）；null = 还没查 */
+  codeStats: { codes: number; active: number; capacity: number | null } | null;
   isNew: boolean;
   busy: boolean;
   onChange: (draft: PromotionDraft) => void;
   onClose: () => void;
-  onSave: () => Promise<void>;
+  /** 保存。`codes` 只在新建时有意义：创建后立刻按它生成码 */
+  onSave: (codes: { mode: CodeMode; count: number }) => Promise<void>;
+  /** 码发生变化（生成 / 作废）后通知外层刷新统计 */
+  onCodesChanged: () => void;
 }
 
-export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClose, onSave }: PromotionFormProps) {
+export function PromotionForm({
+  draft,
+  promotionId,
+  codeStats,
+  isNew,
+  busy,
+  onChange,
+  onClose,
+  onSave,
+  onCodesChanged,
+}: PromotionFormProps) {
   const [amountText, setAmountText] = useState(
     draft.benefit_type === "amount" ? yuan(draft.benefit_value) : String(draft.benefit_value),
   );
   const [minText, setMinText] = useState(yuan(draft.min_subtotal_minor));
   const [planIdsText, setPlanIdsText] = useState(draft.limit_plan_ids.join(", "));
+
+  // 新建时才有意义：发码方式 + 数量
+  const [codeMode, setCodeMode] = useState<CodeMode>("none");
+  const [codeCount, setCodeCount] = useState(CODE_MODE_DEFAULTS.shared);
 
   /**
    * 一次改多个字段必须走这个 ——
@@ -147,20 +189,21 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
   const isCoupon = draft.kind === "coupon";
   const isReferral = draft.kind === "referral";
 
-  /** 礼包的「怎么发出去」只读提示 —— 由人群与有没有码推导，不再让用户猜 */
+  /** 码一旦生成就不再允许改实质内容（服务端也会拒） */
+  const codesIssued = !isNew && (codeStats?.codes ?? 0) > 0;
+  const lockReason = "已经发出码了，改这个会让已发出的码变成新规则。要改请先作废这些码。";
+
   const deliveryHints: string[] = [];
   if (isGift) {
     deliveryHints.push("后台可以随时手动发给指定客户");
     if (draft.audience === "new") deliveryHints.push("新客首单开通后自动发");
     if (draft.audience === "expiring") deliveryHints.push(`到期前 ${draft.audience_days ?? 7} 天自动发`);
-    if (draft.code) deliveryHints.push("用户可凭兑换码自助领取");
-    if (deliveryHints.length === 1) deliveryHints.unshift("只在后台手动发放");
+    if (codesIssued) deliveryHints.push("用户可凭兑换码自助领取");
   }
 
   return (
     <div
       onClick={(ev) => {
-        // 点遮罩关闭（面板自己吞掉冒泡）
         if (ev.target === ev.currentTarget && !busy) onClose();
       }}
       style={{
@@ -183,7 +226,6 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
           boxShadow: "-8px 0 24px rgba(0,0,0,.18)",
         }}
       >
-        {/* 标题栏：× 随时可关 */}
         <div
           style={{
             display: "flex",
@@ -204,7 +246,6 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
           </button>
         </div>
 
-        {/* 内容区：只有这里滚动 */}
         <div style={{ flex: 1, overflowY: "auto", padding: "4px 18px 24px" }}>
           <Section title="基本信息">
             <Field label="名称（只有后台可见）">
@@ -216,46 +257,130 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
             </Field>
           </Section>
 
+          {/* ── 优惠券：怎么生效 ── */}
           {isCoupon && (
-            <Section title="怎么生效" hint="自动生效转化最好；凭码用于渠道投放与归因">
-              <Field label="生效方式">
+            <Section title="怎么生效">
+              <Field
+                label="生效方式"
+                hint={draft.auto_apply ? "用户不需要任何码，打开就看见" : "用户要在结账页输入码"}
+              >
                 <select
-                  value={draft.code ? "code" : "auto"}
-                  onChange={(e) => patch({ code: e.target.value === "code" ? randomCode() : null })}
+                  value={draft.auto_apply ? "auto" : "code"}
+                  disabled={codesIssued}
+                  onChange={(e) => patch({ auto_apply: e.target.value === "auto" })}
                 >
                   <option value="auto">自动生效（打开就看见，不用码）</option>
                   <option value="code">凭码使用（发到群 / 博主 / 官网）</option>
                 </select>
               </Field>
-              {draft.code !== null && (
-                <CodeField
-                  value={draft.code}
-                  onChange={(code) => patch({ code })}
-                  hint="发给用户的那串码；点「重新生成」换一个"
-                />
+            </Section>
+          )}
+
+          {/* ── 发码：先选类型，再填数字 ── */}
+          {!isReferral && (
+            <Section
+              title={isCoupon && draft.auto_apply ? "发码" : "发码方式"}
+              hint={isCoupon && draft.auto_apply ? "自动生效的券不需要码；也可以同时发码给渠道" : undefined}
+            >
+              {isNew ? (
+                <>
+                  <Field
+                    label="类型"
+                    hint={
+                      codeMode === "shared"
+                        ? "一个码，许多人可用（群里发一个码）"
+                        : codeMode === "unique"
+                          ? "一码一人，每人拿到自己的码（渠道 / 实体卡）"
+                          : "不发码，只能后台手动发 / 系统自动发"
+                    }
+                  >
+                    <select
+                      value={codeMode}
+                      onChange={(e) => {
+                        const mode = e.target.value as CodeMode;
+                        setCodeMode(mode);
+                        // 切换即重置：否则从"共享码 100"切到"一人一码"会变成发 100 个码
+                        setCodeCount(CODE_MODE_DEFAULTS[mode]);
+                      }}
+                    >
+                      <option value="none">不发码</option>
+                      <option value="shared">共享码（一个码，多少人可用）</option>
+                      <option value="unique">一人一码（发 N 个不同的码）</option>
+                    </select>
+                  </Field>
+
+                  {codeMode !== "none" && (
+                    <Field
+                      label={codeMode === "shared" ? "多少人可用" : "发多少个码"}
+                      hint={codeMode === "shared" ? "即这个码的名额上限" : "每个码只能用一次"}
+                    >
+                      <input
+                        value={codeCount}
+                        onChange={(e) => setCodeCount(Math.max(1, Number(e.target.value) || 1))}
+                      />
+                    </Field>
+                  )}
+                </>
+              ) : (
+                <Field label="已生成的码">
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span>
+                      {codeStats === null
+                        ? "加载中…"
+                        : codeStats.codes === 0
+                          ? "还没有码"
+                          : `${codeStats.codes} 个码（可用 ${codeStats.active} 个，总容量 ${codeStats.capacity ?? "不限"}）`}
+                      {draft.auto_apply ? " · 自动生效不需要码" : ""}
+                    </span>
+                  </div>
+                </Field>
+              )}
+
+              {isGift && (
+                <Field label="这次会怎么送达">
+                  <div className="hint" style={{ lineHeight: 1.7 }}>
+                    {deliveryHints.map((h) => (
+                      <div key={h}>· {h}</div>
+                    ))}
+                  </div>
+                </Field>
               )}
             </Section>
           )}
 
+          {/* ── 礼包：送什么 ── */}
           {isGift && (
             <Section title="送什么" hint="只改权益，不改金额「少收钱」是优惠券的事">
-              <Field label="送天数（0 = 不送）" hint="直接延长有效期；永久套餐不受影响">
+              <Field
+                label="送天数（0 = 不送）"
+                hint="直接延长有效期；永久套餐不受影响"
+                locked={codesIssued}
+                lockReason={lockReason}
+              >
                 <input
                   value={draft.rewards.days}
+                  disabled={codesIssued}
                   onChange={(e) => patch({ rewards: { ...draft.rewards, days: Number(e.target.value) || 0 } })}
                   placeholder="7"
                 />
               </Field>
-              <Field label="送流量 GB（0 = 不送）" hint="进加购余额，跨期不清零">
+              <Field
+                label="送流量 GB（0 = 不送）"
+                hint="进加购余额，跨期不清零"
+                locked={codesIssued}
+                lockReason={lockReason}
+              >
                 <input
                   value={draft.rewards.gb}
+                  disabled={codesIssued}
                   onChange={(e) => patch({ rewards: { ...draft.rewards, gb: Number(e.target.value) || 0 } })}
                   placeholder="5"
                 />
               </Field>
-              <Field label="重置本月已用" hint="客服补偿场景">
+              <Field label="重置本月已用" hint="客服补偿场景" locked={codesIssued} lockReason={lockReason}>
                 <select
                   value={draft.rewards.reset_month ? "yes" : "no"}
+                  disabled={codesIssued}
                   onChange={(e) => patch({ rewards: { ...draft.rewards, reset_month: e.target.value === "yes" } })}
                 >
                   <option value="no">不重置</option>
@@ -265,47 +390,19 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
             </Section>
           )}
 
-          {isGift && (
-            <Section title="怎么发出去" hint="可以同时有多种">
-              <Field label="兑换码（留空 = 只能后台/系统发）" hint="A-Z / 0-9，至少 6 位">
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    value={draft.code ?? ""}
-                    onChange={(e) => patch({ code: e.target.value.trim().toUpperCase() || null })}
-                    placeholder="（不设兑换码）"
-                    style={{ flex: 1 }}
-                  />
-                  <button type="button" onClick={() => patch({ code: randomCode() })}>
-                    {draft.code ? "重新生成" : "生成"}
-                  </button>
-                  {draft.code ? (
-                    <button type="button" className="ghost" onClick={() => patch({ code: null })}>
-                      清空
-                    </button>
-                  ) : null}
-                </div>
-              </Field>
-              <Field label="这次会怎么送达">
-                <div className="hint" style={{ lineHeight: 1.7 }}>
-                  {deliveryHints.map((h) => (
-                    <div key={h}>· {h}</div>
-                  ))}
-                </div>
-              </Field>
-            </Section>
-          )}
-
-          {isCoupon && (
-            <Section title="优惠力度" hint="只压应付金额，不改升级阶梯、不改残值">
-              <Field label="方式">
+          {/* ── 优惠力度 ── */}
+          {(isCoupon || isReferral) && (
+            <Section
+              title={isCoupon ? "优惠力度" : "被邀请人拿什么"}
+              hint="只压应付金额，不改升级阶梯、不改残值"
+            >
+              <Field label="方式" locked={codesIssued} lockReason={lockReason}>
                 <select
                   value={draft.benefit_type}
+                  disabled={codesIssued}
                   onChange={(e) => {
                     const type = e.target.value as "amount" | "percent";
-                    patch({
-                      benefit_type: type,
-                      benefit_value: type === "amount" ? 300 : 20,
-                    });
+                    patch({ benefit_type: type, benefit_value: type === "amount" ? 300 : 20 });
                     setAmountText(type === "amount" ? "3.00" : "20");
                   }}
                 >
@@ -316,9 +413,12 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
               <Field
                 label={draft.benefit_type === "amount" ? "减多少（元）" : "减百分之几"}
                 hint={draft.benefit_type === "amount" ? `用户少付 ¥${amountText || "0"}` : "按标价算，向下取整到分"}
+                locked={codesIssued}
+                lockReason={lockReason}
               >
                 <input
                   value={amountText}
+                  disabled={codesIssued}
                   onChange={(e) => {
                     setAmountText(e.target.value);
                     patch({
@@ -328,44 +428,27 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
                   }}
                 />
               </Field>
-              <Field label="最低消费（元，0 = 不限）" hint="建议设：百分比券会把低价套餐打到接近 0">
-                <input
-                  value={minText}
-                  onChange={(e) => {
-                    setMinText(e.target.value);
-                    patch({ min_subtotal_minor: toMinor(e.target.value) });
-                  }}
-                />
-              </Field>
-            </Section>
-          )}
-
-          {isReferral && (
-            <Section title="被邀请人拿什么" hint="被邀请人首单时自动生效">
-              <Field label="方式">
-                <select
-                  value={draft.benefit_type}
-                  onChange={(e) => patch({ benefit_type: e.target.value as "amount" | "percent" })}
+              {isCoupon && (
+                <Field
+                  label="最低消费（元，0 = 不限）"
+                  hint="建议设：百分比券会把低价套餐打到接近 0"
+                  locked={codesIssued}
+                  lockReason={lockReason}
                 >
-                  <option value="amount">立减金额（元）</option>
-                  <option value="percent">按比例减（%）</option>
-                </select>
-              </Field>
-              <Field label={draft.benefit_type === "amount" ? "减多少（元）" : "减百分之几"}>
-                <input
-                  value={amountText}
-                  onChange={(e) => {
-                    setAmountText(e.target.value);
-                    patch({
-                      benefit_value:
-                        draft.benefit_type === "amount" ? toMinor(e.target.value) : Math.round(Number(e.target.value) || 0),
-                    });
-                  }}
-                />
-              </Field>
+                  <input
+                    value={minText}
+                    disabled={codesIssued}
+                    onChange={(e) => {
+                      setMinText(e.target.value);
+                      patch({ min_subtotal_minor: toMinor(e.target.value) });
+                    }}
+                  />
+                </Field>
+              )}
             </Section>
           )}
 
+          {/* ── 邀请人奖励 ── */}
           {isReferral && (
             <Section title="邀请人拿什么" hint="被邀请人首单支付成功后发放；只给权益，不给现金">
               <Field label="奖励类型">
@@ -392,6 +475,7 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
             </Section>
           )}
 
+          {/* ── 人群 ── */}
           <Section title="发给谁" hint="依赖个人条件；匿名访客一律不适用">
             <Field
               label="人群"
@@ -406,7 +490,6 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
                 disabled={isReferral}
                 onChange={(e) => {
                   const audience = e.target.value as PromotionDraft["audience"];
-                  // 一次 patch 同时改两个字段，避免第二次调用覆盖第一次
                   patch({
                     audience,
                     audience_days: audience === "expiring" ? (draft.audience_days ?? 7) : null,
@@ -439,7 +522,7 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
               />
             </Field>
 
-            <Field label="同一人两次核销的最小间隔（小时，留空 = 不限）" hint="防连点、防刷">
+            <Field label="同一人两次核销的最小间隔（小时，留空 = 不限）" hint="防连点；每人每活动固定只能领 1 次">
               <input
                 value={draft.cooldown_hours ?? ""}
                 onChange={(e) => patch({ cooldown_hours: e.target.value ? Number(e.target.value) : null })}
@@ -453,9 +536,12 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
               <Field
                 label="体验套餐（客户没有订阅时，用它 0 元开通）"
                 hint="必须是「隐藏」套餐；有订阅的客户会忽略这个字段"
+                locked={codesIssued}
+                lockReason={lockReason}
               >
                 <input
                   value={draft.plan_id ?? ""}
+                  disabled={codesIssued}
                   onChange={(e) => patch({ plan_id: e.target.value.trim() || null })}
                   placeholder="trial_7d"
                 />
@@ -463,21 +549,18 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
             </Section>
           )}
 
-          <Section title="批量码" hint="一码一人：适合渠道分发 / 实体卡">
-            <CodeBatch promotionId={promotionId} />
-          </Section>
-
           <Section title="适用范围" hint="留空 = 全部套餐">
             {PLAN_KINDS.map((k) => (
-              <Field key={k.value} label={`只适用于${k.label}`}>
+              <Field key={k.value} label={`只适用于${k.label}`} locked={codesIssued} lockReason={lockReason}>
                 <select
                   value={draft.limit_plan_kinds.includes(k.value) ? "yes" : "no"}
+                  disabled={codesIssued}
                   onChange={(e) =>
                     patch({
                       limit_plan_kinds:
                         e.target.value === "yes"
                           ? [...draft.limit_plan_kinds, k.value]
-                          : draft.limit_plan_kinds.filter((x: string) => x !== k.value),
+                          : draft.limit_plan_kinds.filter((x) => x !== k.value),
                     })
                   }
                 >
@@ -486,9 +569,10 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
                 </select>
               </Field>
             ))}
-            <Field label="指定套餐 ID（逗号分隔）">
+            <Field label="指定套餐 ID（逗号分隔）" locked={codesIssued} lockReason={lockReason}>
               <input
                 value={planIdsText}
+                disabled={codesIssued}
                 onChange={(e) => {
                   setPlanIdsText(e.target.value);
                   patch({
@@ -503,20 +587,7 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
             </Field>
           </Section>
 
-          <Section title="名额与展示">
-            <Field label="总名额（留空 = 不限）" hint="只对凭码 / 自动活动生效">
-              <input
-                value={draft.max_uses ?? ""}
-                onChange={(e) => patch({ max_uses: e.target.value ? Number(e.target.value) : null })}
-                placeholder="200"
-              />
-            </Field>
-            <Field label="每人可用几次" hint="0 = 谁都不能用（等于下线）">
-              <input
-                value={draft.max_uses_per_customer}
-                onChange={(e) => patch({ max_uses_per_customer: Number(e.target.value) || 0 })}
-              />
-            </Field>
+          <Section title="展示">
             {isCoupon && (
               <Field label="角标文案（留空 = 不公开宣传）">
                 <input
@@ -535,6 +606,15 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
                 <option value="no">不公开（只靠码命中）</option>
               </select>
             </Field>
+            {draft.auto_apply && (
+              <Field label="总名额（留空 = 不限，0 = 不限）" hint="只对自动生效的券有意义；凭码的名额在码上">
+                <input
+                  value={draft.max_uses ?? ""}
+                  onChange={(e) => patch({ max_uses: e.target.value ? Number(e.target.value) : null })}
+                  placeholder="200"
+                />
+              </Field>
+            )}
           </Section>
 
           <Section title="有效期" hint="留空 = 长期">
@@ -545,7 +625,7 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
                 onChange={(e) => patch({ starts_at: toIso(e.target.value) })}
               />
             </Field>
-            <Field label="结束时间">
+            <Field label="结束时间" hint="只能往后延；已过期的活动可以延长">
               <input
                 type="datetime-local"
                 value={toLocalInput(draft.ends_at)}
@@ -553,9 +633,11 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
               />
             </Field>
           </Section>
+
+          {/* 编辑态才有：现有码的列表 / 追加 / 作废 / 导出 */}
+          {!isNew && <CodeBatch promotionId={promotionId} onChanged={onCodesChanged} />}
         </div>
 
-        {/* 底部：固定，不用滚到底 */}
         <div
           style={{
             display: "flex",
@@ -569,7 +651,11 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
           <button className="ghost" disabled={busy} onClick={onClose}>
             取消
           </button>
-          <button className="primary" disabled={busy} onClick={() => void onSave()}>
+          <button
+            className="primary"
+            disabled={busy}
+            onClick={() => void onSave({ mode: isNew ? codeMode : "none", count: codeCount })}
+          >
             {isNew ? "创建草稿" : "保存"}
           </button>
         </div>
@@ -578,34 +664,15 @@ export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClo
   );
 }
 
-/** 码输入框 + 自动生成（码本身没有语义，不该让租户手输） */
-function CodeField({ value, onChange, hint }: { value: string; onChange: (v: string) => void; hint?: string }) {
-  return (
-    <Field label="优惠码" hint={hint}>
-      <div style={{ display: "flex", gap: 8 }}>
-        <input
-          value={value}
-          onChange={(e) => onChange(e.target.value.trim().toUpperCase())}
-          className="mono"
-          style={{ flex: 1, letterSpacing: 1 }}
-        />
-        <button type="button" onClick={() => onChange(randomCode())}>
-          重新生成
-        </button>
-      </div>
-    </Field>
-  );
-}
-
 /**
- * 批量码：一次生成 N 个码（一码一人），可复制全部 / 导出 CSV / 单个作废。
+ * 已有码：列表 + 追加生成 + 作废 + 导出。
  *
- * 为什么必须"先保存活动"才能生成：码要挂在 `promotions.id` 上，
- * 新建时还没有 id。这不是限制，是数据关系。
+ * 只在编辑态出现 —— 新建时还没 id，码挂不上去。
  */
-function CodeBatch({ promotionId }: { promotionId: number | null }) {
+function CodeBatch({ promotionId, onChanged }: { promotionId: number | null; onChanged: () => void }) {
   const [codes, setCodes] = useState<PromotionCodeView[]>([]);
-  const [count, setCount] = useState(10);
+  const [appendCount, setAppendCount] = useState(0);
+  const [maxUses, setMaxUses] = useState(1);
   const [prefix, setPrefix] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -617,7 +684,7 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
       const r = await api.promotionCodes(promotionId);
       setCodes(r.codes);
     } catch {
-      /* 列表加载失败不打断编辑 */
+      /* 列表失败不打断编辑 */
     }
   }, [promotionId]);
 
@@ -625,21 +692,27 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
     void reload();
   }, [reload]);
 
-  if (promotionId === null) {
-    return <div className="hint">先保存这个活动（点「创建草稿」），之后就能批量生成码。</div>;
-  }
+  if (promotionId === null) return null;
 
   async function generate() {
+    if (!appendCount || appendCount < 1) return;
     setBusy(true);
     setMsg(null);
     try {
       const r = await api.generatePromotionCodes(promotionId as number, {
-        count,
+        count: appendCount,
+        max_uses: maxUses,
         prefix: prefix || null,
         note: note || null,
       });
-      setMsg(r.codes.length === r.requested ? `已生成 ${r.codes.length} 个码` : `只生成了 ${r.codes.length}/${r.requested} 个（撞码重试到上限）`);
+      setMsg(
+        r.codes.length === r.requested
+          ? `已追加 ${r.codes.length} 个码`
+          : `只生成了 ${r.codes.length}/${r.requested} 个（撞码重试到上限）`,
+      );
+      setAppendCount(0);
       await reload();
+      onChanged();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
     } finally {
@@ -650,7 +723,10 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
   const text = codes.map((c) => c.code).join("\n");
 
   function download() {
-    const csv = ["code,状态,已用,上限,备注", ...codes.map((c) => `${c.code},${c.status},${c.used},${c.max_uses},${c.note ?? ""}`)].join("\n");
+    const csv = [
+      "code,状态,已用,上限,备注",
+      ...codes.map((c) => `${c.code},${c.status},${c.used},${c.max_uses ?? "不限"},${c.note ?? ""}`),
+    ].join("\n");
     const url = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url;
@@ -660,27 +736,35 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
   }
 
   return (
-    <>
-      <Field label="生成数量" hint="一次最多 500 个">
-        <div style={{ display: "flex", gap: 8 }}>
+    <Section title="现有的码" hint="码由系统生成，不用手输">
+      <Field label="追加生成" hint="留空不生成；一个码能用几次决定它是共享码（多人）还是一人一码（1 次）">
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
-            value={count}
-            onChange={(e) => setCount(Number(e.target.value) || 1)}
+            value={appendCount || ""}
+            onChange={(e) => setAppendCount(Number(e.target.value) || 0)}
+            placeholder="数量"
+            style={{ width: 80 }}
+          />
+          <input
+            value={maxUses}
+            onChange={(e) => setMaxUses(Math.max(1, Number(e.target.value) || 1))}
+            placeholder="每码可用"
             style={{ width: 90 }}
+            title="每个码最多能用几次"
           />
           <input
             value={prefix}
             onChange={(e) => setPrefix(e.target.value.toUpperCase())}
             placeholder="前缀（可空）"
-            style={{ width: 110 }}
+            style={{ width: 100 }}
           />
           <input
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="备注（发给谁）"
-            style={{ flex: 1 }}
+            style={{ flex: 1, minWidth: 120 }}
           />
-          <button type="button" className="primary" disabled={busy} onClick={() => void generate()}>
+          <button type="button" className="primary" disabled={busy || !appendCount} onClick={() => void generate()}>
             生成
           </button>
         </div>
@@ -690,7 +774,7 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
 
       {codes.length > 0 && (
         <>
-          <div className="row" style={{ gap: 8, marginTop: 4 }}>
+          <div className="row" style={{ gap: 8 }}>
             <button
               type="button"
               onClick={() => {
@@ -707,7 +791,7 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
               共 {codes.length} 个，已用 {codes.reduce((n, c) => n + c.used, 0)} 次
             </span>
           </div>
-          <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 8 }}>
+          <div style={{ maxHeight: 180, overflowY: "auto" }}>
             <table className="table">
               <thead>
                 <tr>
@@ -722,7 +806,7 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
                   <tr key={c.id}>
                     <td className="mono">{c.code}</td>
                     <td>
-                      {c.used} / {c.max_uses}
+                      {c.used} / {c.max_uses ?? "不限"}
                     </td>
                     <td>{c.status === "active" ? "可用" : "已作废"}</td>
                     <td className="actions">
@@ -734,6 +818,7 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
                           onClick={async () => {
                             await api.revokePromotionCode(promotionId as number, c.id);
                             await reload();
+                            onChanged();
                           }}
                         >
                           作废
@@ -747,6 +832,6 @@ function CodeBatch({ promotionId }: { promotionId: number | null }) {
           </div>
         </>
       )}
-    </>
+    </Section>
   );
 }

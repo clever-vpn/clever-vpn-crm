@@ -2,9 +2,8 @@
  * 批次码（契约 §2.9.7）—— 一个活动下 N 个码，一码一人
  *
  * 为什么要这张表：一码一人 / 按码统计用量 / 单独作废某个码，都要求"码"本身是
- * 一行数据。`promotions.code` 保留为**主码**（单码活动），两者共存：
- *
- *   **查找顺序：先主码，再批次码。** 用户只看到一串字符，不关心里面是谁。
+ * 一行数据。v18 起 `promotions.code` 已删除，**码只有这一张表**：
+ * 一个活动 0..N 个码，共享码就是"1 个码 + 可被多人用"。
  *
  * 用量只有一个事实来源：数 `redemptions.code_id`，不另存 `used_count`
  * （两份数迟早对不上）。
@@ -33,11 +32,11 @@ export function normalizeCode(raw: unknown): string {
 
 export interface CodeHit {
   promotion: Promotion;
-  /** 批次码的 id；命中的是主码时为 `null` */
-  codeId: number | null;
+  /** 码的 id（`promotion_codes.id`） */
+  codeId: number;
   /** 这个码已经用了几次 */
   used: number;
-  /** 这个码最多能用几次（主码按活动的 per-customer 规则走，记 Infinity） */
+  /** 这个码最多能用几次 */
   maxUses: number;
   expiresAt: string | null;
 }
@@ -52,36 +51,13 @@ export async function lookupCode(env: Env, rawCode: string): Promise<CodeHit | n
   const code = normalizeCode(rawCode);
   if (!code) return null;
 
-  // ① 主码（单码活动）
-  const byMain = await env.DB.prepare(
-    `SELECT ${PROMOTION_COLUMNS} FROM promotions
-      WHERE code = ? AND status = 'active'`,
-  )
-    .bind(code)
-    .first<PromotionRow>();
-  if (byMain) {
-    const used = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM redemptions WHERE promotion_id = ? AND code_id IS NULL`,
-    )
-      .bind(byMain.id)
-      .first<{ n: number }>();
-    return {
-      promotion: rowToPromotion(byMain),
-      codeId: null,
-      used: Number(used?.n ?? 0),
-      // 主码的"可用次数"由活动的 max_uses 管，这里不额外限制
-      maxUses: Number.POSITIVE_INFINITY,
-      expiresAt: null,
-    };
-  }
-
-  // ② 批次码
+  // 码只有一张表（v18 起 `promotions.code` 已删除），一条路径到底。
   const meta = await env.DB.prepare(
     `SELECT id, promotion_id, max_uses, expires_at FROM promotion_codes
       WHERE code = ? AND status = 'active'`,
   )
     .bind(code)
-    .first<{ id: number; promotion_id: number; max_uses: number; expires_at: string | null }>();
+    .first<{ id: number; promotion_id: number; max_uses: number | null; expires_at: string | null }>();
   if (!meta) return null;
 
   const promoRow = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
@@ -97,7 +73,8 @@ export async function lookupCode(env: Env, rawCode: string): Promise<CodeHit | n
     promotion: rowToPromotion(promoRow),
     codeId: meta.id,
     used: Number(used?.n ?? 0),
-    maxUses: meta.max_uses,
+    // NULL = 不限（历史数据 / 特殊码）
+    maxUses: meta.max_uses ?? Number.POSITIVE_INFINITY,
     expiresAt: meta.expires_at,
   };
 }

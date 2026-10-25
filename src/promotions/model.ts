@@ -57,8 +57,8 @@ export function hasRewards(r: GiftRewards): boolean {
 
 export interface Promotion {
   id: number;
-  /** NULL = 自动活动（用户不需要输入任何码） */
-  code: string | null;
+  /** 优惠券是否「不用码就生效」（礼包 / 邀请恒为 false） */
+  auto_apply: boolean;
   name: string;
   kind: PromotionKind;
   benefit_type: BenefitType;
@@ -95,7 +95,7 @@ export interface Promotion {
 
 export interface PromotionRow {
   id: number;
-  code: string | null;
+  auto_apply: number;
   name: string;
   kind: string;
   benefit_type: string;
@@ -120,7 +120,7 @@ export interface PromotionRow {
   status: string;
 }
 
-export const PROMOTION_COLUMNS = `id, code, name, kind, benefit_type, benefit_value, rewards_json,
+export const PROMOTION_COLUMNS = `id, auto_apply, name, kind, benefit_type, benefit_value, rewards_json,
   min_subtotal_minor, limit_plan_kinds, limit_plan_ids, audience, audience_days,
   cooldown_hours, plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
   badge_label, visible, referrer_reward_type, referrer_reward_value, status`;
@@ -155,7 +155,7 @@ function parseRewards(raw: string): GiftRewards {
 export function rowToPromotion(row: PromotionRow): Promotion {
   return {
     id: row.id,
-    code: row.code,
+    auto_apply: row.auto_apply === 1,
     name: row.name,
     kind: row.kind === "referral" ? "referral" : row.kind === "gift" ? "gift" : "coupon",
     benefit_type: row.benefit_type === "percent" ? "percent" : "amount",

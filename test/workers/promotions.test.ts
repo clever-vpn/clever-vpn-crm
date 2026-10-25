@@ -77,11 +77,31 @@ async function login(email: string, referralCode?: string): Promise<string> {
   return ((await verified.json()) as { session_token: string }).session_token;
 }
 
-/** 后台建活动并上线 */
+/**
+ * 后台建活动并上线。
+ *
+ * v18 起码不再由后台手填，所以测试里如果指定了 `code`，就在建好活动之后
+ * 把那个**指定码**直接写进 `promotion_codes`（只为了断言可读，生产走生成接口）。
+ */
 async function createPromotion(body: Record<string, unknown>): Promise<number> {
-  const created = await adminCall("/api/admin/promotions", { method: "POST", body });
+  const { code, ...rest } = body as { code?: string } & Record<string, unknown>;
+  // v18：没有码的优惠券默认就是「自动生效」（对应 v17 的 code IS NULL）
+  const isCoupon = (rest.kind ?? "coupon") === "coupon";
+  const payload = isCoupon && !code ? { ...rest, auto_apply: true } : rest;
+  const created = await adminCall("/api/admin/promotions", { method: "POST", body: payload });
   expect(created.status, JSON.stringify(await created.clone().text())).toBe(201);
   const { promotion } = (await created.json()) as { promotion: { id: number } };
+
+  if (typeof code === "string" && code) {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO promotion_codes
+         (promotion_id, code, batch_id, max_uses, status, expires_at, note, created_at)
+       VALUES (?, ?, NULL, 1000000, 'active', NULL, 'test', ?)`,
+    )
+      .bind(promotion.id, code, new Date().toISOString())
+      .run();
+  }
+
   const published = await adminCall(`/api/admin/promotions/${promotion.id}/publish`, { method: "POST" });
   expect(published.status).toBe(200);
   return promotion.id;
@@ -188,6 +208,7 @@ describe("后台建活动", () => {
       body: {
         name: "首单立减 3 元",
         kind: "coupon",
+        auto_apply: true,
         benefit_type: "amount",
         benefit_value: 300,
         audience: "new",
@@ -202,7 +223,7 @@ describe("后台建活动", () => {
     expect(published.status).toBe(200);
   });
 
-  it("带码活动：码唯一、非法值一次报全", async () => {
+  it("非法值一次报全；码由生成接口产出，不会重复", async () => {
     const bad = await adminCall("/api/admin/promotions", {
       method: "POST",
       body: { name: "", benefit_type: "percent", benefit_value: 120 },
@@ -211,20 +232,30 @@ describe("后台建活动", () => {
     const body = (await bad.json()) as { errors: string[] };
     expect(body.errors.length).toBeGreaterThan(1);
 
-    await createPromotion({
-      code: "NEW300",
+    // v18：后台不再手填码，唯一性由生成接口 + `promotion_codes.code` 唯一索引兜底
+    const promoId = await createPromotion({
       name: "新人券",
       kind: "coupon",
       benefit_type: "amount",
       benefit_value: 300,
       badge_label: "领券立减 3 元",
     });
-
-    const dup = await adminCall("/api/admin/promotions", {
+    const gen = await adminCall(`/api/admin/promotions/${promoId}/codes`, {
       method: "POST",
-      body: { code: "NEW300", name: "重名码", benefit_type: "amount", benefit_value: 100 },
+      body: { count: 5 },
     });
-    expect(dup.status).toBe(409);
+    expect(gen.status).toBe(201);
+    const { codes } = (await gen.json()) as { codes: { code: string }[] };
+    expect(new Set(codes.map((c) => c.code)).size).toBe(5);
+
+    // 后面的用例要一个已知码：直接写进码表
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO promotion_codes
+         (promotion_id, code, batch_id, max_uses, status, expires_at, note, created_at)
+       VALUES (?, 'NEW300', NULL, 1000000, 'active', NULL, 'test', ?)`,
+    )
+      .bind(promoId, new Date().toISOString())
+      .run();
   });
 });
 
