@@ -19,6 +19,8 @@ import {
 } from "./mapping";
 import { gatewaySecret } from "./checkout";
 import { provisionOrder } from "../platform/provision";
+import { rewardReferrer } from "../promotions/referral";
+import { redeemOrderPromotion } from "../promotions/service";
 import { customerSubscription, logChange, upsertSubscription } from "../subscriptions/store";
 import {
   isOver,
@@ -39,6 +41,9 @@ interface OrderRow {
   plan_id: string;
   plan_snapshot: string;
   amount_minor: number;
+  /** 促销减免（分）与命中的活动；支付成功后才核销 */
+  discount_minor: number;
+  promotion_id: number | null;
   currency: string;
   payment_method: string;
   gateway_id: number | null;
@@ -117,6 +122,16 @@ async function grant(env: Env, order: OrderRow, tradeNo: string | null, raw: str
     )
       .bind(subscriptionId, now.toISOString(), order.id)
       .run();
+
+    // ── 促销核销 + 邀请奖励（都**必须**在钱到账之后）──
+    // 独立 try：这两步失败不能把订单拖成"发放失败"（权益已经给了）
+    try {
+      await redeemOrderPromotion(env, order, now);
+      await rewardReferrer(env, { referredCustomerId: order.customer_id, orderId: order.id, now });
+    } catch (e) {
+      console.error(`[promo] 核销/发奖失败 order=${order.code}: ${e instanceof Error ? e.message : e}`);
+    }
+
     await provisionOrder(env, order.id);
   } catch (e) {
     // 钱已收：绝不能回退订单状态，只记错误等重试（provision_attempts 供运维查看）
@@ -175,8 +190,8 @@ export async function handlePayNotify(
   if (!parsed.orderNo) return text("missing order", 400);
 
   const order = await env.DB.prepare(
-    `SELECT id, code, customer_id, plan_id, plan_snapshot, amount_minor, currency,
-       payment_method, gateway_id, status
+    `SELECT id, code, customer_id, plan_id, plan_snapshot, amount_minor, discount_minor,
+       promotion_id, currency, payment_method, gateway_id, status
      FROM orders WHERE provider_order_no = ? AND gateway_id = ?`,
   )
     .bind(parsed.orderNo, gateway.id)

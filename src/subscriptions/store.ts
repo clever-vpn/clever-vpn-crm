@@ -174,7 +174,7 @@ export async function logChange(
   change: {
     customer_id: number;
     subscription_id: number;
-    action: "new" | "renewal" | "upgrade" | "addon" | "settle" | "hold";
+    action: "new" | "renewal" | "upgrade" | "addon" | "settle" | "hold" | "gift";
     before?: Subscription | null;
     after?: Subscription | null;
     paid_minor?: number | null;

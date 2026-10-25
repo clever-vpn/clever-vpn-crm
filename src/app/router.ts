@@ -1,24 +1,26 @@
 /**
- * App 端接口 `/api/app/v1/*` —— 契约见 `clever-vpn-docs` `app-crm.md`（contract 12）
+ * App 端接口 `/api/app/v1/*` —— 契约见 `clever-vpn-docs` `app-crm.md`（contract 13）
  *
  * 这是**唯一对终端用户开放**的接口面，**App 与品牌官网共用**（官网用 httpOnly Cookie）。
  *
- * 当前实现的是**能本地跑通购买前链路**的最小集：
+ * 当前实现的端点：
  *   GET  /meta                 版本协商 + 能力位
  *   POST /auth/send-code       发验证码（非 production 直接回显 code，方便本地联调）
- *   POST /auth/verify          验证码换 session_token（不存在则建号）
+ *   POST /auth/verify          验证码换 session_token（不存在则建号；可选 referral_code）
  *   POST /auth/logout
- *   GET  /me                   用户 + 订阅快照
+ *   GET  /me                   用户 + 订阅快照 + 邀请面板
  *   GET  /subscription         订阅状态（status + reason + status_text）
- *   GET  /plans                可售套餐（免登录；每项只带一个 `action`）
+ *   GET  /plans                可售套餐（免登录；每项只带一个 `action` + 促销展示位）
  *   GET  /payment-methods      可用支付方式（需登录）
- *   POST /quote                报价（唯一的应付金额来源）
- *   POST /orders               审计式创建一笔待支付订单
+ *   POST /quote                报价（唯一的应付金额来源；可带 promo_code）
+ *   POST /orders               审计式创建一笔待支付订单（可带 promo_code / origin）
+ *   GET  /orders               我的订单列表（官网收据用）
+ *   GET  /orders/{order_code}  订单详情（App/官网轮询用）
  *
  * **这里没有一行价格/资格计算**：可买性与报价都来自 `src/plans/*` 的纯函数，
- * 同一个函数给后台预览用，保证"后台预览 == App 看到"。
+ * 促销折扣来自 `src/promotions/*`，同一个函数给后台预览用，保证"后台预览 == App 看到"。
  *
- * 未实现（下一步）：支付回调、`/orders/iap`、取码与 cf-api 落账。
+ * 未实现（下一步）：`/orders/iap`（Apple / Google 内购）。
  */
 
 import { randomToken, sha256Hex } from "../admin/crypto";
@@ -29,6 +31,8 @@ import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
+import { bindReferral, referralPanel } from "../promotions/referral";
+import { planBadges, resolveForPlans, resolvePromotion } from "../promotions/service";
 import { customerSubscription } from "../subscriptions/store";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
@@ -37,7 +41,7 @@ import type { Plan, PlanRow } from "../plans/model";
 import type { CurrentSubscription } from "../plans/quote";
 import type { Subscription } from "../plans/subscription";
 
-const APP_CONTRACT = 12;
+const APP_CONTRACT = 13;
 /** 报价有效期：超过这个时间，App 必须重新 `POST /quote`（契约 §2.4.8） */
 const QUOTE_TTL_SECONDS = 900;
 /**
@@ -309,6 +313,9 @@ async function route(request: Request, env: Env, path: string, method: string): 
         ...(emailCodeAvailable(env) ? ["passwordless", "email_code"] : []),
         "plan_kinds",
         "upgrade_quote",
+        // 促销两层（app-crm.md §2.9）：有这两个才渲染划线价/角标与邀请面板
+        "promotions",
+        "referral",
       ],
       min_app: "2.0.0",
       // 有 site key 才渲染 Turnstile 挂件；App 发码时要带上 turnstile_token
@@ -356,6 +363,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
     const existing = await findCustomer(env, email);
     const customerId = existing?.id ?? (await createCustomer(env, email));
+
+    // 邀请码：**选填、只在建号那一刻生效、永不报错**（app-crm.md §2.9.3）。
+    // 失败也只是少一条归因，绝不能把注册挡下来。
+    if (!existing) {
+      await bindReferral(env, { customerId, code: body.referral_code }).catch(() => false);
+    }
 
     const token = randomToken();
     const nowIso = new Date().toISOString();
@@ -418,13 +431,26 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const plans = await loadActivePlans(env);
     const now = new Date();
     const ctx = viewer ? await currentContext(env, viewer.id) : { sub: null, current: null };
+    // 促销展示位（§2.9.3）：公开角标给所有人看；个人折扣只算给登录用户
+    const badges = await planBadges(env, plans, now);
+    const mine = viewer
+      ? await resolveForPlans(env, { plans, customerId: viewer.id, now })
+      : new Map<string, { discount_minor: number }>();
 
     const items = plans.map((plan) => {
       const base = planForClient(plan);
+      const badge = badges.get(plan.id);
+      const promo = {
+        // 划线价：P1 没有"改价前"的概念，无活动时与标价相同
+        original_price_minor: badge?.original_price_minor ?? plan.price_minor,
+        // null = 没有公开活动；文案由 CRM 给，App 不拼
+        promo_badge: badge?.badge_label ?? null,
+      };
       if (!viewer) {
-        // 匿名：能看商品与标价，不给可购买性与应付
+        // 匿名：能看商品与标价（含公开活动角标），不给可购买性与应付
         return {
           ...base,
+          ...promo,
           payable_minor: null,
           action: "login_required" as const,
           reason: "登录后购买",
@@ -432,10 +458,16 @@ async function route(request: Request, env: Env, path: string, method: string): 
         };
       }
       const quote = quotePurchase(ctx.current, plan, now);
+      const discount = mine.get(plan.id)?.discount_minor ?? 0;
+      // 与 /quote 同一个公式：payable = max(0, promo(price) − residual)
+      const payable = quote.allowed
+        ? Math.max(0, plan.price_minor - discount - (quote.residual_minor ?? 0))
+        : null;
       return {
         ...base,
+        ...promo,
         // 列表只给"按标价买"的金额；升级的应付含残值，必须点开由 /quote 给
-        payable_minor: quote.action === "upgrade" ? null : quote.payable_minor,
+        payable_minor: quote.action === "upgrade" ? null : payable,
         // App 不做任何判断：按 action 渲染 购买 / 续订 / 升级 按钮
         action: quote.action,
         reason: quote.reason,
@@ -455,6 +487,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
     return json({
       user: { id: customer.id, email: customer.email, name: customer.display_name },
       subscription: subscriptionView(sub),
+      // 邀请面板：官网与 App 共用（§2.9.3）。不需要邀请功能的客户端忽略即可
+      referral: await referralPanel(env, customer.id),
     });
   }
 
@@ -462,6 +496,86 @@ async function route(request: Request, env: Env, path: string, method: string): 
     if (!customer) return err(401, "unauthorized");
     const sub = await customerSubscription(env, customer.id);
     return json(subscriptionView(sub));
+  }
+
+  // ── 我的订单（列表）──
+  //    契约只规定了 `GET /orders/{order_code}`；列表是**只增不改**的补充，
+  //    给官网"我的"页做收据用。只返回当前登录用户自己的订单，不接受任何 userId 入参。
+  if (method === "GET" && path === "/orders") {
+    if (!customer) return err(401, "unauthorized");
+    const limit = Math.min(
+      50,
+      Math.max(1, Number(new URL(request.url).searchParams.get("pagination[limit]") ?? 20) || 20),
+    );
+    const rows = await env.DB.prepare(
+      `SELECT code, plan_id, amount_minor, discount_minor, currency, status,
+              created_at, paid_at
+         FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT ?`,
+    )
+      .bind(customer.id, limit)
+      .all<{
+        code: string;
+        plan_id: string;
+        amount_minor: number;
+        discount_minor: number;
+        currency: string;
+        status: string;
+        created_at: string;
+        paid_at: string | null;
+      }>();
+    return json({
+      items: (rows.results ?? []).map((row) => ({
+        order_code: row.code,
+        plan_id: row.plan_id,
+        amount_minor: row.amount_minor,
+        discount_minor: row.discount_minor,
+        currency: row.currency,
+        status: row.status,
+        created_at: row.created_at,
+        paid_at: row.paid_at,
+      })),
+    });
+  }
+
+  // ── 订单详情（App/官网轮询用；契约 §2.4.1）──
+  //    只能看**自己的**单：不做 order_code 全库查找，避免拿单号枚举别人的订单。
+  const orderDetail = path.match(/^\/orders\/([A-Za-z0-9_-]{4,64})$/);
+  if (method === "GET" && orderDetail) {
+    if (!customer) return err(401, "unauthorized");
+    const row = await env.DB.prepare(
+      `SELECT code, status, amount_minor, discount_minor, currency, pay_url, expires_at,
+              paid_at, created_at
+         FROM orders WHERE code = ? AND customer_id = ?`,
+    )
+      .bind(orderDetail[1], customer.id)
+      .first<{
+        code: string;
+        status: string;
+        amount_minor: number;
+        discount_minor: number;
+        currency: string;
+        pay_url: string | null;
+        expires_at: string | null;
+        paid_at: string | null;
+        created_at: string;
+      }>();
+    if (!row) return err(404, "not_found", "订单不存在");
+
+    // 已付款的订单顺带把订阅快照一起给，客户端少一次往返
+    const settled = row.status !== "pending" && row.status !== "expired" && row.status !== "closed";
+    const sub = settled ? await customerSubscription(env, customer.id) : null;
+    return json({
+      order_code: row.code,
+      status: row.status,
+      amount_minor: row.amount_minor,
+      discount_minor: row.discount_minor,
+      currency: row.currency,
+      pay_url: row.pay_url,
+      expires_at: row.expires_at,
+      paid_at: row.paid_at,
+      created_at: row.created_at,
+      ...(settled ? { subscription: subscriptionView(sub) } : {}),
+    });
   }
 
   // ── 报价：所有下单的唯一金额来源（契约 §2.4.8）──
@@ -473,23 +587,60 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const plan = (await loadActivePlans(env)).find((p) => p.id === planId);
     if (!plan) return err(404, "not_found", "套餐不存在或已下架");
 
+    const promoCode = typeof body.promo_code === "string" ? body.promo_code.trim() : "";
     const { sub, current } = await currentContext(env, customer.id);
     const now = new Date();
     const quote = quotePurchase(current, plan, now);
-    return json({
+    const promo = await resolvePromotion(env, {
+      plan,
+      customerId: customer.id,
+      code: promoCode || null,
+      // 折扣只作用于**标价**：残值另算（不变量 1/2，promotion.md §4）
+      subtotalMinor: plan.price_minor,
+      now,
+    });
+
+    const base = {
       // 与 /plans[].action 同值域；登录态下不会出现 login_required
       action: quote.action,
-      allowed: quote.allowed,
-      reason: quote.reason,
       currency: plan.currency,
       price_minor: plan.price_minor,
       paid_minor: sub?.paid_minor ?? null,
       residual_minor: quote.residual_minor,
-      payable_minor: quote.payable_minor,
       expires_at: quote.expires_at,
       quoted_at: now.toISOString(),
       quote_ttl_s: QUOTE_TTL_SECONDS,
-    });
+      // 促销明细（§2.9.3）：App 只渲染 `discount_label`，不自己拼文案
+      discount_minor: promo.applied?.discount_minor ?? 0,
+      discount_label: promo.applied?.label ?? null,
+      applied_promotions: promo.applied
+        ? [{ code: promo.applied.promotion.code, label: promo.applied.promotion.name }]
+        : [],
+    };
+
+    if (!quote.allowed) return json({ ...base, allowed: false, reason: quote.reason, payable_minor: null });
+    // 用户**主动输入的码**不可用 ⇒ 明确拒绝。自动活动不适用则静默跳过（handler 里已过滤）
+    if (promo.error) {
+      return json({
+        ...base,
+        allowed: false,
+        reason: promo.error,
+        payable_minor: null,
+        discount_minor: 0,
+        discount_label: null,
+        applied_promotions: [],
+      });
+    }
+
+    const payable = Math.max(
+      0,
+      plan.price_minor - (promo.applied?.discount_minor ?? 0) - (quote.residual_minor ?? 0),
+    );
+    // 0 元单走不通任何网关：宁可在报价这一步就说清楚
+    if (payable <= 0) {
+      return json({ ...base, allowed: false, reason: "优惠已抵扣全部金额，请选择其他套餐", payable_minor: null });
+    }
+    return json({ ...base, allowed: true, reason: null, payable_minor: payable });
   }
 
   // ── 可用的支付方式（受网关闸门约束：status / methods / 白名单 / 环境开关）──
@@ -524,9 +675,26 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const quote = quotePurchase(current, plan);
     if (!quote.allowed) return err(409, "not_purchasable", quote.reason ?? "当前不可购买");
 
+    // ── 促销：下单时**重新校验**（不信任 /quote 的旧结论），支付成功才核销 ──
+    const promoCode = typeof body.promo_code === "string" ? body.promo_code.trim() : "";
+    const entry = body.origin === "web" || body.origin === "app" ? body.origin : null;
+    const promo = await resolvePromotion(env, {
+      plan,
+      customerId: customer.id,
+      code: promoCode || null,
+      subtotalMinor: plan.price_minor,
+    });
+    if (promo.error) return err(409, "promo_unavailable", promo.error);
+
+    const payable = Math.max(
+      0,
+      plan.price_minor - (promo.applied?.discount_minor ?? 0) - (quote.residual_minor ?? 0),
+    );
+    if (payable <= 0) return err(409, "not_purchasable", "优惠已抵扣全部金额，请选择其他套餐");
+
     // 报价过期 / 改价：差额 ≤1 分忽略（舍入），超出就让 App 重新报价
     const expected = typeof body.expected_payable_minor === "number" ? body.expected_payable_minor : null;
-    if (expected !== null && Math.abs(expected - (quote.payable_minor ?? 0)) > 1) {
+    if (expected !== null && Math.abs(expected - payable) > 1) {
       return err(409, "price_changed", "价格已变化，请重新确认后再支付");
     }
 
@@ -535,8 +703,11 @@ async function route(request: Request, env: Env, path: string, method: string): 
       customerEmail: customer.email,
       plan,
       method: paymentMethod,
-      // 升级按"新价 − 残值"收钱；新购/续订就是目录价
-      amountMinor: quote.payable_minor ?? plan.price_minor,
+      // 促销后应付（升级已含残值抵扣）。折扣与残值都只影响这一次收款
+      amountMinor: payable,
+      discountMinor: promo.applied?.discount_minor ?? 0,
+      promotionId: promo.applied?.promotion.id ?? null,
+      entry,
       origin: new URL(request.url).origin,
       clientIp: clientIp(request),
     });

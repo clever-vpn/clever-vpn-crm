@@ -67,16 +67,28 @@ export const auditLog = sqliteTable(
  * `cf_customer_id` 是 cf-api 侧的行 id —— cf-api 才是"能不能用"的真相；
  * 本地这行只负责身份与聚合查询。
  */
-export const customers = sqliteTable("customers", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  email: text("email").notNull().unique(),
-  password_hash: text("password_hash"),
-  display_name: text("display_name"),
-  status: text("status").notNull().default("active"),
-  /** cf-api `customers.id`；首次安装/绑定后回填 */
-  cf_customer_id: integer("cf_customer_id"),
-  created_at: text("created_at").notNull(),
-});
+export const customers = sqliteTable(
+  "customers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    email: text("email").notNull().unique(),
+    password_hash: text("password_hash"),
+    display_name: text("display_name"),
+    status: text("status").notNull().default("active"),
+    /** cf-api `customers.id`；首次安装/绑定后回填 */
+    cf_customer_id: integer("cf_customer_id"),
+    /**
+     * 这个用户自己的邀请码（**懒生成**：第一次被要就发一张，之后不变）。
+     * NULL = 还没生成过。它是"关系层"的唯一入口，与促销折扣无关。
+     */
+    referral_code: text("referral_code"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => [
+    // 允许 NULL（未生成），但一旦生成必须全局唯一：撞码 = 归因到错的人
+    uniqueIndex("uq_customers_referral_code").on(t.referral_code),
+  ],
+);
 
 /** 邮箱验证码：只存哈希，一次一用（按 email 做冷却/次数校验） */
 export const emailCodes = sqliteTable("email_codes", {
@@ -291,6 +303,14 @@ export const orders = sqliteTable(
     /** 套餐快照 JSON（价格/额度/有效期/线路，全部冻结） */
     plan_snapshot: text("plan_snapshot").notNull(),
     amount_minor: integer("amount_minor").notNull(),
+    /**
+     * 促销减免（分）。`amount_minor` 已经是**减免后**的实收，两者不是兄弟关系：
+     * `amount_minor = 标价 − discount_minor − 换购残值`。
+     * 折扣与赠送分开记账（promotion.md §4）：这里只记“少收的钱”，不记“送的天数”。
+     */
+    discount_minor: integer("discount_minor").notNull().default(0),
+    /** 命中的促销活动；NULL = 没用到任何促销 */
+    promotion_id: integer("promotion_id"),
     currency: text("currency").notNull().default("CNY"),
     /** purchase | gift | manual */
     source: text("source").notNull().default("purchase"),
@@ -300,6 +320,11 @@ export const orders = sqliteTable(
      * 具体走哪家服务商/哪条网关（`gateway_id`）对用户不可见。
      */
     payment_method: text("payment_method").notNull(),
+    /**
+     * 从哪个壳进来的：`web`（品牌官网）/ `app`（原生客户端）。
+     * **只做入口统计** —— 与 `payment_method`（钱在哪里付）正交，别混用。
+     */
+    entry: text("entry"),
     /** 实际使用的网关（`payment_gateways.id`）；手工补单/赠送/内购为空 */
     gateway_id: integer("gateway_id"),
     /**
@@ -395,6 +420,118 @@ export const adjustments = sqliteTable(
   ],
 );
 
+// ─────────────────────────────────────────────────────────────
+// 促销（`docs/promotion.md`，对外承诺见 `app-crm.md` §2.9）
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 促销活动 = **规则层**。一个活动一行；`code` 为空表示"自动生效"。
+ *
+ * 只有两种收益：`amount`（减 N 分）、`percent`（减 N%）。
+ * 不在这里存"送几天/送几 GB"—— 那是奖励侧的事（`referrer_reward_type`），
+ * **折扣与赠送必须分开记账**（promotion.md §4 不变量 1）。
+ */
+export const promotions = sqliteTable(
+  "promotions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** 促销码；NULL = 自动活动（用户不需要输任何东西） */
+    code: text("code").unique(),
+    /** 后台可见名称，不下发给用户 */
+    name: text("name").notNull(),
+    /** coupon | referral */
+    kind: text("kind").notNull().default("coupon"),
+    /** amount（分） | percent（1–100，表示减掉的百分比） */
+    benefit_type: text("benefit_type").notNull(),
+    benefit_value: integer("benefit_value").notNull(),
+    /** 门槛：折扣前金额低于这个数就不适用（百分比券会击穿低价套餐，必须有） */
+    min_subtotal_minor: integer("min_subtotal_minor").notNull().default(0),
+    /** JSON 数组：`["period"]`；空数组 = 不限 */
+    limit_plan_kinds: text("limit_plan_kinds").notNull().default("[]"),
+    /** JSON 数组：指定套餐 id；空数组 = 不限 */
+    limit_plan_ids: text("limit_plan_ids").notNull().default("[]"),
+    /** 只对"从未付过钱"的人生效 */
+    first_purchase_only: integer("first_purchase_only").notNull().default(0),
+    /** 注册后 N 天内可用；NULL = 不限 */
+    new_user_within_days: integer("new_user_within_days"),
+    starts_at: text("starts_at"),
+    ends_at: text("ends_at"),
+    /** 全站总次数上限；NULL = 不限 */
+    max_uses: integer("max_uses"),
+    /** 每人最多用几次（0 = 谁都不能用，等于下线） */
+    max_uses_per_customer: integer("max_uses_per_customer").notNull().default(1),
+    /** 角标文案，如"限时 8 折"；NULL = 列表页不展示 */
+    badge_label: text("badge_label"),
+    /** 是否公开展示（0 = 定向活动，只能靠码命中） */
+    visible: integer("visible").notNull().default(1),
+    /** kind=referral：给推荐人的奖励类型 days | gb | none */
+    referrer_reward_type: text("referrer_reward_type"),
+    referrer_reward_value: real("referrer_reward_value"),
+    /** draft | active | ended */
+    status: text("status").notNull().default("draft"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (t) => [index("idx_promotions_status").on(t.status, t.kind)],
+);
+
+/**
+ * 邀请关系 = **关系层**（唯一归因来源）。
+ *
+ * 一人只能被邀请一次（`uq_referrals_customer`）。这里**不存钱**：
+ * 奖励明细落 `redemptions`，本表只回答"谁拉了谁"。
+ */
+export const referrals = sqliteTable(
+  "referrals",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** 被邀请人 */
+    customer_id: integer("customer_id").notNull(),
+    referrer_id: integer("referrer_id").notNull(),
+    /** 绑定那一刻命中的活动（可空：先绑关系，后上活动） */
+    promotion_id: integer("promotion_id"),
+    /** 绑定用的码（留证） */
+    code: text("code").notNull(),
+    /** 推荐人奖励发放时间；NULL = 还没发（通常是好友还没付首单） */
+    rewarded_at: text("rewarded_at"),
+    /** 实际发出的奖励：days | gb | none；NULL = 还没发 */
+    reward_type: text("reward_type"),
+    reward_value: real("reward_value"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_referrals_customer").on(t.customer_id),
+    index("idx_referrals_referrer").on(t.referrer_id),
+  ],
+);
+
+/**
+ * 核销台账：谁在**哪一笔已支付的订单**上用了什么活动。
+ *
+ * 铁律：**支付成功才写**（promotion.md §7.3）。下单只校验不扣减，
+ * 否则未付款的订单会把名额占光 —— 那正是 XBoard 的漏洞。
+ * `(promotion_id, order_id)` 唯一 ⇒ 回调重放也不会重复核销或重复发奖励。
+ */
+export const redemptions = sqliteTable(
+  "redemptions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    promotion_id: integer("promotion_id").notNull(),
+    customer_id: integer("customer_id").notNull(),
+    order_id: integer("order_id").notNull(),
+    /** 这一单减免了多少（分）；纯赠送型记 0 */
+    discount_minor: integer("discount_minor").notNull().default(0),
+    /** 这次核销顺带发放了什么（如推荐人奖励），JSON */
+    granted_json: text("granted_json"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_redemptions_order_promo").on(t.promotion_id, t.order_id),
+    index("idx_redemptions_customer").on(t.customer_id),
+    index("idx_redemptions_promotion").on(t.promotion_id),
+  ],
+);
+
 /**
  * 支付网关 = **一条能收钱的配置**（`docs/payments.md`）。
  *
@@ -474,3 +611,6 @@ export type PaymentGateway = typeof paymentGateways.$inferSelect;
 export type SubscriptionRow = typeof platformSubscriptions.$inferSelect;
 export type PlanRow = typeof plans.$inferSelect;
 export type Customer = typeof customers.$inferSelect;
+export type PromotionRow = typeof promotions.$inferSelect;
+export type ReferralRow = typeof referrals.$inferSelect;
+export type RedemptionRow = typeof redemptions.$inferSelect;
