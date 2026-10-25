@@ -33,6 +33,11 @@ const REDEEM_WITH_SUB = "redeem-sub@test.com";
 const REDEEM_NEW_USER = "redeem-new@test.com";
 const REDEEM_NO_PLAN = "redeem-noplan@test.com";
 const REDEEM_BRUTE = "redeem-brute@test.com";
+/** 批次码用例 */
+const BATCH_A = "batch-a@test.com";
+const BATCH_B = "batch-b@test.com";
+const BATCH_C = "batch-c@test.com";
+const BATCH_COUPON = "batch-coupon@test.com";
 
 const worker = rawExports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
@@ -132,6 +137,7 @@ beforeAll(async () => {
       JSON.stringify([
         PAYER, FRIEND, REFERRER, GIFT_TO, GIFT_SIGNUP, GIFT_NO_SUB,
         REDEEM_WITH_SUB, REDEEM_NEW_USER, REDEEM_NO_PLAN, REDEEM_BRUTE,
+        BATCH_A, BATCH_B, BATCH_C, BATCH_COUPON,
       ]),
       now,
       now,
@@ -798,5 +804,133 @@ describe("兑换码", () => {
   it("未登录：401（不暴露码是否存在）", async () => {
     const res = await fetchJson("/api/app/v1/redeem", { method: "POST", body: { code: "GUOQING7" } });
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * 批次码（契约 §2.9.7）：一个活动 N 个码，一码一人。
+ *
+ * 要钉住的是"**码本身是一行数据**"带来的三件事：
+ * 生成一批、按码统计用量、单独作废。
+ */
+describe("批次码", () => {
+  const genCodes = (promoId: number, count: number, extra: Record<string, unknown> = {}) =>
+    adminCall(`/api/admin/promotions/${promoId}/codes`, {
+      method: "POST",
+      body: { count, ...extra },
+    });
+
+  it("生成 10 个码：唯一、可列、用量从 0 开始", async () => {
+    const promoId = await createPromotion({
+      name: "渠道批次礼包",
+      kind: "gift",
+      audience: "all",
+      rewards: { days: 1 },
+    });
+
+    const res = await genCodes(promoId, 10, { prefix: "TG" });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { codes: { id: number; code: string }[]; requested: number };
+    expect(body.codes).toHaveLength(10);
+    expect(new Set(body.codes.map((c) => c.code)).size).toBe(10);
+    expect(body.codes.every((c) => c.code.startsWith("TG"))).toBe(true);
+
+    const listed = (await (await adminCall(`/api/admin/promotions/${promoId}/codes`)).json()) as {
+      codes: { code: string; used: number; status: string }[];
+    };
+    expect(listed.codes).toHaveLength(10);
+    expect(listed.codes.every((c) => c.used === 0 && c.status === "active")).toBe(true);
+  });
+
+  it("一码一人：同一个码第二个人兑不了（但不同码可以）", async () => {
+    const promoId = await createPromotion({
+      name: "批次兑换码",
+      kind: "gift",
+      audience: "all",
+      rewards: { days: 2 },
+      plan_id: "trial_7d",
+    });
+    const { codes } = (await (await genCodes(promoId, 2)).json()) as {
+      codes: { id: number; code: string }[];
+    };
+
+    const a = await login(BATCH_A);
+    const ok1 = await appCall("/api/app/v1/redeem", a, { method: "POST", body: { code: codes[0]!.code } });
+    expect(((await ok1.json()) as { ok: boolean }).ok).toBe(true);
+
+    // 同一个人换一个码再兑：仍可（活动 max_uses_per_customer 默认 1 ⇒ 被挡）
+    // 所以这里换**另一个人**用同一个码 —— 应当因为"码已用完"被拒
+    const b = await login(BATCH_B);
+    const reuse = await appCall("/api/app/v1/redeem", b, { method: "POST", body: { code: codes[0]!.code } });
+    expect(reuse.status).toBe(200);
+    const reused = (await reuse.json()) as { ok: boolean; reason: string };
+    expect(reused.ok).toBe(false);
+    expect(reused.reason).toContain("领完");
+
+    // 用第二个码就应该成功
+    const ok2 = await appCall("/api/app/v1/redeem", b, { method: "POST", body: { code: codes[1]!.code } });
+    expect(((await ok2.json()) as { ok: boolean }).ok).toBe(true);
+
+    // 用量能对上
+    const listed = (await (await adminCall(`/api/admin/promotions/${promoId}/codes`)).json()) as {
+      codes: { code: string; used: number }[];
+    };
+    expect(listed.codes.map((c) => c.used)).toEqual([1, 1]);
+  });
+
+  it("作废：作废后立即失效", async () => {
+    const promoId = await createPromotion({
+      name: "作废测试",
+      kind: "gift",
+      audience: "all",
+      rewards: { days: 1 },
+      plan_id: "trial_7d",
+    });
+    const { codes } = (await (await genCodes(promoId, 1)).json()) as {
+      codes: { id: number; code: string }[];
+    };
+
+    const revoke = await adminCall(`/api/admin/promotions/${promoId}/codes/${codes[0]!.id}`, {
+      method: "DELETE",
+    });
+    expect(revoke.status).toBe(200);
+
+    const token = await login(BATCH_C);
+    const res = await appCall("/api/app/v1/redeem", token, {
+      method: "POST",
+      body: { code: codes[0]!.code },
+    });
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it("优惠券也能用批次码结账（一码一人，用量记在码上）", async () => {
+    const promoId = await createPromotion({
+      name: "渠道大额券",
+      kind: "coupon",
+      benefit_type: "amount",
+      // 要比自动活动更划算，否则会命中自动活动（多活动取更优）
+      benefit_value: 500,
+      audience: "all",
+    });
+    const { codes } = (await (await genCodes(promoId, 1)).json()) as {
+      codes: { id: number; code: string }[];
+    };
+
+    const token = await login(BATCH_COUPON);
+    const quote = await appCall("/api/app/v1/quote", token, {
+      method: "POST",
+      body: { plan_id: "promo_30d", promo_code: codes[0]!.code },
+    });
+    const q = (await quote.json()) as { allowed: boolean; payable_minor: number; reason: string };
+    expect(q.allowed, q.reason).toBe(true);
+    expect(q.payable_minor).toBe(1000); // 1500 - 500
+
+    // 走完整下单 + 支付，核销后码的用量应为 1
+    await payOrder(token, "promo_30d", codes[0]!.code);
+    const listed = (await (await adminCall(`/api/admin/promotions/${promoId}/codes`)).json()) as {
+      codes: { used: number }[];
+    };
+    expect(listed.codes[0]?.used).toBe(1);
   });
 });

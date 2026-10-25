@@ -63,6 +63,8 @@ export interface CreateChargeInput {
    */
   discountMinor?: number;
   promotionId?: number | null;
+  /** 命中的批次码 id（一码一人的券）；主码 / 无码不传 */
+  codeId?: number | null;
   /** 入口：`web`（品牌官网）/ `app`；只用于统计，不参与计价 */
   entry?: string | null;
   /** 本站 origin（拼 pay_url 与 notify_url 用） */
@@ -208,10 +210,10 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   // ── 4. 落订单（单号创建后不可改）──
   await env.DB.prepare(
     `INSERT INTO orders (code, customer_id, plan_id, kind, plan_snapshot, amount_minor, currency,
-       discount_minor, promotion_id, entry,
+       discount_minor, promotion_id, code_id, entry,
        source, payment_method, gateway_id, provider_order_no, provider_trade_no, pay_url,
        raw_create, expires_at, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
   )
     .bind(
       orderCode,
@@ -223,6 +225,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
       currency,
       input.discountMinor ?? 0,
       input.promotionId ?? null,
+      input.codeId ?? null,
       input.entry ?? null,
       input.method,
       route.gateway.id,

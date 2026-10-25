@@ -724,6 +724,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
       amountMinor: payable,
       discountMinor: promo.applied?.discount_minor ?? 0,
       promotionId: promo.applied?.promotion.id ?? null,
+      codeId: promo.codeId,
       entry,
       origin: new URL(request.url).origin,
       clientIp: clientIp(request),

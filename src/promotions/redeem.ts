@@ -10,11 +10,11 @@
  *   3. **必须防撞库**：共享码是公开的，`A-Z0-9` 6 位可被穷举。同一客户每小时
  *      失败 5 次就锁。计数落在 `audit_log`（现成的表），不新增结构。
  */
-import { PROMOTION_COLUMNS, rowToPromotion } from "./model";
+import { lookupCode, normalizeCode } from "./codes";
 import { grantGift } from "./gift";
 
 import type { Env } from "../env";
-import type { GiftRewards, PromotionRow } from "./model";
+import type { GiftRewards } from "./model";
 
 /** 同一客户每小时的失败上限（超过 ⇒ 429） */
 export const MAX_FAILED_ATTEMPTS = 5;
@@ -43,10 +43,8 @@ export type RedeemOutcome =
 
 const fail = (reason: string): RedeemOutcome => ({ status: 200, body: { ok: false, reason } });
 
-/** 码归一：去空格 + 大写（粘贴常带空格/小写） */
-export function normalizePromoCode(raw: unknown): string {
-  return typeof raw === "string" ? raw.trim().toUpperCase() : "";
-}
+/** 码归一：去空格 + 大写（粘贴常带空格/小写）。实现在 `./codes.ts`，这里转出。 */
+export const normalizePromoCode = normalizeCode;
 
 async function countRecentFailures(env: Env, customerId: number, since: Date): Promise<number> {
   const row = await env.DB.prepare(
@@ -132,27 +130,32 @@ export async function redeemGiftCode(
     return fail("兑换码不对，请检查后重试");
   }
 
-  // ── 2) 找活动：只认「进行中的礼包」 ──
-  const row = await env.DB.prepare(
-    `SELECT ${PROMOTION_COLUMNS} FROM promotions
-      WHERE code = ? AND kind = 'gift' AND status = 'active'`,
-  )
-    .bind(code)
-    .first<PromotionRow>();
-
-  if (!row) {
+  // ── 2) 找活动：主码或批次码，且必须是「进行中的礼包」 ──
+  const hit = await lookupCode(env, code);
+  if (!hit || hit.promotion.kind !== "gift") {
     await recordFailure(env, opts.customerId, code, now);
     // 不区分"码不存在"与"活动已结束"：别让猜码的人拿到收敛信息
     return fail("兑换码不对，或者这个活动已经结束了");
   }
 
+  // 码自己的额度与有效期（批次码一码一人，用完即失效）
+  if (hit.expiresAt && Date.parse(hit.expiresAt) <= now.getTime()) {
+    await recordFailure(env, opts.customerId, code, now);
+    return fail("这个兑换码已经过期了");
+  }
+  if (hit.used >= hit.maxUses) {
+    await recordFailure(env, opts.customerId, code, now);
+    return fail("这个兑换码已经被领完了");
+  }
+
   // ── 3) 发放（人群 / 次数 / 冷却 / 载体套餐开户都在 grantGift 里） ──
-  const promo = rowToPromotion(row);
+  const promo = hit.promotion;
   const grant = await grantGift(env, {
     promotionId: promo.id,
     customerId: opts.customerId,
     source: "redeem",
     now,
+    codeId: hit.codeId,
   });
   if (!grant) return fail("兑换码不对，或者这个活动已经结束了");
   if (!grant.granted) return fail(grant.skipped ?? "这个兑换码现在不可用");

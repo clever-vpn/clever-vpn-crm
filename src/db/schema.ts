@@ -311,6 +311,8 @@ export const orders = sqliteTable(
     discount_minor: integer("discount_minor").notNull().default(0),
     /** 命中的促销活动；NULL = 没用到任何促销 */
     promotion_id: integer("promotion_id"),
+    /** 命中的批次码（`promotion_codes.id`）；主码 / 无码时为 NULL */
+    code_id: integer("code_id"),
     currency: text("currency").notNull().default("CNY"),
     /** purchase | gift | manual */
     source: text("source").notNull().default("purchase"),
@@ -559,6 +561,8 @@ export const redemptions = sqliteTable(
     promotion_id: integer("promotion_id").notNull(),
     customer_id: integer("customer_id").notNull(),
     order_id: integer("order_id").notNull(),
+    /** 用的是哪个批次码（`promotion_codes.id`）；用主码或系统发放时为 NULL */
+    code_id: integer("code_id"),
     /** 这一单减免了多少（分）；纯赠送型记 0 */
     discount_minor: integer("discount_minor").notNull().default(0),
     /** 这次核销顺带发放了什么（如推荐人奖励），JSON */
@@ -569,6 +573,42 @@ export const redemptions = sqliteTable(
     uniqueIndex("uq_redemptions_order_promo").on(t.promotion_id, t.order_id),
     index("idx_redemptions_customer").on(t.customer_id),
     index("idx_redemptions_promotion").on(t.promotion_id),
+    // 批次码的用量 = 数这里有多少行；不另存 used_count，避免两份数对不上
+    index("idx_redemptions_code").on(t.code_id),
+  ],
+);
+
+/**
+ * 批次码（契约 §2.9.7）：一个活动下可以生成 N 个码，一码一人。
+ *
+ * 为什么需要这张表（而不是多加几个 `promotions.code`）：
+ * 一码一人 / 按码统计用量 / 单独作废某个码 —— 这些都要求码本身是一行数据。
+ * `promotions.code` 继续作为“主码”（单码活动），两者共存：
+ * 查找时**先看主码，再看这张表**。
+ *
+ * 用量不存 `used_count`，而是数 `redemptions.code_id` —— 单一事实来源。
+ */
+export const promotionCodes = sqliteTable(
+  "promotion_codes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    promotion_id: integer("promotion_id").notNull(),
+    code: text("code").notNull().unique(),
+    /** 同一次生成的批次（导出 / 整批作废用） */
+    batch_id: text("batch_id"),
+    /** 这个码能用几次（一码一人 = 1） */
+    max_uses: integer("max_uses").notNull().default(1),
+    /** active | revoked */
+    status: text("status").notNull().default("active"),
+    /** 码自己的过期时间（NULL = 跟随活动） */
+    expires_at: text("expires_at"),
+    /** 备注：发给谁 / 哪个渠道 */
+    note: text("note"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => [
+    index("idx_promotion_codes_promotion").on(t.promotion_id),
+    index("idx_promotion_codes_batch").on(t.batch_id),
   ],
 );
 
@@ -655,3 +695,4 @@ export type PromotionRow = typeof promotions.$inferSelect;
 export type ReferralRow = typeof referrals.$inferSelect;
 export type RedemptionRow = typeof redemptions.$inferSelect;
 export type PromotionTargetRow = typeof promotionTargets.$inferSelect;
+export type PromotionCodeRow = typeof promotionCodes.$inferSelect;

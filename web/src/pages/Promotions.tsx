@@ -295,6 +295,7 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
       {draft && (
         <PromotionForm
           draft={draft}
+          promotionId={editingId}
           busy={busy}
           isNew={editingId === null}
           onChange={setDraft}

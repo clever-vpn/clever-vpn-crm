@@ -4,6 +4,7 @@
  * 纯判断在 `./model.ts`，这里只做「查库 + 拼上下文 + 记一次核销」。
  * 拆开的好处：所有"能不能用 / 便宜多少"的规则都能脱离 D1 单测。
  */
+import { lookupCode } from "./codes";
 import { PROMOTION_COLUMNS, badgeOf, checkPromotion, appliedOf, rowToPromotion } from "./model";
 
 import type { AppliedPromotion, PromoContext, Promotion, PromotionCheck, PromotionRow } from "./model";
@@ -20,6 +21,8 @@ export interface PromoResolution {
    * 只有"输入了码"才可能非 null —— 自动活动不适用时静默跳过。
    */
   error: string | null;
+  /** 命中的批次码 id（一码一人的券），下单时要落到订单上才能算用量 */
+  codeId: number | null;
 }
 
 async function allActivePromotions(env: Env): Promise<Promotion[]> {
@@ -251,9 +254,10 @@ export async function resolvePromotion(
   const referral = referralId === null ? [] : active.filter((p) => p.id === referralId);
   // 只有 coupon 能当代码用：referral 活动靠**关系**生效，它的码没法也不应该被
   // 任何人拿去直接抵扣（否则等于一个匿名优惠码 + 不产生归因）
-  const byCode = code
-    ? active.find((p) => p.kind === "coupon" && (p.code ?? "").toUpperCase() === code) ?? null
-    : null;
+  // 用户输入的码可能是**主码**，也可能是**批次码**（契约 §2.9.7）——
+  // lookupCode 会先查主码再看批次表，返回的 promotion 两种情况都一样。
+  const hit = code ? await lookupCode(env, code) : null;
+  const byCode = hit && hit.promotion.kind === "coupon" ? hit.promotion : null;
 
   const candidates = [...auto, ...referral];
   if (!code) {
@@ -262,10 +266,19 @@ export async function resolvePromotion(
         env, candidates, opts.plan, now, facts, subtotal, opts.customerId,
       ),
       error: null,
+      codeId: null,
     };
   }
 
-  if (!byCode) return { applied: null, error: "优惠码不存在" };
+  if (!byCode) return { applied: null, error: "优惠码不存在", codeId: null };
+
+  // 码本身的限制（一码一人的批次码用完就作废；码也可以有独立的过期时间）
+  if (hit?.expiresAt && Date.parse(hit.expiresAt) <= now.getTime()) {
+    return { applied: null, error: "这个码已经过期了", codeId: null };
+  }
+  if (hit && hit.used >= hit.maxUses) {
+    return { applied: null, error: "这个码已经被用过了", codeId: null };
+  }
 
   const usage = await usageOf(env, [byCode.id], opts.customerId);
   const targeted = await targetedOf(env, [byCode.id], opts.customerId);
@@ -278,14 +291,16 @@ export async function resolvePromotion(
     targeted.has(byCode.id),
   );
   const check = checkPromotion(byCode, ctx);
-  if (!check.ok) return { applied: null, error: check.reason };
+  if (!check.ok) return { applied: null, error: check.reason, codeId: null };
 
   // 码有效时仍与自动活动/邀请活动比一次：**取更优，不叠加**
   const others = [...auto, ...referral].filter((p) => p.id !== byCode.id);
   const best = await pickBestPerPromotion(env, others, opts.plan, now, facts, subtotal, opts.customerId);
   const codeApplied = appliedOf(byCode, subtotal);
-  if (best && best.discount_minor > codeApplied.discount_minor) return { applied: best, error: null };
-  return { applied: codeApplied, error: null };
+  if (best && best.discount_minor > codeApplied.discount_minor) {
+    return { applied: best, error: null, codeId: null };
+  }
+  return { applied: codeApplied, error: null, codeId: hit?.codeId ?? null };
 }
 
 /** 每个活动有自己的核销次数，所以逐活动判断（数量在个位数，够用） */async function pickBestPerPromotion(
@@ -380,16 +395,29 @@ export interface PlanBadge {
  */
 export async function redeemOrderPromotion(
   env: Env,
-  order: { id: number; customer_id: number; promotion_id: number | null; discount_minor: number },
+  order: {
+    id: number;
+    customer_id: number;
+    promotion_id: number | null;
+    code_id: number | null;
+    discount_minor: number;
+  },
   now: Date = new Date(),
 ): Promise<void> {
   if (!order.promotion_id) return;
   await env.DB.prepare(
     `INSERT OR IGNORE INTO redemptions
-       (promotion_id, customer_id, order_id, discount_minor, granted_json, created_at)
-     VALUES (?, ?, ?, ?, NULL, ?)`,
+       (promotion_id, customer_id, order_id, code_id, discount_minor, granted_json, created_at)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
   )
-    .bind(order.promotion_id, order.customer_id, order.id, order.discount_minor, now.toISOString())
+    .bind(
+      order.promotion_id,
+      order.customer_id,
+      order.id,
+      order.code_id,
+      order.discount_minor,
+      now.toISOString(),
+    )
     .run();
 }/**
  * 列表页角标（**公开信息**，与"这个人能不能用"无关）。

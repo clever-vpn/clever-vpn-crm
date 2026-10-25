@@ -241,6 +241,19 @@ export const api = {
       remaining_gb?: number | null;
       reason?: string;
     }>("POST", "/redeem", { code }),
+  /** 批次码：生成一批同规则的码（一码一人），并看每个码的用量 */
+  promotionCodes: (id: number) =>
+    call<{ codes: PromotionCodeView[] }>("GET", `/promotions/${id}/codes`),
+  generatePromotionCodes: (
+    id: number,
+    input: { count: number; max_uses?: number; prefix?: string | null; note?: string | null },
+  ) => call<{ batch_id: string; codes: { id: number; code: string }[]; requested: number }>(
+    "POST",
+    `/promotions/${id}/codes`,
+    input,
+  ),
+  revokePromotionCode: (id: number, codeId: number) =>
+    call<{ ok: true }>("DELETE", `/promotions/${id}/codes/${codeId}`),
   promotionTargets: (id: number) =>
     call<{ customers: { id: number; email: string; display_name: string | null }[] }>(
       "GET",
@@ -263,6 +276,17 @@ export interface GiftRewards {
   days: number;
   gb: number;
   reset_month: boolean;
+}
+export interface PromotionCodeView {
+  id: number;
+  code: string;
+  batch_id: string | null;
+  max_uses: number;
+  used: number;
+  status: string;
+  expires_at: string | null;
+  note: string | null;
+  created_at: string;
 }
 export interface GiftGrantResult {
   promotion_id: number;

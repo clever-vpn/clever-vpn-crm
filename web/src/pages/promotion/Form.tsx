@@ -10,9 +10,11 @@
  *   内联表单一长，用户必须滚到底才能找到「取消」；抽屉有固定的标题栏和底部条，
  *   `×` / ESC / 点遮罩 三个出口随时可用。
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import type { PlanKind, PromotionDraft, PromotionKind, PromotionView } from "../../api";
+import { api } from "../../api";
+
+import type { PlanKind, PromotionCodeView, PromotionDraft, PromotionKind, PromotionView } from "../../api";
 
 export const AUDIENCE_OPTIONS: { value: PromotionView["audience"]; label: string; hint: string }[] = [
   { value: "all", label: "所有人", hint: "不看新老，谁都能用" },
@@ -110,6 +112,8 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 
 export interface PromotionFormProps {
   draft: PromotionDraft;
+  /** 已保存的活动 id；批量生成码必须有它（新建时是 null） */
+  promotionId: number | null;
   isNew: boolean;
   busy: boolean;
   onChange: (draft: PromotionDraft) => void;
@@ -117,7 +121,7 @@ export interface PromotionFormProps {
   onSave: () => Promise<void>;
 }
 
-export function PromotionForm({ draft, isNew, busy, onChange, onClose, onSave }: PromotionFormProps) {
+export function PromotionForm({ draft, promotionId, isNew, busy, onChange, onClose, onSave }: PromotionFormProps) {
   const [amountText, setAmountText] = useState(
     draft.benefit_type === "amount" ? yuan(draft.benefit_value) : String(draft.benefit_value),
   );
@@ -459,6 +463,10 @@ export function PromotionForm({ draft, isNew, busy, onChange, onClose, onSave }:
             </Section>
           )}
 
+          <Section title="批量码" hint="一码一人：适合渠道分发 / 实体卡">
+            <CodeBatch promotionId={promotionId} />
+          </Section>
+
           <Section title="适用范围" hint="留空 = 全部套餐">
             {PLAN_KINDS.map((k) => (
               <Field key={k.value} label={`只适用于${k.label}`}>
@@ -586,5 +594,159 @@ function CodeField({ value, onChange, hint }: { value: string; onChange: (v: str
         </button>
       </div>
     </Field>
+  );
+}
+
+/**
+ * 批量码：一次生成 N 个码（一码一人），可复制全部 / 导出 CSV / 单个作废。
+ *
+ * 为什么必须"先保存活动"才能生成：码要挂在 `promotions.id` 上，
+ * 新建时还没有 id。这不是限制，是数据关系。
+ */
+function CodeBatch({ promotionId }: { promotionId: number | null }) {
+  const [codes, setCodes] = useState<PromotionCodeView[]>([]);
+  const [count, setCount] = useState(10);
+  const [prefix, setPrefix] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    if (promotionId === null) return;
+    try {
+      const r = await api.promotionCodes(promotionId);
+      setCodes(r.codes);
+    } catch {
+      /* 列表加载失败不打断编辑 */
+    }
+  }, [promotionId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  if (promotionId === null) {
+    return <div className="hint">先保存这个活动（点「创建草稿」），之后就能批量生成码。</div>;
+  }
+
+  async function generate() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api.generatePromotionCodes(promotionId as number, {
+        count,
+        prefix: prefix || null,
+        note: note || null,
+      });
+      setMsg(r.codes.length === r.requested ? `已生成 ${r.codes.length} 个码` : `只生成了 ${r.codes.length}/${r.requested} 个（撞码重试到上限）`);
+      await reload();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const text = codes.map((c) => c.code).join("\n");
+
+  function download() {
+    const csv = ["code,状态,已用,上限,备注", ...codes.map((c) => `${c.code},${c.status},${c.used},${c.max_uses},${c.note ?? ""}`)].join("\n");
+    const url = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `promo-codes-${promotionId}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <>
+      <Field label="生成数量" hint="一次最多 500 个">
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            value={count}
+            onChange={(e) => setCount(Number(e.target.value) || 1)}
+            style={{ width: 90 }}
+          />
+          <input
+            value={prefix}
+            onChange={(e) => setPrefix(e.target.value.toUpperCase())}
+            placeholder="前缀（可空）"
+            style={{ width: 110 }}
+          />
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="备注（发给谁）"
+            style={{ flex: 1 }}
+          />
+          <button type="button" className="primary" disabled={busy} onClick={() => void generate()}>
+            生成
+          </button>
+        </div>
+      </Field>
+
+      {msg ? <div className="hint">{msg}</div> : null}
+
+      {codes.length > 0 && (
+        <>
+          <div className="row" style={{ gap: 8, marginTop: 4 }}>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(text);
+                setMsg("已复制全部码");
+              }}
+            >
+              复制全部
+            </button>
+            <button type="button" onClick={download}>
+              导出 CSV
+            </button>
+            <span className="hint">
+              共 {codes.length} 个，已用 {codes.reduce((n, c) => n + c.used, 0)} 次
+            </span>
+          </div>
+          <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 8 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>码</th>
+                  <th>用量</th>
+                  <th>状态</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {codes.map((c) => (
+                  <tr key={c.id}>
+                    <td className="mono">{c.code}</td>
+                    <td>
+                      {c.used} / {c.max_uses}
+                    </td>
+                    <td>{c.status === "active" ? "可用" : "已作废"}</td>
+                    <td className="actions">
+                      {c.status === "active" && (
+                        <button
+                          type="button"
+                          className="danger"
+                          disabled={busy}
+                          onClick={async () => {
+                            await api.revokePromotionCode(promotionId as number, c.id);
+                            await reload();
+                          }}
+                        >
+                          作废
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
   );
 }

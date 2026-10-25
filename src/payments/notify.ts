@@ -45,6 +45,7 @@ interface OrderRow {
   /** 促销减免（分）与命中的活动；支付成功后才核销 */
   discount_minor: number;
   promotion_id: number | null;
+  code_id: number | null;
   currency: string;
   payment_method: string;
   gateway_id: number | null;
@@ -204,7 +205,7 @@ export async function handlePayNotify(
 
   const order = await env.DB.prepare(
     `SELECT id, code, customer_id, plan_id, plan_snapshot, amount_minor, discount_minor,
-       promotion_id, currency, payment_method, gateway_id, status
+       promotion_id, code_id, currency, payment_method, gateway_id, status
      FROM orders WHERE provider_order_no = ? AND gateway_id = ?`,
   )
     .bind(parsed.orderNo, gateway.id)
