@@ -27,6 +27,42 @@ Follow this policy for all changes unless the user explicitly overrides it in th
 2. Do not rewrite shared history unless explicitly requested.
 3. Never commit secrets, tenant API tokens, payment credentials, or real customer data.
 
+## Local Git Hooks (Mandatory)
+
+`.githooks/pre-push` blocks every push to `refs/heads/main`. It is the same script used in
+`clever-vpn-cf-api`: identical content, no per-repo tuning.
+
+Server-side protection is the real gate, but it is not always available (a fork does not inherit
+it; a private repo on a free plan cannot create rulesets). The local hook is what makes the policy
+hold on your machine.
+
+Enable it once per clone — it is local git config, so it is **not** inherited by forks or clones:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Verify before assuming you are protected:
+
+```bash
+git config --local --get core.hooksPath   # → .githooks
+```
+
+When something is blocked, do **not** work around it (`--no-verify`, pushing to `main` from another
+remote). Create a branch and open a PR.
+
+## Default Execution Pattern
+
+When the user asks for implementation work, default to this order:
+
+1. Confirm/locate issue context.
+2. Create a new branch (never work on `main`).
+3. Implement and validate changes (`npm run check`: typecheck + tests).
+4. Commit and push the branch.
+5. Open a PR.
+6. Merge the PR after `validate` is green.
+7. Delete the feature branch locally and remotely.
+
 ## Release Tag Rules
 
 1. Tags and GitHub Releases use a `v` prefix (`v1.2.3`).
@@ -54,3 +90,5 @@ This repository is an **open-source, self-hostable tenant CRM** on Cloudflare Wo
 - Document behavior changes in `docs/` in the same PR; contract changes must bump
   `CRM_CONTRACT_VERSION` and stay additive.
 - Node version follows `.nvmrc` (22); dependencies must run on default GitHub Actions runners.
+- Before finishing any change, run `npm run check` (typecheck + unit tests) and `npm run build`
+  (dry-run bundle) — CI runs the same commands, so a local pass means no surprise red PR.
