@@ -67,20 +67,27 @@ function windowLabel(p: PromotionView): string {
 /**
  * 「怎么送出去」：从 auto_apply / 码统计 / 人群 推导，不让用户猜。
  *
+ * 两种渠道（契约 §2.9.3）：
+ *   - 自动生效 → **站内**：定价页展示（可带角标），结账自动抵扣
+ *   - 凭码    → **站外**：博主 / 群 / 实体卡，定价页不出现
+ *
  * 码的形态由「每码可用几次」决定，不用再分"主码/批次码"两种概念：
  *   1 个码 + 可用 N 次 = 共享码；N 个码 + 各 1 次 = 一人一码
  */
 function deliveryLabel(p: PromotionView): string {
   const ways: string[] = [];
-  const stats = p.code_stats;
-  if (stats && stats.codes > 0) {
-    if (stats.codes === 1) ways.push(`共享码（${stats.capacity ?? "不限"} 人）`);
-    else ways.push(`${stats.codes} 个码（一码一人）`);
+  if (p.auto_apply) {
+    ways.push(p.visible ? "站内展示" : "站内自动抵扣");
+  } else {
+    const stats = p.code_stats;
+    if (stats && stats.codes > 0) {
+      if (stats.codes === 1) ways.push(`站外共享码（${stats.capacity ?? "不限"} 人）`);
+      else ways.push(`站外 ${stats.codes} 个码（一码一人）`);
+    } else {
+      ways.push("站外（未发码）");
+    }
   }
-  if (p.auto_apply) ways.push("自动生效");
-  if (p.audience === "new") ways.push("首单自动");
   if (p.audience === "expiring") ways.push("到期自动");
-  ways.push("后台手动");
   return ways.join(" / ");
 }
 
@@ -223,7 +230,10 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
                   <tr key={p.id}>
                     <td className="wrap">
                       <strong>{p.name}</strong>
-                      {p.badge_label ? <div className="mono">角标：{p.badge_label}</div> : null}
+                      {/* 用户在定价页真正看到的那句话（含系统人群前缀） */}
+                      {p.visible && p.badge_label_full ? (
+                        <div className="mono">角标：{p.badge_label_full}</div>
+                      ) : null}
                     </td>
                     <td>{deliveryLabel(p)}</td>
                     <td>{isGift ? rewardsLabel(p.rewards) : benefitLabel(p)}</td>

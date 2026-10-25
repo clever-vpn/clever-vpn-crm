@@ -10,7 +10,7 @@
  * 建一个 `visible=0` 的活动把码单独发给他即可。
  */
 
-import { AUDIENCES, PROMOTION_COLUMNS, hasRewards, normalizeRewards, rowToPromotion } from "../promotions/model";
+import { AUDIENCES, PROMOTION_COLUMNS, hasRewards, normalizeRewards, promoBadgeText, rowToPromotion } from "../promotions/model";
 import { grantGift } from "../promotions/gift";
 import { generateCodes, listCodes, revokeCode } from "../promotions/codes";
 
@@ -132,6 +132,16 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
     errors.push("推荐人奖励必须 > 0（days 或 gb）");
   }
 
+  // ── 站内展示（契约 §2.9.3，v19）──
+  // 自动券没有码、没有入口，定价页是它**唯一**的曝光位：不写角标等于隐形券。
+  const badgeLabel = str(input.badge_label) || null;
+  if (autoApply && !badgeLabel) {
+    errors.push("自动生效的券必须有角标文案（用户只能通过它在定价页看到这个活动）");
+  }
+  // 凭码券一律不进定价页：摆上去等于把渠道专属（博主 / 实体卡）变成人人都有。
+  // 租户选择的 `visible` 只在自动券上有意义，其余一律落库为 0。
+  const visible = autoApply && kind === "coupon" && input.visible !== false;
+
   if (errors.length) return { ok: false, errors };
 
   return {
@@ -155,8 +165,8 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
       ends_at: endsAt,
       max_uses: maxUses === null ? null : Math.round(maxUses),
       max_uses_per_customer: Math.round(perCustomer),
-      badge_label: str(input.badge_label) || null,
-      visible: input.visible === false ? 0 : 1,
+      badge_label: badgeLabel,
+      visible: visible ? 1 : 0,
       referrer_reward_type: kind === "referral" ? rewardType : null,
       referrer_reward_value: kind === "referral" && rewardType !== "none" ? rewardValue : null,
     },
@@ -260,6 +270,8 @@ function view(
     max_uses: promo.max_uses,
     max_uses_per_customer: promo.max_uses_per_customer,
     badge_label: promo.badge_label,
+    // 用户在定价页真正看到的那句话（含系统生成的人群前缀），后台只能预览、不能改
+    badge_label_full: promoBadgeText(promo) || null,
     visible: promo.visible,
     referrer_reward_type: promo.referrer_reward_type,
     referrer_reward_value: promo.referrer_reward_value,
@@ -538,13 +550,23 @@ export async function handleAdminPromotions(
   const codes = path.match(/^\/promotions\/(\d+)\/codes$/);
   if (codes && (method === "GET" || method === "POST")) {
     const id = Number(codes[1]);
-    const exists = await env.DB.prepare(`SELECT kind FROM promotions WHERE id = ?`)
+    const exists = await env.DB.prepare(`SELECT kind, auto_apply FROM promotions WHERE id = ?`)
       .bind(id)
-      .first<{ kind: string }>();
+      .first<{ kind: string; auto_apply: number }>();
     if (!exists) return fail(404, "promotion_not_found");
 
     if (method === "GET") {
       return json({ codes: await listCodes(env, id) });
+    }
+
+    // 自动生效与发码互斥（契约 §2.9.3，v19）：门已经对所有人开了，再发码不增加
+    // 任何折扣，只会白白吃掉码的名额，还让“渠道带来 N 单”的报表失真。
+    if (exists.auto_apply === 1) {
+      return fail(
+        409,
+        "promotion_auto_apply",
+        "这个活动是自动生效的，不需要发码；要给渠道发码请另建一个凭码活动",
+      );
     }
 
     const body = await readBody(request);

@@ -348,8 +348,49 @@ export function bestPromotion(
   return best;
 }
 
-/** 列表页角标：只展示"公开 + 有文案"的活动，算出来的折扣仅供划线价使用 */
-export function badgeOf(list: readonly Promotion[], ctx: PromoContext): AppliedPromotion | null {
-  const visible = list.filter((p) => p.visible && p.badge_label);
-  return bestPromotion(visible, ctx);
+/**
+ * 人群前缀 —— **系统生成，租户改不掉**。
+ *
+ * 定价页的角标 = `人群前缀 · 租户文案`。"限新用户"必须写在折数前面：游客看到
+ * 「限新用户 · 首单 8 折」就不会以为人人 8 折，登录后发现原价也不算被骗；
+ * 反过来只写「首单 8 折」而不写人群，就是角标在说谎。
+ */
+export function audiencePrefix(p: Promotion): string {
+  switch (p.audience) {
+    case "all":
+      return "";
+    case "new":
+      return "限新用户";
+    case "existing":
+      return "限续费用户";
+    case "expiring":
+      return `限${p.audience_days ?? 7}天内到期`;
+    case "expired":
+      return "限订阅已结束";
+    case "specific":
+      // 定向名单永不公开，前缀也就没有意义
+      return "";
+  }
+}
+
+/** 角标的完整文案（前缀 + 租户文案）；`specific` 永不公开 → 空串 */
+export function promoBadgeText(p: Promotion): string {
+  if (p.audience === "specific") return "";
+  const body = (p.badge_label ?? "").trim();
+  const prefix = audiencePrefix(p);
+  if (!prefix) return body;
+  return body ? `${prefix} · ${body}` : prefix;
+}
+
+/**
+ * 能不能出现在定价页（契约 §2.9.3，v19）。
+ *
+ * 三个条件缺一不可：
+ *   1. **自动生效**的优惠券 —— 凭码券是站外渠道（博主 / 实体卡 / 群），摆到定价页
+ *      等于把"渠道专属"变成"人人都有"，渠道方第一个不满意
+ *   2. 租户勾了「站内展示」（`visible`）
+ *   3. `audience !== specific` —— 定向名单写"仅限受邀用户"既不吸引人也看不懂
+ */
+export function canAppearInList(p: Promotion): boolean {
+  return p.kind === "coupon" && p.auto_apply && p.visible && p.audience !== "specific";
 }

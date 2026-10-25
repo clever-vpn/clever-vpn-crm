@@ -332,6 +332,8 @@ export interface PromotionView {
   max_uses: number | null;
   max_uses_per_customer: number;
   badge_label: string | null;
+  /** 定价页上用户真正看到的那句话（含系统生成的人群前缀），只读 */
+  badge_label_full: string | null;
   visible: boolean;
   referrer_reward_type: RewardType | null;
   referrer_reward_value: number | null;
@@ -342,7 +344,10 @@ export interface PromotionView {
   code_stats?: { codes: number; active: number; capacity: number | null };
 }
 
-export type PromotionDraft = Omit<PromotionView, "id" | "status" | "uses">;
+export type PromotionDraft = Omit<
+  PromotionView,
+  "id" | "status" | "uses" | "badge_label_full" | "code_stats"
+>;
 
 
 // ── 客户与订单 ──

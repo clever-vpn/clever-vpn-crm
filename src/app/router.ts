@@ -33,7 +33,7 @@ import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
 import { bindReferral, referralPanel } from "../promotions/referral";
 import { redeemGiftCode } from "../promotions/redeem";
-import { planBadges, resolveForPlans, resolvePromotion } from "../promotions/service";
+import { planPromos, resolveForPlans, resolvePromotion } from "../promotions/service";
 import { customerSubscription } from "../subscriptions/store";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
@@ -42,7 +42,7 @@ import type { Plan, PlanRow } from "../plans/model";
 import type { CurrentSubscription } from "../plans/quote";
 import type { Subscription } from "../plans/subscription";
 
-const APP_CONTRACT = 18;
+const APP_CONTRACT = 19;
 /** 报价有效期：超过这个时间，App 必须重新 `POST /quote`（契约 §2.4.8） */
 const QUOTE_TTL_SECONDS = 900;
 /**
@@ -432,27 +432,31 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const plans = await loadActivePlans(env);
     const now = new Date();
     const ctx = viewer ? await currentContext(env, viewer.id) : { sub: null, current: null };
-    // 促销展示位（§2.9.3）：公开角标给所有人看；个人折扣只算给登录用户
-    const badges = await planBadges(env, plans, now);
+    // 促销展示位（§2.9.3，v19）：按**真实访客**算 —— 登录用户与 `/quote` 同源，
+    // 匿名只按“该人群最优情形”算，并把条件写进角标前缀
+    const promos = await planPromos(env, { plans, customerId: viewer?.id ?? null, now });
     const mine = viewer
       ? await resolveForPlans(env, { plans, customerId: viewer.id, now })
       : new Map<string, { discount_minor: number }>();
 
     const items = plans.map((plan) => {
       const base = planForClient(plan);
-      const badge = badges.get(plan.id);
+      const best = promos.get(plan.id);
       const promo = {
-        // 划线价：P1 没有"改价前"的概念，无活动时与标价相同
-        original_price_minor: badge?.original_price_minor ?? plan.price_minor,
-        // null = 没有公开活动；文案由 CRM 给，App 不拼
-        promo_badge: badge?.badge_label ?? null,
+        // 划线价：就是套餐标价
+        original_price_minor: plan.price_minor,
+        // 活动价（满足活动条件时的价）：只给**宣传位**用，不代表这个人的应付
+        promo_price_minor: best?.promo_price_minor ?? null,
+        // null = 没有公开活动；文案由 CRM 给（含人群前缀），App 不拼
+        promo_badge: best?.badge_label ?? null,
       };
       if (!viewer) {
-        // 匿名：能看商品与标价（含公开活动角标），不给可购买性与应付
+        // 匿名：只有“所有人都能用”的活动才敢当报价报给游客；限人群的等登录
+        const openToAll = best?.promotion.audience === "all";
         return {
           ...base,
           ...promo,
-          payable_minor: null,
+          payable_minor: openToAll ? (best?.promo_price_minor ?? null) : null,
           action: "login_required" as const,
           reason: "登录后购买",
           next_expires_at: null,

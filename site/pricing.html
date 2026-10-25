@@ -55,8 +55,14 @@
 
       function card(p) {
         const canBuy = BUYABLE.has(p.action);
-        const price = p.original_price_minor && p.original_price_minor !== p.price_minor
-          ? `<s>${yuan(p.original_price_minor)}</s>${yuan(p.price_minor)}`
+        // 价格位用「活动价」（promo_price_minor），它**不是**这个人的应付：
+        // 未登录时只有"所有人都能用"的活动才会同时给出 payable，其余等登录。
+        const promoPrice =
+          typeof p.promo_price_minor === 'number' && p.promo_price_minor < p.price_minor
+            ? p.promo_price_minor
+            : null;
+        const price = promoPrice !== null
+          ? `<s>${yuan(p.price_minor)}</s>${yuan(promoPrice)}`
           : yuan(p.price_minor);
         // upgrade 的应付含残值，列表不给金额（契约：点开才由 /quote 给）
         const payable = p.action === 'upgrade'
