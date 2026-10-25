@@ -20,6 +20,22 @@ export type { Env };
 /** 管理后台是 SPA：文件不存在时回落到 /admin/index.html */
 const ADMIN_INDEX = "/admin/index.html";
 
+/**
+ * 品牌官网的静态页。
+ *
+ * assets 配了 `html_handling: "none"`（为了 /admin 深链接），所以 `/pricing`
+ * 不会自动找到 `pricing.html` —— 必须在这里显式映射。
+ */
+const SITE_PAGES: Record<string, string> = {
+  "/login": "/login.html",
+  "/pricing": "/pricing.html",
+  "/checkout": "/checkout.html",
+  "/account": "/account.html",
+  "/download": "/download.html",
+  "/legal/terms": "/legal/terms.html",
+  "/legal/privacy": "/legal/privacy.html",
+};
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -68,10 +84,15 @@ export default {
     }
 
     if (url.pathname === "/") {
-      // 官网占位页。assets 的 html_handling 设了 none，所以这里显式取 index.html。
+      // 官网首页。assets 的 html_handling 设了 none，所以这里显式取 index.html。
       return env.ASSETS.fetch(
         new Request(new URL("/index.html", url).toString(), request),
       );
+    }
+
+    const sitePage = SITE_PAGES[url.pathname];
+    if (sitePage) {
+      return env.ASSETS.fetch(new Request(new URL(sitePage, url).toString(), request));
     }
 
     const asset = await env.ASSETS.fetch(request);

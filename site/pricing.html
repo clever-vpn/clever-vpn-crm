@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>套餐与价格 · Clever VPN</title>
+    <meta name="description" content="按月或按流量购买，随时续费升级。" />
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <header class="site">
+      <div class="wrap">
+        <a class="brand" href="/">Clever VPN</a>
+        <nav>
+          <a href="/pricing" class="active">套餐</a>
+          <a href="/account">我的</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <h1>选择套餐</h1>
+      <p class="lead">价格与可购买性全部由服务端计算，这里只负责展示。</p>
+      <div id="flash"></div>
+      <div id="plans" class="grid"></div>
+    </main>
+
+    <footer class="site">
+      <div class="wrap">
+        <a href="/legal/terms">服务条款</a> · <a href="/legal/privacy">隐私政策</a>
+      </div>
+    </footer>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
+      const flash = (kind, text) => {
+        $('flash').innerHTML = text ? `<div class="${kind}">${text}</div>` : '';
+      };
+
+      // 动作文案全部来自 CRM 的 action（契约 §2.4.8）：前端不做任何判断
+      const ACTION = {
+        buy: '立即购买', renewal: '续订', upgrade: '升级',
+        blocked: '不可购买', login_required: '登录后订阅',
+      };
+      const BUYABLE = new Set(['buy', 'renewal', 'upgrade']);
+      const KIND = { period: '周期套餐', traffic: '流量套餐', addon: '加量包' };
+
+      function quotaText(p) {
+        if (p.kind === 'period') {
+          return p.monthly_quota_gb === null ? '不限量' : `${p.monthly_quota_gb} GB / 月`;
+        }
+        return `${p.traffic_gb} GB`;
+      }
+
+      function card(p) {
+        const canBuy = BUYABLE.has(p.action);
+        const price = p.original_price_minor && p.original_price_minor !== p.price_minor
+          ? `<s>${yuan(p.original_price_minor)}</s>${yuan(p.price_minor)}`
+          : yuan(p.price_minor);
+        // upgrade 的应付含残值，列表不给金额（契约：点开才由 /quote 给）
+        const payable = p.action === 'upgrade'
+          ? '点「升级」看应付'
+          : canBuy ? `应付 ${yuan(p.payable_minor)}` : '';
+        const note = p.action === 'renewal' && p.next_expires_at
+          ? `续订后有效期至 ${p.next_expires_at.slice(0, 10)}`
+          : p.reason || '';
+
+        const el = document.createElement('div');
+        el.className = 'card plan';
+        el.innerHTML = `
+          <div class="row" style="justify-content:space-between">
+            <h3>${p.name}</h3>
+            <span class="price">${price}</span>
+          </div>
+          <div class="badges">
+            <span class="badge">${KIND[p.kind] ?? p.kind}</span>
+            <span class="badge">${quotaText(p)}</span>
+            <span class="badge">${p.licence_limit} 台设备</span>
+            ${p.promo_badge ? `<span class="badge promo">${p.promo_badge}</span>` : ''}
+          </div>
+          <div class="meta">${canBuy ? payable : note}</div>
+          <div class="row" style="margin-top:14px">
+            ${canBuy
+              ? `<a class="btn" href="/checkout?plan=${encodeURIComponent(p.plan_id)}">${ACTION[p.action]}</a>`
+              : `<a class="btn ghost" href="/login?next=/pricing">${p.action === 'login_required' ? '登录后订阅' : '不可购买'}</a>`}
+          </div>
+        `;
+        return el;
+      }
+
+      (async () => {
+        try {
+          const res = await fetch('/api/app/v1/plans', { credentials: 'same-origin' });
+          const plans = await res.json();
+          if (!res.ok) throw new Error(plans?.error?.message || `HTTP ${res.status}`);
+          const box = $('plans');
+          box.innerHTML = '';
+          if (!plans.length) {
+            box.innerHTML = '<div class="card hint">暂无可售套餐。</div>';
+            return;
+          }
+          for (const p of plans) box.appendChild(card(p));
+        } catch (e) {
+          flash('err', `加载套餐失败：${e.message}`);
+        }
+      })();
+    </script>
+  </body>
+</html>

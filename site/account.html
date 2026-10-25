@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>我的 · Clever VPN</title>
+    <meta name="robots" content="noindex" />
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <header class="site">
+      <div class="wrap">
+        <a class="brand" href="/">Clever VPN</a>
+        <nav>
+          <a href="/pricing">套餐</a>
+          <a href="/account" class="active">我的</a>
+          <a href="#" id="logout">退出</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <h1>我的</h1>
+      <!-- 与 App 是同一个 /me 响应：文案（status_text）也来自服务端 -->
+      <p class="lead">这里的权益与 App 里显示的完全一致。</p>
+      <div id="flash"></div>
+
+      <section class="card">
+        <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">当前权益</h2>
+          <span id="state-tag" class="tag"></span>
+        </div>
+        <dl id="me" class="kv" style="margin-top:14px"></dl>
+        <div class="row" style="margin-top:16px">
+          <a class="btn" href="/pricing">续费 / 升级</a>
+          <a class="btn ghost" href="/download">下载 App</a>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top:18px">
+        <h2 style="margin-top:0">订单</h2>
+        <table>
+          <thead>
+            <tr><th>单号</th><th>套餐</th><th>金额</th><th>状态</th><th>时间</th></tr>
+          </thead>
+          <tbody id="orders"><tr><td colspan="5" class="hint">加载中…</td></tr></tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer class="site">
+      <div class="wrap">
+        <a href="/legal/terms">服务条款</a> · <a href="/legal/privacy">隐私政策</a>
+      </div>
+    </footer>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
+      const flash = (kind, text) => {
+        $('flash').innerHTML = text ? `<div class="${kind}">${text}</div>` : '';
+      };
+      const fmtDate = (iso) => (iso ? String(iso).slice(0, 10) : '—');
+
+      const STATUS_TAG = {
+        active: ['ok', '可用'],
+        inactive: ['warn', '不可用'],
+        provisioning: ['warn', '开通中'],
+        none: ['warn', '未订阅'],
+      };
+
+      async function api(path, init = {}) {
+        const res = await fetch(`/api/app/v1${path}`, { credentials: 'same-origin', ...init });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          location.assign('/login?next=/account');
+          throw new Error('unauthorized');
+        }
+        if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+        return data;
+      }
+
+      function renderMe(me) {
+        const s = me.subscription || {};
+        const [cls, label] = STATUS_TAG[s.status] ?? ['warn', s.status ?? '—'];
+        $('state-tag').className = `tag ${cls}`;
+        $('state-tag').textContent = label;
+
+        const rows = {
+          账号: me.user.email,
+          // 契约：状态只有 active / inactive，具体原因与文案都由服务端给
+          状态: s.status === 'provisioning' ? '正在开通…' : (s.status_text ?? '—'),
+          套餐: s.plan_id ?? '—',
+          到期: fmtDate(s.expires_at),
+          剩余额度: s.unlimited ? '不限量' : (s.remaining_gb === null || s.remaining_gb === undefined ? '—' : `${s.remaining_gb} GB`),
+          设备数: s.licence_limit ?? '—',
+        };
+        if (s.status === 'inactive' && s.reason === 'frozen') {
+          rows['提示'] = '如需恢复，请联系客服';
+        }
+        // 激活码**不展示**：它只在 App 内部持有（契约 §2.3）
+        $('me').innerHTML = Object.entries(rows)
+          .map(([k, v]) => `<dt>${k}</dt><dd>${String(v)}</dd>`)
+          .join('');
+      }
+
+      function renderOrders(payload) {
+        const items = payload.items ?? [];
+        const body = $('orders');
+        if (!items.length) {
+          body.innerHTML = '<tr><td colspan="5" class="hint">还没有订单</td></tr>';
+          return;
+        }
+        body.innerHTML = items.map((o) => `
+          <tr>
+            <td class="mono">${o.order_code ?? o.code ?? '—'}</td>
+            <td>${o.plan_id ?? '—'}</td>
+            <td>${yuan(o.amount_minor)}</td>
+            <td>${o.status ?? '—'}</td>
+            <td>${fmtDate(o.created_at)}</td>
+          </tr>
+        `).join('');
+      }
+
+      (async () => {
+        try {
+          const me = await api('/me');
+          renderMe(me);
+          renderOrders(await api('/orders?pagination[limit]=20'));
+        } catch (e) {
+          if (e.message !== 'unauthorized') flash('err', `加载失败：${e.message}`);
+        }
+      })();
+
+      $('logout').addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        try {
+          await fetch('/api/app/v1/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        } finally {
+          location.assign('/');
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>登录 · Clever VPN</title>
+    <meta name="robots" content="noindex" />
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <header class="site">
+      <div class="wrap">
+        <a class="brand" href="/">Clever VPN</a>
+        <nav>
+          <a href="/pricing">套餐</a>
+          <a href="/account">我的</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap" style="max-width: 420px">
+      <h1>登录 / 注册</h1>
+      <p class="lead">只需邮箱，无需密码。同一个账号在 App 里也能用。</p>
+
+      <div class="card grid">
+        <div class="row">
+          <input id="email" class="grow" type="email" placeholder="you@example.com" autocomplete="email" />
+          <button id="send">发送验证码</button>
+        </div>
+        <div id="devcode" class="hint" hidden></div>
+        <div class="row">
+          <input id="code" class="grow" type="text" placeholder="6 位验证码" inputmode="numeric" maxlength="6" />
+          <button id="verify">登录</button>
+        </div>
+        <div class="row">
+          <input id="ref" class="grow" type="text" placeholder="邀请码（选填）" />
+        </div>
+        <div class="hint">邀请码不是必填：填了才有归因与首单奖励，不填照样注册。</div>
+        <div id="flash"></div>
+      </div>
+    </main>
+
+    <footer class="site">
+      <div class="wrap">
+        <a href="/legal/terms">服务条款</a> · <a href="/legal/privacy">隐私政策</a>
+      </div>
+    </footer>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const flash = (kind, text) => {
+        $('flash').innerHTML = text ? `<div class="${kind}">${text}</div>` : '';
+      };
+      const next = () => {
+        const n = new URLSearchParams(location.search).get('next');
+        // 只接受站内路径，避免开放重定向
+        return n && n.startsWith('/') && !n.startsWith('//') ? n : '/account';
+      };
+
+      async function post(path, body) {
+        const res = await fetch(`/api/app/v1${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error?.message || data?.error?.code || `HTTP ${res.status}`);
+        return data;
+      }
+
+      $('send').addEventListener('click', async () => {
+        flash('', '');
+        const email = $('email').value.trim();
+        if (!email) return flash('err', '先填邮箱');
+        $('send').disabled = true;
+        try {
+          const r = await post('/auth/send-code', { email });
+          if (r.code) {
+            $('devcode').hidden = false;
+            $('devcode').textContent = `开发环境回显验证码：${r.code}`;
+            $('code').value = r.code;
+          } else {
+            $('devcode').hidden = true;
+            flash('ok', '验证码已发送，请查收邮件');
+          }
+        } catch (e) {
+          flash('err', e.message);
+        } finally {
+          $('send').disabled = false;
+        }
+      });
+
+      $('verify').addEventListener('click', async () => {
+        flash('', '');
+        const email = $('email').value.trim();
+        const code = $('code').value.trim();
+        const ref = $('ref').value.trim();
+        try {
+          // session_token 由服务端写进 httpOnly Cookie，这里不保存任何 token
+          await post('/auth/verify', {
+            email,
+            code,
+            appId: 'website',
+            ...(ref ? { referral_code: ref } : {}),
+          });
+          location.assign(next());
+        } catch (e) {
+          flash('err', e.message);
+        }
+      });
+    </script>
+  </body>
+</html>

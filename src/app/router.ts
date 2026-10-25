@@ -40,6 +40,13 @@ import type { Subscription } from "../plans/subscription";
 const APP_CONTRACT = 12;
 /** 报价有效期：超过这个时间，App 必须重新 `POST /quote`（契约 §2.4.8） */
 const QUOTE_TTL_SECONDS = 900;
+/**
+ * 官网用的会话 Cookie。
+ * App 走 `Authorization: Bearer`（原生安全存储），官网走 httpOnly Cookie——
+ * **同一个 `session_token`，只是传输形态不同**（`app-crm.md` §2.2）。
+ */
+const SESSION_COOKIE = "cv_session";
+const SESSION_COOKIE_MAX_AGE = 30 * 24 * 3600;
 /** 会话不做硬过期（契约 §2.6），这里只在活跃度上留痕 */
 const SESSION_TOUCH_MS = 5 * 60 * 1000;
 
@@ -127,9 +134,36 @@ interface SessionRow {
   customer_id: number;
 }
 
-async function resolveSession(env: Env, request: Request): Promise<CustomerRow | null> {
+/** 从 `Authorization: Bearer` 取 token（App） */
+function bearerToken(request: Request): string {
   const header = request.headers.get("Authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+}
+
+/** 从 Cookie 取 token（官网） */
+function cookieToken(request: Request): string {
+  const raw = request.headers.get("Cookie") ?? "";
+  for (const part of raw.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    if (part.slice(0, idx).trim() !== SESSION_COOKIE) continue;
+    return decodeURIComponent(part.slice(idx + 1).trim());
+  }
+  return "";
+}
+
+/** 登录 / 登出时下发的 Set-Cookie；本地 http 不加 Secure（否则浏览器不存） */
+function sessionCookie(env: Env, token: string | null): string {
+  const secure = env.ENVIRONMENT === "production" ? "; Secure" : "";
+  const base = `Path=/; HttpOnly; SameSite=Lax${secure}`;
+  return token
+    ? `${SESSION_COOKIE}=${encodeURIComponent(token)}; ${base}; Max-Age=${SESSION_COOKIE_MAX_AGE}`
+    : `${SESSION_COOKIE}=; ${base}; Max-Age=0`;
+}
+
+async function resolveSession(env: Env, request: Request): Promise<CustomerRow | null> {
+  // 先 Bearer（App），没有再看 Cookie（官网）；命中后走完全相同的校验
+  const token = bearerToken(request) || cookieToken(request);
   if (!token) return null;
   const id = await sha256Hex(token);
   const session = await env.DB.prepare(
@@ -246,6 +280,15 @@ export async function handleAppApi(request: Request, env: Env): Promise<Response
     return new Response(null, { status: 204, headers: cors });
   }
 
+  // CSRF：靠 Cookie 认证时，写操作必须同源。
+  // Bearer 不会被浏览器自动附加，所以 App 天然免疫。
+  if (method !== "GET" && !bearerToken(request)) {
+    const origin = request.headers.get("Origin");
+    if (origin && origin !== url.origin) {
+      return err(403, "forbidden", "跨站请求被拒绝");
+    }
+  }
+
   const withCors = (res: Response): Response => {
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
     return res;
@@ -332,25 +375,41 @@ async function route(request: Request, env: Env, path: string, method: string): 
       .run();
 
     const sub = await customerSubscription(env, customerId);
-    return json({
-      session_token: token,
-      user: { id: customerId, email, name: existing?.display_name ?? null },
-      // 尚未接 cf-api 落账：没有平台快照
-      platform: null,
-      platform_status: sub ? "provisioning" : "none",
-    });
+    const view = subscriptionView(sub);
+    // 平台快照：**只有拿到 code 才算有**。provisioning 时 App 应显示"正在开通"（§2.6）
+    const platform = sub?.code
+      ? {
+          token: sub.code,
+          status: view.status,
+          reason: view.reason,
+          status_text: view.status_text,
+          expires_at: sub.expires_at,
+          licence_limit: sub.licence_limit,
+        }
+      : null;
+    return json(
+      {
+        session_token: token,
+        user: { id: customerId, email, name: existing?.display_name ?? null },
+        platform,
+        platform_status: sub ? (sub.code ? view.status : "provisioning") : "none",
+      },
+      200,
+      // 官网直接拿到登录态；App 忽略这个头（它用 Bearer）
+      { "Set-Cookie": sessionCookie(env, token) },
+    );
   }
 
   // ── 退出 ──
   if (method === "POST" && path === "/auth/logout") {
-    const header = request.headers.get("Authorization") ?? "";
-    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    // Bearer 优先，其次 Cookie：两端都能登出
+    const token = bearerToken(request) || cookieToken(request);
     if (token) {
       await env.DB.prepare(`UPDATE app_sessions SET revoked_at = ? WHERE id = ?`)
         .bind(new Date().toISOString(), await sha256Hex(token))
         .run();
     }
-    return json({ ok: true });
+    return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(env, null) });
   }
 
   // ── 套餐列表（免登录：商品与标价公开，动作与金额属于某个人）──
