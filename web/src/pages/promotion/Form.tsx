@@ -18,13 +18,23 @@ import { api } from "../../api";
 
 import type { PlanKind, PromotionCodeView, PromotionDraft, PromotionKind, PromotionView } from "../../api";
 
-export const AUDIENCE_OPTIONS: { value: PromotionView["audience"]; label: string; hint: string }[] = [
-  { value: "all", label: "所有人", hint: "不看新老，谁都能用" },
-  { value: "new", label: "新客（还没付过钱）", hint: "付过一次就不再算新客" },
-  { value: "existing", label: "老客（当前有生效订阅）", hint: "续费 / 加购场景" },
-  { value: "expiring", label: "快到期（挽回）", hint: "N 天内到期；每天自动扫描" },
-  { value: "expired", label: "已过期（召回）", hint: "订阅已经结束" },
-  { value: "specific", label: "指定客户", hint: "只有点名名单里的人能用" },
+/**
+ * 人群选项。`prefix` = 定价页角标前面那句**系统生成、租户改不掉**的限制说明
+ * （契约 §2.9.3）。与 `src/promotions/model.ts` 的 `audiencePrefix` 一一对应：
+ * 改一边必须改另一边，否则后台预览与用户看到的会不一致。
+ */
+export const AUDIENCE_OPTIONS: {
+  value: PromotionView["audience"];
+  label: string;
+  hint: string;
+  prefix: string;
+}[] = [
+  { value: "all", label: "所有人", hint: "不看新老，谁都能用", prefix: "" },
+  { value: "new", label: "新客（还没付过钱）", hint: "付过一次就不再算新客", prefix: "限新用户" },
+  { value: "existing", label: "老客（当前有生效订阅）", hint: "续费 / 加购场景", prefix: "限续费用户" },
+  { value: "expiring", label: "快到期（挽回）", hint: "N 天内到期；每天自动扫描", prefix: "限N天内到期" },
+  { value: "expired", label: "已过期（召回）", hint: "订阅已经结束", prefix: "限订阅已结束" },
+  { value: "specific", label: "指定客户", hint: "只有点名名单里的人能用（**不会公开**）", prefix: "" },
 ];
 
 const PLAN_KINDS: { value: PlanKind; label: string }[] = [
@@ -192,6 +202,21 @@ export function PromotionForm({
   /** 码一旦生成就不再允许改实质内容（服务端也会拒） */
   const codesIssued = !isNew && (codeStats?.codes ?? 0) > 0;
   const lockReason = "已经发出码了，改这个会让已发出的码变成新规则。要改请先作废这些码。";
+
+  /**
+   * 定价页角标预览：`系统人群前缀 · 租户文案`。
+   * 与服务端 `promoBadgeText()` 同规则 —— 定向名单永不公开，所以没有预览。
+   */
+  const badgePreview = (() => {
+    if (draft.audience === "specific") return "";
+    const prefix =
+      draft.audience === "expiring"
+        ? `限${draft.audience_days ?? 7}天内到期`
+        : (AUDIENCE_OPTIONS.find((a) => a.value === draft.audience)?.prefix ?? "");
+    const body = (draft.badge_label ?? "").trim();
+    if (!prefix) return body;
+    return body ? `${prefix} · ${body}` : prefix;
+  })();
 
   const deliveryHints: string[] = [];
   if (isGift) {
@@ -588,24 +613,41 @@ export function PromotionForm({
           </Section>
 
           <Section title="展示">
-            {isCoupon && (
-              <Field label="角标文案（留空 = 不公开宣传）">
-                <input
-                  value={draft.badge_label ?? ""}
-                  onChange={(e) => patch({ badge_label: e.target.value })}
-                  placeholder="限时立减 ¥3"
-                />
-              </Field>
+            {isCoupon && draft.auto_apply ? (
+              <>
+                <Field
+                  label="定价页展示"
+                  hint="自动生效的券没有码、没有入口，定价页是它唯一的曝光位"
+                >
+                  <select
+                    value={draft.visible ? "yes" : "no"}
+                    onChange={(e) => patch({ visible: e.target.value === "yes" })}
+                  >
+                    <option value="yes">展示（定价页图标活动）</option>
+                    <option value="no">不展示（只在结账时自动抵扣）</option>
+                  </select>
+                </Field>
+                {draft.visible && (
+                  <Field label="角标文案" hint="定价页上那一句话。人群限制会自动加在前面，不用自己写">
+                    <input
+                      value={draft.badge_label ?? ""}
+                      onChange={(e) => patch({ badge_label: e.target.value })}
+                      placeholder="首单立减 ¥3"
+                    />
+                    {badgePreview && (
+                      <div className="hint" style={{ marginTop: 6 }}>
+                        用户会看到：<span className="tag">{badgePreview}</span>
+                      </div>
+                    )}
+                  </Field>
+                )}
+              </>
+            ) : (
+              <div className="notice">
+                凭码使用 = <strong>站外推广</strong>（博主 / 群 / 实体卡）。
+                码在定价页不展示 —— 否则渠道专属就变成人人都有了。
+              </div>
             )}
-            <Field label="公开展示">
-              <select
-                value={draft.visible ? "yes" : "no"}
-                onChange={(e) => patch({ visible: e.target.value === "yes" })}
-              >
-                <option value="yes">公开（列表页显示角标）</option>
-                <option value="no">不公开（只靠码命中）</option>
-              </select>
-            </Field>
             {draft.auto_apply && (
               <Field label="总名额（留空 = 不限，0 = 不限）" hint="只对自动生效的券有意义；凭码的名额在码上">
                 <input

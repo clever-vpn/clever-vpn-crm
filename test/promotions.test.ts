@@ -8,10 +8,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   appliedOf,
-  badgeOf,
   bestPromotion,
+  canAppearInList,
   checkPromotion,
   discountOf,
+  promoBadgeText,
   yuan,
 } from "../src/promotions/model";
 
@@ -218,11 +219,28 @@ describe("多活动：取更优，不叠加", () => {
     expect(bestPromotion([], ctx())).toBeNull();
   });
 
-  it("角标只挑 public 且带文案的", () => {
-    const hidden = promo({ id: 1, name: "定向券", benefit_value: 900, visible: false });
-    const noBadge = promo({ id: 2, name: "低调券", benefit_value: 800, badge_label: null });
-    const publicOne = promo({ id: 3, name: "公开券", benefit_value: 300 });
-    expect(badgeOf([hidden, noBadge, publicOne], ctx())?.promotion.id).toBe(3);
+  it("只有自动生效的券能进定价页（凭码券是站外渠道）", () => {
+    const byCode = promo({ id: 1, name: "渠道码", auto_apply: false });
+    const hidden = promo({ id: 2, name: "定向券", auto_apply: true, visible: false });
+    const targeted = promo({ id: 3, name: "名单内", auto_apply: true, audience: "specific" });
+    const gift = promo({ id: 4, name: "礼包", kind: "gift", auto_apply: true });
+    const publicOne = promo({ id: 5, name: "公开券", auto_apply: true });
+    const shown = [byCode, hidden, targeted, gift, publicOne]
+      .filter(canAppearInList)
+      .map((p) => p.id);
+    expect(shown).toEqual([5]);
+  });
+
+  it("角标带系统人群前缀，租户只能填后半句", () => {
+    expect(promoBadgeText(promo({ badge_label: "首单 8 折" }))).toBe("首单 8 折");
+    expect(promoBadgeText(promo({ audience: "new", badge_label: "首单 8 折" }))).toBe(
+      "限新用户 · 首单 8 折",
+    );
+    expect(promoBadgeText(promo({ audience: "expiring", audience_days: 7, badge_label: "续费 8 折" }))).toBe(
+      "限7天内到期 · 续费 8 折",
+    );
+    // 定向名单永不公开 → 没有角标
+    expect(promoBadgeText(promo({ audience: "specific", badge_label: "仅限受邀" }))).toBe("");
   });
 });
 

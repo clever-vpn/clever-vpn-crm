@@ -87,7 +87,11 @@ async function createPromotion(body: Record<string, unknown>): Promise<number> {
   const { code, ...rest } = body as { code?: string } & Record<string, unknown>;
   // v18：没有码的优惠券默认就是「自动生效」（对应 v17 的 code IS NULL）
   const isCoupon = (rest.kind ?? "coupon") === "coupon";
-  const payload = isCoupon && !code ? { ...rest, auto_apply: true } : rest;
+  // v19：自动券必须有角标；默认 `visible:false` —— 展示位只在专门讲展示的用例里开
+  const auto = isCoupon && !code && rest.auto_apply !== false;
+  const payload = auto
+    ? { badge_label: "限时优惠", visible: false, ...rest, auto_apply: true }
+    : rest;
   const created = await adminCall("/api/admin/promotions", { method: "POST", body: payload });
   expect(created.status, JSON.stringify(await created.clone().text())).toBe(201);
   const { promotion } = (await created.json()) as { promotion: { id: number } };
@@ -236,6 +240,8 @@ describe("后台建活动", () => {
     const promoId = await createPromotion({
       name: "新人券",
       kind: "coupon",
+      // v19：自动生效与发码互斥 —— 要发码就必须是凭码活动
+      auto_apply: false,
       benefit_type: "amount",
       benefit_value: 300,
       badge_label: "领券立减 3 元",
@@ -260,35 +266,112 @@ describe("后台建活动", () => {
 });
 
 describe("/plans 的促销展示位", () => {
-  it("匿名也能看角标（公开信息），但仍没有应付", async () => {
+  type PlanItem = {
+    plan_id: string;
+    original_price_minor: number;
+    promo_price_minor: number | null;
+    promo_badge: string | null;
+    payable_minor: number | null;
+    action: string;
+  };
+
+  it("匿名也能看角标 + 活动价（含人群前缀），但仍没有应付", async () => {
     const res = await fetchJson("/api/app/v1/plans");
-    const items = (await res.json()) as {
-      plan_id: string;
-      original_price_minor: number;
-      promo_badge: string | null;
-      payable_minor: number | null;
-      action: string;
-    }[];
+    const items = (await res.json()) as PlanItem[];
     const plan = items.find((p) => p.plan_id === "promo_30d");
     expect(plan?.action).toBe("login_required");
-    expect(plan?.payable_minor).toBeNull();
+    // 匿名不知道访客是不是新客 ⇒ 按"该人群最优情形"算，条件写进前缀
+    expect(plan?.promo_badge).toBe("限新用户 · 首单立减 3 元");
     expect(plan?.original_price_minor).toBe(1500);
-    // 两个公开活动都带 badge，取更优的那个（新人券 300 > 首单券 300 ⇒ 同额按 id）
-    expect(plan?.promo_badge).toBeTruthy();
+    expect(plan?.promo_price_minor).toBe(1200);
+    // 但"这个人要付多少"必须等登录：限人群的券不能当报价
+    expect(plan?.payable_minor).toBeNull();
   });
 
   it("登录后：新客拿到折扣后的应付", async () => {
     const token = await login(PAYER);
     const res = await appCall("/api/app/v1/plans", token);
-    const items = (await res.json()) as {
-      plan_id: string;
-      action: string;
-      payable_minor: number | null;
-    }[];
+    const items = (await res.json()) as PlanItem[];
     const plan = items.find((p) => p.plan_id === "promo_30d");
     expect(plan?.action).toBe("buy");
-    // 1500 − 300
+    // 1500 − 300：定价页写的价，与 /quote 必须一模一样
     expect(plan?.payable_minor).toBe(1200);
+    expect(plan?.promo_price_minor).toBe(1200);
+  });
+
+  it("凭码券是站外渠道：把 visible 传成 true 也不进定价页", async () => {
+    const id = await createPromotion({
+      name: "博主专属",
+      kind: "coupon",
+      auto_apply: false,
+      visible: true, // 会被服务端强制落成 0
+      benefit_type: "amount",
+      benefit_value: 800,
+      limit_plan_ids: ["promo_90d"],
+      badge_label: "博主立减 8 元",
+    });
+    await adminCall(`/api/admin/promotions/${id}/publish`, { method: "POST" });
+
+    const items = (await (await fetchJson("/api/app/v1/plans")).json()) as PlanItem[];
+    const plan = items.find((p) => p.plan_id === "promo_90d");
+    expect(plan?.promo_badge).not.toContain("博主");
+  });
+
+  it("定向名单永不公开", async () => {
+    const id = await createPromotion({
+      name: "受邀专享",
+      kind: "coupon",
+      auto_apply: true,
+      visible: true,
+      audience: "specific",
+      benefit_type: "amount",
+      benefit_value: 900,
+      badge_label: "受邀立减 9 元",
+    });
+    await adminCall(`/api/admin/promotions/${id}/publish`, { method: "POST" });
+
+    const items = (await (await fetchJson("/api/app/v1/plans")).json()) as PlanItem[];
+    for (const plan of items) {
+      expect(plan.promo_badge ?? "").not.toContain("受邀");
+    }
+  });
+});
+
+describe("自动生效与发码互斥（v19）", () => {
+  it("自动券没有角标 → 建不出来（它是唯一的曝光入口）", async () => {
+    const res = await adminCall("/api/admin/promotions", {
+      method: "POST",
+      body: {
+        name: "无名氏",
+        kind: "coupon",
+        auto_apply: true,
+        benefit_type: "amount",
+        benefit_value: 100,
+        badge_label: "",
+      },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { errors: string[] };
+    expect(body.errors.join()).toContain("角标");
+  });
+
+  it("自动生效的活动不能发码（门已经对所有人开了）", async () => {
+    const id = await createPromotion({
+      name: "全站立减",
+      kind: "coupon",
+      auto_apply: true,
+      visible: true,
+      benefit_type: "amount",
+      benefit_value: 200,
+      badge_label: "全站立减 2 元",
+    });
+    const res = await adminCall(`/api/admin/promotions/${id}/codes`, {
+      method: "POST",
+      body: { count: 1 },
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("promotion_auto_apply");
   });
 });
 
@@ -939,6 +1022,8 @@ describe("批次码", () => {
     const promoId = await createPromotion({
       name: "渠道大额券",
       kind: "coupon",
+      // v19：要发码就必须是凭码活动（自动生效与发码互斥）
+      auto_apply: false,
       benefit_type: "amount",
       // 要比自动活动更划算，否则会命中自动活动（多活动取更优）
       benefit_value: 500,

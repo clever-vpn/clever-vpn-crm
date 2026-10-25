@@ -5,7 +5,7 @@
  * 拆开的好处：所有"能不能用 / 便宜多少"的规则都能脱离 D1 单测。
  */
 import { lookupCode } from "./codes";
-import { PROMOTION_COLUMNS, badgeOf, checkPromotion, appliedOf, rowToPromotion } from "./model";
+import { PROMOTION_COLUMNS, canAppearInList, checkPromotion, appliedOf, promoBadgeText, rowToPromotion, discountOf } from "./model";
 
 import type { AppliedPromotion, PromoContext, Promotion, PromotionCheck, PromotionRow } from "./model";
 import type { PlanKind } from "../plans/model";
@@ -380,10 +380,97 @@ export async function resolveForPlans(
   return out;
 }
 
-export interface PlanBadge {
+export interface PlanPromo {
+  promotion: Promotion;
+  /** 满足条件的客户能少付多少 */
+  discount_minor: number;
+  /** 含人群前缀的完整角标（`限新用户 · 首单 8 折`） */
   badge_label: string;
-  original_price_minor: number;
-  payable_minor: number;
+  /** 活动价；划线价仍是 `plan.price_minor` */
+  promo_price_minor: number;
+}
+
+/**
+ * 匿名访客看到的"该人群最优情形"。
+ *
+ * 匿名时我们不知道他是不是新客、有没有订阅，所以按**这个活动自己的目标人群**
+ * 取最有利的假设算一遍 —— 条件已经写进角标前缀（`限新用户`），所以不是欺骗。
+ * 名额、时间窗、套餐范围、门槛这些**与身份无关**的条件仍然按真实值判。
+ */
+function audienceBestCase(p: Promotion): CustomerFacts {
+  const base: CustomerFacts = {
+    first_purchase: false,
+    customer_age_days: 0,
+    has_active_sub: false,
+    days_to_expiry: null,
+  };
+  switch (p.audience) {
+    case "new":
+      return { ...base, first_purchase: true };
+    case "existing":
+    case "expiring":
+      return { ...base, has_active_sub: true, days_to_expiry: 1 };
+    case "expired":
+      return base;
+    default:
+      return base;
+  }
+}
+
+/**
+ * 定价页展示位（契约 §2.9.3，v19）。
+ *
+ * 与旧 `planBadges` 的根本区别：**不再用"最理想客户"的假画像**。
+ *   - 登录用户：按真实上下文判定 —— 与 `/plans.payable_minor`、`/quote` 完全同源，
+ *     不可能出现"定价页 8 折、结账原价"
+ *   - 匿名访客：按该人群的最优情形判定，并把条件写进角标前缀
+ *
+ * 名额用完 / 未开始 / 已过期 / 门槛不到 / 套餐不适用 → 一律不出现（角标是承诺）。
+ */
+export async function planPromos(
+  env: Env,
+  opts: { plans: readonly Plan[]; customerId: number | null; now?: Date },
+): Promise<Map<string, PlanPromo>> {
+  const out = new Map<string, PlanPromo>();
+  if (!opts.plans.length) return out;
+  const now = opts.now ?? new Date();
+
+  // 只有自动生效的券才有展示位：凭码券是站外渠道（模型见 `canAppearInList`）
+  const candidates = (await allActivePromotions(env)).filter(canAppearInList);
+  if (!candidates.length) return out;
+
+  const facts = opts.customerId === null ? null : await customerFacts(env, opts.customerId, now);
+  const usage = await usageOf(env, candidates.map((p) => p.id), opts.customerId);
+  const targeted = await targetedOf(env, candidates.map((p) => p.id), opts.customerId);
+
+  for (const plan of opts.plans) {
+    let best: PlanPromo | null = null;
+    for (const p of candidates) {
+      const used = usage.get(p.id) ?? { total: 0, byCustomer: 0, lastAt: null };
+      const ctx = contextFor(
+        plan,
+        now,
+        facts ?? audienceBestCase(p),
+        // 匿名时不存在"这个人用过几次"：沿用全站次数，个人次数归零
+        facts ? used : { total: used.total, byCustomer: 0, lastAt: null },
+        plan.price_minor,
+        targeted.has(p.id),
+      );
+      if (!checkPromotion(p, ctx).ok) continue;
+      const discount = discountOf(p, plan.price_minor);
+      if (discount <= 0) continue;
+      if (!best || discount > best.discount_minor) {
+        best = {
+          promotion: p,
+          discount_minor: discount,
+          badge_label: promoBadgeText(p),
+          promo_price_minor: Math.max(0, plan.price_minor - discount),
+        };
+      }
+    }
+    if (best) out.set(plan.id, best);
+  }
+  return out;
 }
 
 /**
@@ -419,40 +506,4 @@ export async function redeemOrderPromotion(
       now.toISOString(),
     )
     .run();
-}/**
- * 列表页角标（**公开信息**，与"这个人能不能用"无关）。
- *
- * 用"最理想客户"的上下文算：新客、零次数 —— 这样"新人首单 8 折"也能公开显示。
- * 真正能否享受由 `/quote` 按本人上下文判定。
- */
-export async function planBadges(
-  env: Env,
-  plans: readonly Plan[],
-  now: Date = new Date(),
-): Promise<Map<string, PlanBadge>> {
-  const out = new Map<string, PlanBadge>();
-  if (!plans.length) return out;
-
-  const active = (await allActivePromotions(env)).filter((p) => p.visible && p.badge_label);
-  if (!active.length) return out;
-
-  // 角标不做次数判断：这里只是文案，不是承诺
-  const facts: CustomerFacts = {
-    first_purchase: true,
-    customer_age_days: 0,
-    has_active_sub: true,
-    days_to_expiry: 0,
-  };
-  const zero = { total: 0, byCustomer: 0, lastAt: null };
-
-  for (const plan of plans) {
-    const best = badgeOf(active, contextFor(plan, now, facts, zero, plan.price_minor, false));
-    if (!best) continue;
-    out.set(plan.id, {
-      badge_label: best.promotion.badge_label ?? best.label,
-      original_price_minor: plan.price_minor,
-      payable_minor: Math.max(0, plan.price_minor - best.discount_minor),
-    });
-  }
-  return out;
 }
