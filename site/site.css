@@ -1,0 +1,108 @@
+/* 品牌官网共享样式（`site/` 下的所有页面都用它） */
+:root {
+  --bg: #0b0f17;
+  --surface: #121926;
+  --border: #1f2937;
+  --text: #e8edf5;
+  --dim: #97a3b6;
+  --brand: #3b82f6;
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --err: #ef4444;
+  --radius: 12px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+
+header.site {
+  border-bottom: 1px solid var(--border);
+  background: rgba(11, 15, 23, 0.9);
+  backdrop-filter: blur(8px);
+  position: sticky; top: 0; z-index: 10;
+}
+header.site .wrap {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 60px;
+}
+header.site .brand { font-weight: 700; letter-spacing: 0.2px; }
+header.site nav { display: flex; gap: 18px; font-size: 14px; }
+header.site nav a { color: var(--dim); }
+header.site nav a.active, header.site nav a:hover { color: var(--text); }
+
+main { padding: 40px 0 72px; }
+h1 { font-size: 28px; margin: 0 0 8px; }
+h2 { font-size: 18px; margin: 32px 0 12px; }
+p.lead { color: var(--dim); margin: 0 0 28px; }
+.hint { color: var(--dim); font-size: 13px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.grid { display: grid; gap: 14px; }
+@media (min-width: 680px) { .grid.cols-2 { grid-template-columns: 1fr 1fr; } }
+
+.plan h3 { margin: 0 0 4px; font-size: 16px; }
+.plan .price { font-size: 20px; font-weight: 700; }
+.plan .price s { font-size: 13px; color: var(--dim); font-weight: 400; margin-right: 6px; }
+.plan .meta { color: var(--dim); font-size: 13px; margin-top: 8px; }
+.plan .badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.badge {
+  font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  background: #1b2436; color: var(--dim); border: 1px solid var(--border);
+}
+.badge.promo { background: #3a2a12; color: #fbbf24; border-color: #5a3f14; }
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+
+button, .btn {
+  font: inherit; font-size: 14px; padding: 9px 16px; border-radius: 9px;
+  border: 1px solid var(--brand); background: var(--brand); color: #fff;
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.08); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.ghost { background: transparent; color: var(--text); border-color: var(--border); }
+
+input {
+  font: inherit; font-size: 14px; padding: 9px 12px; border-radius: 9px;
+  border: 1px solid var(--border); background: #0e1522; color: var(--text);
+  min-width: 0;
+}
+input:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+
+dl.kv { display: grid; grid-template-columns: 96px 1fr; gap: 8px 14px; margin: 0; }
+dl.kv dt { color: var(--dim); font-size: 13px; }
+dl.kv dd { margin: 0; font-size: 14px; }
+
+.tag { font-size: 12px; padding: 2px 8px; border-radius: 6px; }
+.tag.ok { background: #0d2e22; color: #6ee7b7; }
+.tag.warn { background: #3a2a12; color: #fbbf24; }
+.tag.err { background: #3a1414; color: #fca5a5; }
+
+#flash { min-height: 0; }
+#flash .ok { color: var(--ok); font-size: 14px; margin: 12px 0; }
+#flash .err { color: var(--err); font-size: 14px; margin: 12px 0; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--dim); font-weight: 500; font-size: 13px; }
+td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+
+footer.site { border-top: 1px solid var(--border); padding: 24px 0; color: var(--dim); font-size: 13px; }
+footer.site a { color: var(--dim); }
