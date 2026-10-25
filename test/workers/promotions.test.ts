@@ -349,6 +349,33 @@ describe("/orders + 支付回调", () => {
     expect(await countFor()).toBe(before);
   });
 
+  it("订单详情可按单号查（只限自己的单）", async () => {
+    const token = await login(PAYER);
+    const list = await appCall("/api/app/v1/orders", token);
+    const { items } = (await list.json()) as { items: { order_code: string }[] };
+    expect(items.length).toBeGreaterThan(0);
+
+    const code = items[0]!.order_code;
+    const detail = await appCall(`/api/app/v1/orders/${code}`, token);
+    expect(detail.status).toBe(200);
+    const body = (await detail.json()) as {
+      order_code: string;
+      status: string;
+      amount_minor: number;
+      discount_minor: number;
+      subscription?: { status: string };
+    };
+    expect(body.order_code).toBe(code);
+    expect(body.status).not.toBe("pending");
+    // 已付款的单顺带带回订阅快照，客户端少一次往返
+    expect(body.subscription).toBeTruthy();
+
+    // 别人的单查不到（不允许拿单号枚举）
+    const otherToken = await login("promo-other@test.com");
+    const denied = await appCall(`/api/app/v1/orders/${code}`, otherToken);
+    expect(denied.status).toBe(404);
+  });
+
   it("同一个码本人只能用一次（per-customer 上限）", async () => {
     const token = await login(PAYER);
     const res = await appCall("/api/app/v1/quote", token, {

@@ -3,22 +3,24 @@
  *
  * 这是**唯一对终端用户开放**的接口面，**App 与品牌官网共用**（官网用 httpOnly Cookie）。
  *
- * 当前实现的是**能本地跑通购买前链路**的最小集：
+ * 当前实现的端点：
  *   GET  /meta                 版本协商 + 能力位
  *   POST /auth/send-code       发验证码（非 production 直接回显 code，方便本地联调）
- *   POST /auth/verify          验证码换 session_token（不存在则建号）
+ *   POST /auth/verify          验证码换 session_token（不存在则建号；可选 referral_code）
  *   POST /auth/logout
- *   GET  /me                   用户 + 订阅快照
+ *   GET  /me                   用户 + 订阅快照 + 邀请面板
  *   GET  /subscription         订阅状态（status + reason + status_text）
- *   GET  /plans                可售套餐（免登录；每项只带一个 `action`）
+ *   GET  /plans                可售套餐（免登录；每项只带一个 `action` + 促销展示位）
  *   GET  /payment-methods      可用支付方式（需登录）
- *   POST /quote                报价（唯一的应付金额来源）
- *   POST /orders               审计式创建一笔待支付订单
+ *   POST /quote                报价（唯一的应付金额来源；可带 promo_code）
+ *   POST /orders               审计式创建一笔待支付订单（可带 promo_code / origin）
+ *   GET  /orders               我的订单列表（官网收据用）
+ *   GET  /orders/{order_code}  订单详情（App/官网轮询用）
  *
  * **这里没有一行价格/资格计算**：可买性与报价都来自 `src/plans/*` 的纯函数，
- * 同一个函数给后台预览用，保证"后台预览 == App 看到"。
+ * 促销折扣来自 `src/promotions/*`，同一个函数给后台预览用，保证"后台预览 == App 看到"。
  *
- * 未实现（下一步）：支付回调、`/orders/iap`、取码与 cf-api 落账。
+ * 未实现（下一步）：`/orders/iap`（Apple / Google 内购）。
  */
 
 import { randomToken, sha256Hex } from "../admin/crypto";
@@ -532,6 +534,47 @@ async function route(request: Request, env: Env, path: string, method: string): 
         created_at: row.created_at,
         paid_at: row.paid_at,
       })),
+    });
+  }
+
+  // ── 订单详情（App/官网轮询用；契约 §2.4.1）──
+  //    只能看**自己的**单：不做 order_code 全库查找，避免拿单号枚举别人的订单。
+  const orderDetail = path.match(/^\/orders\/([A-Za-z0-9_-]{4,64})$/);
+  if (method === "GET" && orderDetail) {
+    if (!customer) return err(401, "unauthorized");
+    const row = await env.DB.prepare(
+      `SELECT code, status, amount_minor, discount_minor, currency, pay_url, expires_at,
+              paid_at, created_at
+         FROM orders WHERE code = ? AND customer_id = ?`,
+    )
+      .bind(orderDetail[1], customer.id)
+      .first<{
+        code: string;
+        status: string;
+        amount_minor: number;
+        discount_minor: number;
+        currency: string;
+        pay_url: string | null;
+        expires_at: string | null;
+        paid_at: string | null;
+        created_at: string;
+      }>();
+    if (!row) return err(404, "not_found", "订单不存在");
+
+    // 已付款的订单顺带把订阅快照一起给，客户端少一次往返
+    const settled = row.status !== "pending" && row.status !== "expired" && row.status !== "closed";
+    const sub = settled ? await customerSubscription(env, customer.id) : null;
+    return json({
+      order_code: row.code,
+      status: row.status,
+      amount_minor: row.amount_minor,
+      discount_minor: row.discount_minor,
+      currency: row.currency,
+      pay_url: row.pay_url,
+      expires_at: row.expires_at,
+      paid_at: row.paid_at,
+      created_at: row.created_at,
+      ...(settled ? { subscription: subscriptionView(sub) } : {}),
     });
   }
 
