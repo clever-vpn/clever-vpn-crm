@@ -6,7 +6,8 @@
  */
 import { PROMOTION_COLUMNS, badgeOf, checkPromotion, appliedOf, rowToPromotion } from "./model";
 
-import type { AppliedPromotion, PromoContext, Promotion, PromotionRow } from "./model";
+import type { AppliedPromotion, PromoContext, Promotion, PromotionCheck, PromotionRow } from "./model";
+import type { PlanKind } from "../plans/model";
 import type { Env } from "../env";
 import type { Plan } from "../plans/model";
 
@@ -28,13 +29,13 @@ async function allActivePromotions(env: Env): Promise<Promotion[]> {
   return (rows.results ?? []).map(rowToPromotion);
 }
 
-/** 活动 → 已核销次数（总量 / 该用户） */
+/** 活动 → 已核销次数（总量 / 该用户）+ 该用户上次核销时间（冷却用） */
 export async function usageOf(
   env: Env,
   promotionIds: readonly number[],
   customerId: number | null,
-): Promise<Map<number, { total: number; byCustomer: number }>> {
-  const out = new Map<number, { total: number; byCustomer: number }>();
+): Promise<Map<number, { total: number; byCustomer: number; lastAt: string | null }>> {
+  const out = new Map<number, { total: number; byCustomer: number; lastAt: string | null }>();
   if (!promotionIds.length) return out;
   const marks = promotionIds.map(() => "?").join(",");
 
@@ -44,30 +45,61 @@ export async function usageOf(
   )
     .bind(...promotionIds)
     .all<{ promotion_id: number; n: number }>();
-  for (const row of totals.results ?? []) out.set(row.promotion_id, { total: row.n, byCustomer: 0 });
+  for (const row of totals.results ?? []) {
+    out.set(row.promotion_id, { total: row.n, byCustomer: 0, lastAt: null });
+  }
 
   if (customerId !== null) {
     const mine = await env.DB.prepare(
-      `SELECT promotion_id, COUNT(*) AS n FROM redemptions
+      `SELECT promotion_id, COUNT(*) AS n, MAX(created_at) AS last_at FROM redemptions
         WHERE promotion_id IN (${marks}) AND customer_id = ? GROUP BY promotion_id`,
     )
       .bind(...promotionIds, customerId)
-      .all<{ promotion_id: number; n: number }>();
+      .all<{ promotion_id: number; n: number; last_at: string | null }>();
     for (const row of mine.results ?? []) {
-      const cur = out.get(row.promotion_id) ?? { total: 0, byCustomer: 0 };
-      out.set(row.promotion_id, { ...cur, byCustomer: row.n });
+      const cur = out.get(row.promotion_id) ?? { total: 0, byCustomer: 0, lastAt: null };
+      out.set(row.promotion_id, { ...cur, byCustomer: row.n, lastAt: row.last_at });
     }
   }
   return out;
 }
 
-/** 客户侧的两个事实：是不是首单、注册几天了（匿名时都是 null） */
-async function customerFacts(
+/** 哪些活动**点名**了这个客户（`audience='specific'`） */
+async function targetedOf(
   env: Env,
+  promotionIds: readonly number[],
   customerId: number | null,
-  now: Date,
-): Promise<{ first_purchase: boolean | null; customer_age_days: number | null }> {
-  if (customerId === null) return { first_purchase: null, customer_age_days: null };
+): Promise<Set<number>> {
+  const out = new Set<number>();
+  if (customerId === null || !promotionIds.length) return out;
+  const marks = promotionIds.map(() => "?").join(",");
+  const rows = await env.DB.prepare(
+    `SELECT promotion_id FROM promotion_targets
+      WHERE promotion_id IN (${marks}) AND customer_id = ?`,
+  )
+    .bind(...promotionIds, customerId)
+    .all<{ promotion_id: number }>();
+  for (const row of rows.results ?? []) out.add(row.promotion_id);
+  return out;
+}
+
+/** 客户侧的事实：首单?、注册几天?、有没有在用订阅?、还有几天到期?（匿名时都是 null） */
+type CustomerFacts = {
+  first_purchase: boolean | null;
+  customer_age_days: number | null;
+  has_active_sub: boolean | null;
+  days_to_expiry: number | null;
+};
+
+const ANON_FACTS: CustomerFacts = {
+  first_purchase: null,
+  customer_age_days: null,
+  has_active_sub: null,
+  days_to_expiry: null,
+};
+
+async function customerFacts(env: Env, customerId: number | null, now: Date): Promise<CustomerFacts> {
+  if (customerId === null) return ANON_FACTS;
 
   const row = await env.DB.prepare(`SELECT created_at FROM customers WHERE id = ?`)
     .bind(customerId)
@@ -84,7 +116,30 @@ async function customerFacts(
     .bind(customerId)
     .first<{ x: number }>();
 
-  return { first_purchase: !paid, customer_age_days: ageDays };
+  // 订阅状态是**算出来的**（domain.md §1.3）：hold=none 且未到期才算在用
+  const sub = await env.DB.prepare(
+    `SELECT hold, expires_at FROM platform_subscriptions WHERE customer_id = ?`,
+  )
+    .bind(customerId)
+    .first<{ hold: string; expires_at: string | null }>();
+  let hasActive = false;
+  let daysToExpiry: number | null = null;
+  if (sub && sub.hold === "none") {
+    if (sub.expires_at === null) {
+      hasActive = true; // 不限期的套餐：永远在有效期内，但不存在"快到期"
+    } else {
+      const ms = Date.parse(sub.expires_at) - now.getTime();
+      hasActive = ms > 0;
+      daysToExpiry = ms > 0 ? Math.ceil(ms / 86_400_000) : Math.floor(ms / 86_400_000);
+    }
+  }
+
+  return {
+    first_purchase: !paid,
+    customer_age_days: ageDays,
+    has_active_sub: hasActive,
+    days_to_expiry: hasActive ? daysToExpiry : null,
+  };
 }
 
 /** 该客户绑定的邀请活动（`referrals.promotion_id`）；没有绑定就是 null */
@@ -97,11 +152,12 @@ async function referralPromotionId(env: Env, customerId: number | null): Promise
 }
 
 function contextFor(
-  plan: Plan,
+  plan: { id: string; kind: PlanKind },
   now: Date,
-  facts: { first_purchase: boolean | null; customer_age_days: number | null },
-  uses: { total: number; byCustomer: number },
+  facts: CustomerFacts,
+  uses: { total: number; byCustomer: number; lastAt: string | null },
   subtotalMinor: number,
+  targeted: boolean,
 ): PromoContext {
   return {
     plan_id: plan.id,
@@ -110,9 +166,57 @@ function contextFor(
     now,
     first_purchase: facts.first_purchase,
     customer_age_days: facts.customer_age_days,
+    has_active_sub: facts.has_active_sub,
+    days_to_expiry: facts.days_to_expiry,
+    targeted,
     uses_total: uses.total,
     uses_by_customer: uses.byCustomer,
+    last_used_at: uses.lastAt,
   };
+}
+
+/**
+ * 单个活动对某个客户到底能不能用（礼包发放、后台试算都用它）。
+ *
+ * 与 `resolvePromotion` 的区别：不比较活动之间谁更优 ——
+ * 礼包是"点名发给你"的，不存在"选一个更划算的"。
+ */
+export async function checkForCustomer(
+  env: Env,
+  promo: Promotion,
+  customerId: number | null,
+  now: Date = new Date(),
+  opts: {
+    /**
+     * 把客户当成「首单客户」。
+     *
+     * 只在**注册/首单礼包**里用：那一刻订单刚刚变 paid，
+     * 按 `orders` 算出来的 `first_purchase` 已经是 false，
+     * 但语义上他确实还是新客 —— 不这样处理，`audience='new'` 的礼包永远发不出去。
+     */
+    assumeFirstPurchase?: boolean;
+  } = {},
+): Promise<PromotionCheck> {
+  const facts = await customerFacts(env, customerId, now);
+  if (opts.assumeFirstPurchase && facts.first_purchase === false) {
+    facts.first_purchase = true;
+  }
+  const sub = customerId === null
+    ? null
+    : await env.DB.prepare(`SELECT plan_id, kind FROM platform_subscriptions WHERE customer_id = ?`)
+      .bind(customerId)
+      .first<{ plan_id: string; kind: PlanKind }>();
+  const usage = await usageOf(env, [promo.id], customerId);
+  const targeted = await targetedOf(env, [promo.id], customerId);
+  const ctx = contextFor(
+    { id: sub?.plan_id ?? "", kind: sub?.kind ?? "addon" },
+    now,
+    facts,
+    usage.get(promo.id) ?? { total: 0, byCustomer: 0, lastAt: null },
+    promo.min_subtotal_minor,
+    targeted.has(promo.id),
+  );
+  return checkPromotion(promo, ctx);
 }
 
 /**
@@ -164,12 +268,14 @@ export async function resolvePromotion(
   if (!byCode) return { applied: null, error: "优惠码不存在" };
 
   const usage = await usageOf(env, [byCode.id], opts.customerId);
+  const targeted = await targetedOf(env, [byCode.id], opts.customerId);
   const ctx = contextFor(
     opts.plan,
     now,
     facts,
-    usage.get(byCode.id) ?? { total: 0, byCustomer: 0 },
+    usage.get(byCode.id) ?? { total: 0, byCustomer: 0, lastAt: null },
     subtotal,
+    targeted.has(byCode.id),
   );
   const check = checkPromotion(byCode, ctx);
   if (!check.ok) return { applied: null, error: check.reason };
@@ -187,15 +293,23 @@ export async function resolvePromotion(
   list: readonly Promotion[],
   plan: Plan,
   now: Date,
-  facts: { first_purchase: boolean | null; customer_age_days: number | null },
+  facts: CustomerFacts,
   subtotalMinor: number,
   customerId: number | null,
 ): Promise<AppliedPromotion | null> {
   if (!list.length) return null;
   const usage = await usageOf(env, list.map((p) => p.id), customerId);
+  const targeted = await targetedOf(env, list.map((p) => p.id), customerId);
   let best: AppliedPromotion | null = null;
   for (const p of [...list].sort((a, b) => a.id - b.id)) {
-    const ctx = contextFor(plan, now, facts, usage.get(p.id) ?? { total: 0, byCustomer: 0 }, subtotalMinor);
+    const ctx = contextFor(
+      plan,
+      now,
+      facts,
+      usage.get(p.id) ?? { total: 0, byCustomer: 0, lastAt: null },
+      subtotalMinor,
+      targeted.has(p.id),
+    );
     if (!checkPromotion(p, ctx).ok) continue;
     const applied = appliedOf(p, subtotalMinor);
     if (applied.discount_minor <= 0) continue;
@@ -227,12 +341,20 @@ export async function resolveForPlans(
 
   const facts = await customerFacts(env, opts.customerId, now);
   const usage = await usageOf(env, candidates.map((p) => p.id), opts.customerId);
+  const targeted = await targetedOf(env, candidates.map((p) => p.id), opts.customerId);
   const sorted = [...candidates].sort((a, b) => a.id - b.id);
 
   for (const plan of opts.plans) {
     let best: AppliedPromotion | null = null;
     for (const p of sorted) {
-      const ctx = contextFor(plan, now, facts, usage.get(p.id) ?? { total: 0, byCustomer: 0 }, plan.price_minor);
+      const ctx = contextFor(
+        plan,
+        now,
+        facts,
+        usage.get(p.id) ?? { total: 0, byCustomer: 0, lastAt: null },
+        plan.price_minor,
+        targeted.has(p.id),
+      );
       if (!checkPromotion(p, ctx).ok) continue;
       const applied = appliedOf(p, plan.price_minor);
       if (applied.discount_minor <= 0) continue;
@@ -287,11 +409,16 @@ export async function planBadges(
   if (!active.length) return out;
 
   // 角标不做次数判断：这里只是文案，不是承诺
-  const facts = { first_purchase: true, customer_age_days: 0 };
-  const zero = { total: 0, byCustomer: 0 };
+  const facts: CustomerFacts = {
+    first_purchase: true,
+    customer_age_days: 0,
+    has_active_sub: true,
+    days_to_expiry: 0,
+  };
+  const zero = { total: 0, byCustomer: 0, lastAt: null };
 
   for (const plan of plans) {
-    const best = badgeOf(active, contextFor(plan, now, facts, zero, plan.price_minor));
+    const best = badgeOf(active, contextFor(plan, now, facts, zero, plan.price_minor, false));
     if (!best) continue;
     out.set(plan.id, {
       badge_label: best.promotion.badge_label ?? best.label,

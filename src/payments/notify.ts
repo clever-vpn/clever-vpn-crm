@@ -20,6 +20,7 @@ import {
 import { gatewaySecret } from "./checkout";
 import { provisionOrder } from "../platform/provision";
 import { rewardReferrer } from "../promotions/referral";
+import { grantSignupGifts } from "../promotions/gift";
 import { redeemOrderPromotion } from "../promotions/service";
 import { customerSubscription, logChange, upsertSubscription } from "../subscriptions/store";
 import {
@@ -133,6 +134,18 @@ async function grant(env: Env, order: OrderRow, tradeNo: string | null, raw: str
     }
 
     await provisionOrder(env, order.id);
+
+    // ── 注册礼包（`audience='new'` 的礼包）──
+    // 必须在**开通之后**：新客还没有订阅，天数/流量无处可放。
+    // 这里已经有钱到账，礼包失败绝不能影响订单结论。
+    try {
+      const gifts = await grantSignupGifts(env, order.customer_id, now);
+      if (gifts.some((g) => g.granted)) {
+        console.log(`[gift] 注册礼包已发 customer=${order.customer_id} count=${gifts.filter((g) => g.granted).length}`);
+      }
+    } catch (e) {
+      console.error(`[gift] 注册礼包失败 order=${order.code}: ${e instanceof Error ? e.message : e}`);
+    }
   } catch (e) {
     // 钱已收：绝不能回退订单状态，只记错误等重试（provision_attempts 供运维查看）
     const msg = e instanceof Error ? e.message : String(e);

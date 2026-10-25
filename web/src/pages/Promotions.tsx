@@ -29,11 +29,14 @@ const emptyDraft = (kind: PromotionKind): PromotionDraft => ({
   name: "",
   kind,
   benefit_type: "amount",
-  benefit_value: 300,
+  benefit_value: kind === "gift" ? 0 : 300,
   min_subtotal_minor: 0,
   limit_plan_kinds: [],
   limit_plan_ids: [],
-  first_purchase_only: kind === "referral",
+  rewards: kind === "gift" ? { days: 7, gb: 0, reset_month: false } : { days: 0, gb: 0, reset_month: false },
+  audience: kind === "referral" || kind === "gift" ? "new" : "all",
+  audience_days: null,
+  cooldown_hours: null,
   new_user_within_days: null,
   starts_at: null,
   ends_at: null,
@@ -65,11 +68,33 @@ function benefitLabel(p: { benefit_type: string; benefit_value: number }): strin
   return p.benefit_type === "percent" ? `减 ${p.benefit_value}%` : `立减 ¥${yuan(p.benefit_value)}`;
 }
 
-function audienceLabel(p: PromotionView): string {
+/** 礼包的“力度”：送多少天 / 多少 GB / 是否清零本月已用 */
+function rewardsLabel(r: { days: number; gb: number; reset_month: boolean }): string {
   const parts: string[] = [];
-  if (p.first_purchase_only) parts.push("首单");
+  if (r.days > 0) parts.push(`+${r.days} 天`);
+  if (r.gb > 0) parts.push(`+${r.gb} GB`);
+  if (r.reset_month) parts.push("重置本月");
+  return parts.length ? parts.join(" · ") : "空礼包";
+}
+
+/** 人群的六个取值 —— 与契约 §2.9.6 一一对应 */
+export const AUDIENCE_OPTIONS: { value: PromotionView["audience"]; label: string; hint: string }[] = [
+  { value: "all", label: "所有人", hint: "不看新老，谁都能用" },
+  { value: "new", label: "新客（首单）", hint: "付过钱就不是新客了" },
+  { value: "existing", label: "老客续费", hint: "当前有生效中的订阅" },
+  { value: "expiring", label: "快到期", hint: "N 天内到期（挽回）" },
+  { value: "expired", label: "已过期", hint: "订阅已经结束（召回）" },
+  { value: "specific", label: "指定客户", hint: "只有点名名单里的人能用" },
+];
+
+function audienceLabel(p: PromotionView): string {
+  const label = AUDIENCE_OPTIONS.find((a) => a.value === p.audience)?.label ?? "所有人";
+  const parts: string[] = [];
+  if (p.audience === "expiring") parts.push(`${label}（${p.audience_days ?? 7} 天内）`);
+  else parts.push(label);
   if (p.new_user_within_days !== null) parts.push(`注册 ${p.new_user_within_days} 天内`);
-  return parts.length ? parts.join(" · ") : "所有人";
+  if (p.cooldown_hours !== null) parts.push(`${p.cooldown_hours} 小时冷却`);
+  return parts.join(" · ");
 }
 
 function scopeLabel(p: PromotionView): string {
@@ -101,12 +126,16 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default function Promotions({ kind }: { kind: PromotionKind }) {
   const isReferral = kind === "referral";
+  const isGift = kind === "gift";
   const [items, setItems] = useState<PromotionView[]>([]);
   const [draft, setDraft] = useState<PromotionDraft | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 正在发放在哪个礼包上（null = 没有） */
+  const [granting, setGranting] = useState<number | null>(null);
+  const [grantIds, setGrantIds] = useState("");
 
   const reload = useCallback(async () => {
     try {
@@ -162,11 +191,13 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
       <div className="card">
         <div className="row between">
           <div>
-            <h3>{isReferral ? "邀请返利" : "优惠券"}</h3>
+            <h3>{isReferral ? "邀请返利" : isGift ? "礼包" : "优惠券"}</h3>
             <p className="hint">
               {isReferral
                 ? "唯一的「谁拉来的」来源。邀请码永远选填 —— 用户刚装完 App，没有义务输码。"
-                : "自动生效不用发码（打开 App 就看见）；凭码用于渠道投放；首单限定用于拉新。"}
+                : isGift
+                  ? "送天数 / 送流量 / 重置本月。发放后会生成一张 0 元订单留痕，用户在自己的权益里看得见。"
+                  : "自动生效不用发码（打开 App 就看见）；凭码用于渠道投放；人群决定谁能用。"}
             </p>
           </div>
           <button
@@ -176,7 +207,7 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
               setDraft(emptyDraft(kind));
             }}
           >
-            {isReferral ? "新建邀请活动" : "新建优惠券"}
+            {isReferral ? "新建邀请活动" : isGift ? "新建礼包" : "新建优惠券"}
           </button>
         </div>
 
@@ -213,8 +244,8 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
                       <strong>{p.name}</strong>
                       {p.badge_label ? <div className="mono">角标：{p.badge_label}</div> : null}
                     </td>
-                    <td>{p.code ? <span className="mono">{p.code}</span> : "自动生效"}</td>
-                    <td>{benefitLabel(p)}</td>
+                    <td>{p.code ? <span className="mono">{p.code}</span> : isGift ? "手动 / 到期自动" : "自动生效"}</td>
+                    <td>{isGift ? rewardsLabel(p.rewards) : benefitLabel(p)}</td>
                     <td>{audienceLabel(p)}</td>
                     <td>{scopeLabel(p)}</td>
                     <td>
@@ -231,6 +262,17 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
                       <button disabled={busy} onClick={() => edit(p)}>
                         编辑
                       </button>
+                      {isGift && p.status === "active" && (
+                        <button
+                          disabled={busy}
+                          onClick={() => {
+                            setGranting(granting === p.id ? null : p.id);
+                            setGrantIds("");
+                          }}
+                        >
+                          {granting === p.id ? "取消发放" : "发放"}
+                        </button>
+                      )}
                       {p.status === "draft" && (
                         <button
                           disabled={busy}
@@ -249,6 +291,50 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {granting !== null && (
+          <div className="notice" style={{ marginTop: 12 }}>
+            <div className="row between">
+              <strong>发放礼包</strong>
+              <span className="hint">客户 ID 逗号分隔；没有订阅的人会被跳过并说明原因</span>
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 8 }}>
+              <input
+                value={grantIds}
+                onChange={(e) => setGrantIds(e.target.value)}
+                placeholder="12, 34"
+                style={{ flex: 1 }}
+              />
+              <button
+                disabled={busy || !grantIds.trim()}
+                onClick={() => {
+                  const ids = grantIds
+                    .split(/[,，\s]+/)
+                    .map((x) => Number(x))
+                    .filter((n) => Number.isInteger(n) && n > 0);
+                  if (!ids.length) {
+                    setError("请填写至少一个合法客户 ID");
+                    return;
+                  }
+                  void run(async () => {
+                    const r = await api.grantPromotion(granting, ids);
+                    const skipped = r.results.filter((x) => !x.granted);
+                    if (skipped.length) {
+                      setError(
+                        `已发放 ${r.granted} 人，跳过 ${skipped.length} 人：` +
+                          skipped.map((x) => `#${x.customer_id} ${x.skipped}`).join("；"),
+                      );
+                    }
+                  }, "发放完成");
+                  setGranting(null);
+                  setGrantIds("");
+                }}
+              >
+                确认发放
+              </button>
+            </div>
           </div>
         )}
 
@@ -291,6 +377,7 @@ function PromotionForm({
   onSave: () => Promise<void>;
 }) {
   const isReferral = draft.kind === "referral";
+  const isGift = draft.kind === "gift";
   const [codeMode, setCodeMode] = useState<"auto" | "code">(draft.code ? "code" : "auto");
   const [amountText, setAmountText] = useState(
     draft.benefit_type === "amount" ? yuan(draft.benefit_value) : String(draft.benefit_value),
@@ -318,7 +405,7 @@ function PromotionForm({
   return (
     <div className="card">
       <div className="row between">
-        <h3>{isNew ? (isReferral ? "新建邀请活动" : "新建优惠券") : "编辑"}</h3>
+        <h3>{isNew ? (isReferral ? "新建邀请活动" : isGift ? "新建礼包" : "新建优惠券") : "编辑"}</h3>
         <span className="hint">保存为草稿；点「上线」后才对用户生效</span>
       </div>
 
@@ -332,7 +419,7 @@ function PromotionForm({
           />
         </label>
 
-        {!isReferral && (
+        {!isReferral && !isGift && (
           <>
             <label>
               生效方式
@@ -369,42 +456,82 @@ function PromotionForm({
 
         <label>
           力度
-          <select value={draft.benefit_type} onChange={(e) => setBenefitType(e.target.value as "amount" | "percent")}>
+          <select value={draft.benefit_type} onChange={(e) => setBenefitType(e.target.value as "amount" | "percent")} disabled={isGift}>
             <option value="amount">立减金额（元）</option>
             <option value="percent">按比例减（%）</option>
           </select>
+          {isGift && <small className="hint">礼包不改金额，只改权益</small>}
         </label>
 
-        <label>
-          {draft.benefit_type === "amount" ? "减多少（元）" : "减百分之几"}
-          <input
-            value={amountText}
-            onChange={(e) => {
-              setAmountText(e.target.value);
-              set(
-                "benefit_value",
-                draft.benefit_type === "amount" ? toMinor(e.target.value) : Math.round(Number(e.target.value) || 0),
-              );
-            }}
-          />
-          <small className="hint">
-            {draft.benefit_type === "amount"
-              ? `用户少付 ¥${amountText || "0"}`
-              : `按标价算，向下取整到分；1–100`}
-          </small>
-        </label>
+        {!isGift && (
+          <>
+            <label>
+              {draft.benefit_type === "amount" ? "减多少（元）" : "减百分之几"}
+              <input
+                value={amountText}
+                onChange={(e) => {
+                  setAmountText(e.target.value);
+                  set(
+                    "benefit_value",
+                    draft.benefit_type === "amount" ? toMinor(e.target.value) : Math.round(Number(e.target.value) || 0),
+                  );
+                }}
+              />
+              <small className="hint">
+                {draft.benefit_type === "amount"
+                  ? `用户少付 ¥${amountText || "0"}`
+                  : `按标价算，向下取整到分；1–100`}
+              </small>
+            </label>
 
-        <label>
-          最低消费（元，0 = 不限）
-          <input
-            value={minText}
-            onChange={(e) => {
-              setMinText(e.target.value);
-              set("min_subtotal_minor", toMinor(e.target.value));
-            }}
-          />
-          <small className="hint">必须有：百分比折扣会把低价套餐打到接近 0</small>
-        </label>
+            <label>
+              最低消费（元，0 = 不限）
+              <input
+                value={minText}
+                onChange={(e) => {
+                  setMinText(e.target.value);
+                  set("min_subtotal_minor", toMinor(e.target.value));
+                }}
+              />
+              <small className="hint">必须有：百分比折扣会把低价套餐打到接近 0</small>
+            </label>
+          </>
+        )}
+
+        {isGift && (
+          <label>
+            送多少天（0 = 不送）
+            <input
+              value={draft.rewards.days}
+              onChange={(e) => set("rewards", { ...draft.rewards, days: Number(e.target.value) || 0 })}
+              placeholder="7"
+            />
+            <small className="hint">直接延长有效期；永久套餐不受影响</small>
+          </label>
+        )}
+
+        {isGift && (
+          <label>
+            送多少 GB（0 = 不送）
+            <input
+              value={draft.rewards.gb}
+              onChange={(e) => set("rewards", { ...draft.rewards, gb: Number(e.target.value) || 0 })}
+              placeholder="5"
+            />
+            <small className="hint">进加购余额，跨期不清零</small>
+          </label>
+        )}
+
+        {isGift && (
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={draft.rewards.reset_month}
+              onChange={(e) => set("rewards", { ...draft.rewards, reset_month: e.target.checked })}
+            />
+            额外把本月已用流量清零（补偿用）
+          </label>
+        )}
 
         <label>
           角标文案（给用户看，留空 = 不公开宣传）
@@ -438,14 +565,41 @@ function PromotionForm({
         <>
           <h4 style={{ marginBottom: 4 }}>人群</h4>
           <div className="grid">
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={draft.first_purchase_only}
-                onChange={(e) => set("first_purchase_only", e.target.checked)}
-              />
-              仅限首次购买
+            <label>
+              谁能用
+              <select
+                value={draft.audience}
+                onChange={(e) => {
+                  const audience = e.target.value as PromotionDraft["audience"];
+                  set("audience", audience);
+                  // 只有「快到期」需要天数；切走就清掉，免得留下看不懂的残值
+                  if (audience !== "expiring") set("audience_days", null);
+                  else if (draft.audience_days === null) set("audience_days", 7);
+                }}
+              >
+                {AUDIENCE_OPTIONS.map((a) => (
+                  <option key={a.value} value={a.value}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+              <small className="hint">
+                {AUDIENCE_OPTIONS.find((a) => a.value === draft.audience)?.hint}
+              </small>
             </label>
+
+            {draft.audience === "expiring" && (
+              <label>
+                N 天内到期
+                <input
+                  value={draft.audience_days ?? ""}
+                  onChange={(e) => set("audience_days", e.target.value ? Number(e.target.value) : null)}
+                  placeholder="7"
+                />
+                <small className="hint">定时任务每天扫一次，符合条件的人自动收到</small>
+              </label>
+            )}
+
             <label>
               注册 N 天内可用（留空 = 不限）
               <input
@@ -453,6 +607,16 @@ function PromotionForm({
                 onChange={(e) => set("new_user_within_days", e.target.value ? Number(e.target.value) : null)}
                 placeholder="7"
               />
+            </label>
+
+            <label>
+              冷却小时数（留空 = 不限）
+              <input
+                value={draft.cooldown_hours ?? ""}
+                onChange={(e) => set("cooldown_hours", e.target.value ? Number(e.target.value) : null)}
+                placeholder="24"
+              />
+              <small className="hint">同一客户两次核销之间的最小间隔；防连点、防刷</small>
             </label>
           </div>
 

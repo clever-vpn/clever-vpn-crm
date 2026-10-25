@@ -220,12 +220,44 @@ export const api = {
     call<{ promotion: PromotionView }>("PATCH", `/promotions/${id}`, input),
   publishPromotion: (id: number) => call<{ ok: true }>("POST", `/promotions/${id}/publish`),
   endPromotion: (id: number) => call<{ ok: true }>("POST", `/promotions/${id}/end`),
+  /** 礼包手动发放：返回每个客户的结论（含为什么没发出去） */
+  grantPromotion: (id: number, customerIds: number[]) =>
+    call<{ granted: number; total: number; results: GiftGrantResult[] }>(
+      "POST",
+      `/promotions/${id}/grant`,
+      { customer_ids: customerIds },
+    ),
+  promotionTargets: (id: number) =>
+    call<{ customers: { id: number; email: string; display_name: string | null }[] }>(
+      "GET",
+      `/promotions/${id}/targets`,
+    ),
+  setPromotionTargets: (id: number, customerIds: number[]) =>
+    call<{ ok: true; count: number }>("PUT", `/promotions/${id}/targets`, {
+      customer_ids: customerIds,
+    }),
 };
 
 // ── 营销 / 促销 ──
 
-/** coupon = 优惠券（改订单金额）；referral = 邀请返利（关系 + 双方奖励） */
-export type PromotionKind = "coupon" | "referral";
+/** coupon = 优惠券（改订单金额）；gift = 礼包（改权益）；referral = 邀请返利（关系 + 双方奖励） */
+export type PromotionKind = "coupon" | "gift" | "referral";
+/** 人群（契约 §2.9.6）：全员 / 新客 / 老客 / 快到期 / 已过期 / 点名 */
+export type Audience = "all" | "new" | "existing" | "expiring" | "expired" | "specific";
+/** 礼包奖励项：只改权益，不改金额 */
+export interface GiftRewards {
+  days: number;
+  gb: number;
+  reset_month: boolean;
+}
+export interface GiftGrantResult {
+  promotion_id: number;
+  customer_id: number;
+  granted: boolean;
+  skipped: string | null;
+  order_id: number | null;
+  applied: GiftRewards;
+}
 export type PromotionStatus = "draft" | "active" | "ended";
 export type BenefitType = "amount" | "percent";
 export type RewardType = "days" | "gb" | "none";
@@ -245,7 +277,12 @@ export interface PromotionView {
   min_subtotal_minor: number;
   limit_plan_kinds: PlanKind[];
   limit_plan_ids: string[];
-  first_purchase_only: boolean;
+  /** 礼包奖励项（kind=gift 才有意义） */
+  rewards: GiftRewards;
+  audience: Audience;
+  /** audience=expiring 时必填（N 天内到期） */
+  audience_days: number | null;
+  cooldown_hours: number | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;

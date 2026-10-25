@@ -30,7 +30,10 @@ function promo(over: Partial<Promotion> = {}): Promotion {
     min_subtotal_minor: 0,
     limit_plan_kinds: [],
     limit_plan_ids: [],
-    first_purchase_only: false,
+    rewards: { days: 0, gb: 0, reset_month: false },
+    audience: "all",
+    audience_days: null,
+    cooldown_hours: null,
     new_user_within_days: null,
     starts_at: null,
     ends_at: null,
@@ -53,8 +56,12 @@ function ctx(over: Partial<PromoContext> = {}): PromoContext {
     now: NOW,
     first_purchase: true,
     customer_age_days: 0,
+    has_active_sub: false,
+    days_to_expiry: null,
+    targeted: false,
     uses_total: 0,
     uses_by_customer: 0,
+    last_used_at: null,
     ...over,
   };
 }
@@ -135,14 +142,51 @@ describe("资格判定", () => {
     expect(checkPromotion(promo({ max_uses: null }), ctx({ uses_total: 999 })).ok).toBe(true);
   });
 
-  it("首单限定：老客户不适用；匿名不能假装是新客", () => {
+  it("新人限定（audience=new）：老客户不适用；匿名不能假装是新客", () => {
     expect(
-      checkPromotion(promo({ first_purchase_only: true }), ctx({ first_purchase: false })).ok,
+      checkPromotion(promo({ audience: "new" }), ctx({ first_purchase: false })).ok,
     ).toBe(false);
     // 匿名（first_purchase = null）也要拒 —— 不能因为"看起来像新人"就打折
     expect(
-      checkPromotion(promo({ first_purchase_only: true }), ctx({ first_purchase: null })).ok,
+      checkPromotion(promo({ audience: "new" }), ctx({ first_purchase: null })).ok,
     ).toBe(false);
+    expect(checkPromotion(promo({ audience: "new" }), ctx()).ok).toBe(true);
+  });
+
+  it("人群：老客续费 / 快到期 / 已过期 / 点名，各有各的门槛", () => {
+    // 已有订阅（续费场景）
+    expect(checkPromotion(promo({ audience: "existing" }), ctx({ has_active_sub: true })).ok).toBe(true);
+    expect(checkPromotion(promo({ audience: "existing" }), ctx({ has_active_sub: false })).ok).toBe(false);
+    expect(checkPromotion(promo({ audience: "existing" }), ctx({ has_active_sub: null })).ok).toBe(false);
+
+    // 快到期：只在 N 天内有效（含边界），没订阅 / 已过期都不算
+    const expiring = promo({ audience: "expiring", audience_days: 7 });
+    expect(checkPromotion(expiring, ctx({ has_active_sub: true, days_to_expiry: 7 })).ok).toBe(true);
+    expect(checkPromotion(expiring, ctx({ has_active_sub: true, days_to_expiry: 8 })).ok).toBe(false);
+    expect(checkPromotion(expiring, ctx({ has_active_sub: true, days_to_expiry: null })).ok).toBe(false);
+    expect(checkPromotion(expiring, ctx({ has_active_sub: true, days_to_expiry: -1 })).ok).toBe(false);
+
+    // 已过期：曾经有、现在没了
+    expect(checkPromotion(promo({ audience: "expired" }), ctx({ has_active_sub: false })).ok).toBe(true);
+    expect(checkPromotion(promo({ audience: "expired" }), ctx({ has_active_sub: true })).ok).toBe(false);
+
+    // 点名：只认名单，其他人一律拒
+    expect(checkPromotion(promo({ audience: "specific" }), ctx({ targeted: true })).ok).toBe(true);
+    expect(checkPromotion(promo({ audience: "specific" }), ctx({ targeted: false })).ok).toBe(false);
+  });
+
+  it("冷却：上次核销没到间隔就拒，理由里给剩余小时", () => {
+    const p = promo({ audience: "all", cooldown_hours: 24 });
+    const used = new Date(NOW.getTime() - 3 * 3_600_000).toISOString();
+    const check = checkPromotion(p, ctx({ last_used_at: used }));
+    expect(check.ok).toBe(false);
+    expect(check.ok === false && check.reason).toContain("21 小时");
+
+    // 已经过了 24 小时 ⇒ 放行
+    const old = new Date(NOW.getTime() - 25 * 3_600_000).toISOString();
+    expect(checkPromotion(p, ctx({ last_used_at: old })).ok).toBe(true);
+    // 从未核销 ⇒ 放行
+    expect(checkPromotion(p, ctx({ last_used_at: null })).ok).toBe(true);
   });
 
   it("新客窗口：超过 N 天就拒", () => {

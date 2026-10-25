@@ -1,8 +1,9 @@
-# 促销（promotion / referral）
+# 促销（promotion / gift / referral）
 
-> 对外承诺见 `clever-vpn-docs` `app-crm.md` **§2.9**（contract `13`）。
-> 本文是**内部设计依据与决策记录**：为什么只做这两种、为什么砍掉另外三种。
-> 实现状态：**P1 ✅ 已实现**（自动活动 + 优惠码 + 邀请码；P2 带码投放未做）。
+> 对外承诺见 `clever-vpn-docs` `app-crm.md` **§2.9**（contract `15`）。
+> 本文是**内部设计依据与决策记录**：为什么是这三类、为什么砍掉其他玩法。
+> 实现状态：**P1 ✅**（优惠券 + 邀请码）、**P2 ✅**（礼包 / 人群 / 冷却）；
+> **P3 未做**（兑换码批次、营销报表）。
 
 ## 0. 定位决定形态
 
@@ -27,32 +28,62 @@
 | **是否产生归因** | 能不能统计"谁拉来的" |
 | **谁负责分发** | 系统自动 / 服务商投放 / 用户自发 |
 
-| | **优惠码** | **邀请码** | **赠送/兑换** |
+| | **优惠券** | **邀请** | **礼包** |
 |---|---|---|---|
-| 生效时机 | 结账时 | 注册时 | 随时 |
-| 改什么 | **订单金额** | **关系** + 首单金额 | 订阅权益 |
+| 生效时机 | 结账时 | 注册时 | 随时（注册 / 到期 / 手动） |
+| 改什么 | **订单金额** | **关系** + 首单金额 | **订阅权益**（天数 / 流量 / 重置本月） |
 | 归因 | ❌ | ✅ **唯一来源** | ❌ |
-| 分发 | 服务商（有成本） | **用户自己**（零成本） | 服务商 / 第三方 |
+| 是否产生订单 | ✅ 折扣后的正常订单 | ✅ 同上 | ✅ **0 元已付订单**（留痕用） |
+| 分发 | 服务商（有成本） | **用户自己**（零成本） | 系统自动 / 后台手动 |
 
-**邀请码与优惠码的本质区别**：优惠码是**匿名**的（谁用都一样），邀请码是**实名关系**
-（必须绑定两个人）。邀请码可以带优惠，但**优惠码永远不产生归因**。
+**邀请与优惠券的本质区别**：优惠券是**匿名**的（谁用都一样），邀请是**实名关系**
+（必须绑定两个人）。邀请可以带优惠，但**优惠券永远不产生归因**。
 
-### 为什么不做"兑换码 / 礼品卡"
+**礼包与优惠券的本质区别**：优惠券"少收钱"，礼包"改权益"。两者是两套账，
+所以送出去的天数**不参与残值计算**（`promotion.md` §4）。
 
-它的真实用途只有三个，对我们都不成立：
+### 为什么叫「礼包」，不叫「礼品卡」
 
-| 场景 | 判断 |
+XBoard 叫礼品卡（gift card），因为它是**可转赠的预付凭证**（有码、可囤、可送人）。
+我们不是：我们的礼包是**运营工具**——注册礼包、续费礼包、到期挽回礼包，由租户
+主动发，不进入流通。叫「礼品卡」会让人误以为可以买来送朋友。
+
+若将来真要做"可转赠"，那是**兑换码（voucher）**，P3 再说：有码一对一时叫
+**兑换码**，无码的权益组合叫**礼包**。
+
+### 为什么现在不做"兑换码批次"（P3 暂缓）
+
+不是"永远不做"，而是**顺序问题**：它要额外解决码的交付（印刷、发货、防撞库、
+防泄露）与批次管理（前缀 / 生效期 / 导出 CSV），成本集中在**分发**而不是产品价值。
+在"租户还没有稳定跑注册礼包与到期挽回"之前，先不引入。
+
+| 场景 | 现在怎么做 |
 |---|---|
-| 客服补偿（断线赔 3 天） | 后台点一下就能加权益，**不需要用户输码** |
-| 送礼 | VPN 不是礼品 |
-| 第三方渠道售卖（淘宝卖卡） | 灰色渠道，小服务商容易被薅 |
-
-而且它要额外解决"码的交付"（印刷、发货、防撞库、防泄露），成本远高于收益。
+| 客服补偿（断线赔 3 天） | 后台「礼包 → 发放」填客户 ID，一次一个 |
+| 到期挽回 | `audience=expiring` 礼包 + 每日定时任务自动发 |
+| 第三方渠道售卖（卡密） | ❌ 灰色渠道，不做 |
 
 ### 为什么不做"券包"
 
 Web 面板时代的产物——用户会登录网站、逛活动页、翻券包。**App 用户不会逛**。
-定向给某个客户的优惠，用「活动 + 指定客户」实现即可，不需要"券"这个实体。
+定向给某个客户的优惠，用「优惠券 + 指定客户」实现即可，不需要"券"这个实体。
+
+### 人群（取代旧的「仅限首单」布尔）
+
+旧实现只有 `first_purchase_only` 一个布尔，表达不了"老客续费""快到期"这两种
+最值钱的场景。现在改成枚举（契约 §2.9.6）：
+
+| 取值 | 含义 | 典型用法 |
+|---|---|---|
+| `all` | 所有人 | 节日全场折扣 |
+| `new` | 首单客户 | 拉新；**也是"注册礼包"的标记** |
+| `existing` | 当前有生效订阅 | 续费折扣 |
+| `expiring` | N 天内到期 | 到期前挽回（定时任务自动发礼包） |
+| `expired` | 订阅已结束 | 召回 |
+| `specific` | 点名名单（`promotion_targets`） | VIP / 客服定向 |
+
+判定一律在服务端（`src/promotions/model.ts` 的 `checkAudience`），匿名用户对任何
+个人条件**一律不适用**——不能因为"看起来像新人"就打折。
 
 ## 2. 获取路径矩阵（判断必要性的工具）
 
@@ -76,17 +107,23 @@ Web 面板时代的产物——用户会登录网站、逛活动页、翻券包�
 ```
 promotions                     一个活动 / 一批码
   code                         可空：null = 自动生效（全场活动）
-  kind                         coupon | referral
-  benefit_type                 amount | percent | days | gb | plan
-  benefit_value, plan_id
+  kind                         coupon | gift | referral
+  benefit_type                 金额维度：amount | percent（kind=gift 时不用）
+  benefit_value
+  rewards_json                 权益维度：{days, gb, reset_month}（kind=gift）
   referrer_reward_type/value   kind=referral：给推荐人什么（默认给权益，不给现金）
   min_subtotal_minor           ⚠️ 两家面板都没有，我们必须有
   limit_plan_kinds / limit_plan_ids
   starts_at / ends_at
   max_uses / max_uses_per_customer
-  first_purchase_only / new_user_within_days
+  audience / audience_days     人群（all/new/existing/expiring/expired/specific）
+  cooldown_hours               同一客户两次核销的最小间隔
+  new_user_within_days         额外的"注册 N 天内"闸门（与 audience 正交）
   badge_label                  "限时 8 折"，直接给 UI 展示
   visible                      是否公开展示
+
+promotion_targets               audience=specific 的点名名单
+  promotion_id, customer_id     唯一约束：(promotion_id, customer_id)
 
 referrals                      谁邀请了谁（只存关系，不存钱）
   customer_id（被邀请人）, referrer_id, promotion_id, created_at
@@ -145,10 +182,15 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| P1 | 自动活动（新人首单 / 续费 / 节日全场） | ✅ |
-| P1 | 邀请码（注册绑定 + 首单双向奖励） | ✅ |
-| P2 | 带码投放（KOL / 群） | ⬜ 建活动即可，无需新能力 |
-| ❌ | 兑换码、券包、多级分销、佣金提现 | 见 §1 |
+| P1 | 优惠券（自动活动 / 凭码 / 节日全场） | ✅ |
+| P1 | 邀请（注册绑定 + 首单双向奖励） | ✅ |
+| P2 | 礼包（送天数 / 送流量 / 重置本月） | ✅ |
+| P2 | 人群六值 + 冷却 + 点名名单（`promotion_targets`） | ✅ |
+| P2 | 注册礼包（首单后自动）/ 到期挽回礼包（每日定时） | ✅ |
+| P3 | 兑换码批次（有码一对一，可导出、可防撞库） | ⬜ 见 §1「为什么现在不做」 |
+| P3 | 营销报表（按活动看核销 / 实收 / 让利） | ⬜ 台账已有，只差聚合 |
+| ❌ | 券包、盲盒、多级分销、佣金提现 | 见 §1 |
+| ❌ | 送余额（没有钱包）、送设备数（`licence_limit` 不可改） | 见 §4 |
 
 ## 7. 已知的坑（实现时注意）
 
@@ -160,7 +202,7 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 5. **`origin` 不是 `channel`**：`origin` = 从哪个壳进来；`channel` = 钱在哪里付。
    两者正交，别混用。
 
-## 8. 实现地图（P1）
+## 8. 实现地图（P1 + P2）
 
 | 关注点 | 位置 |
 |---|---|
@@ -168,7 +210,9 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 | 纯逻辑 | `src/promotions/model.ts`：时间窗 / 套餐范围 / 门槛 / 次数 / 首单 → `checkPromotion`；`discountOf`；`bestPromotion` |
 | 取数 | `src/promotions/service.ts`：`resolvePromotion`（单套餐，含用户输入的码）、`resolveForPlans`（列表页，一次算完）、`planBadges`（公开角标） |
 | 关系 | `src/promotions/referral.ts`：`ensureReferralCode`（懒生成）、`bindReferral`（静默、幂等）、`referralPanel`、`rewardReferrer` |
-| 后台 | `src/admin/promotions.ts`：`GET/POST /api/admin/promotions`、`PATCH /:id`、`POST /:id/publish|end` |
+| 礼包 | `src/promotions/gift.ts`：`grantGift`（幂等发放）、`grantSignupGifts`（首单后发 `audience=new`）、`runExpiringGifts`（每日扫 `audience=expiring`） |
+| 人群判定 | `model.ts` 的 `checkAudience`（六值）、冷却判定；取数在 `service.ts` 的 `customerFacts` / `targetedOf` |
+| 后台 | `src/admin/promotions.ts`：`GET/POST /api/admin/promotions`、`PATCH /:id`、`POST /:id/publish|end`、`POST /:id/grant`（礼包手动发放）、`GET/PUT /:id/targets`（点名名单） |
 | 核销 | 只在 `src/payments/notify.ts` 的 `grant()` 里调（钱到账之后），`INSERT OR IGNORE` |
 | 金额 | `payable = max(0, price − discount − residual)`；`orders.amount_minor` 是实收，`orders.discount_minor` 只记促销那部分 |
 
