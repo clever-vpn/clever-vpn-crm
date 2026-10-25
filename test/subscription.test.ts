@@ -78,6 +78,7 @@ function makeSub(over: Partial<Subscription> = {}): Subscription {
     remaining_gb: null,
     last_settled_at: "2026-10-01T00:00:00Z",
     platform_customer_id: 42,
+    code: "7391048261558203",
     ...over,
   };
 }

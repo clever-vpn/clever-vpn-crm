@@ -38,11 +38,12 @@ export interface SubscriptionRow {
   remaining_gb: number | null;
   last_settled_at: string | null;
   platform_customer_id: number | null;
+  code: string | null;
 }
 
 const COLUMNS = `id, customer_id, plan_id, kind, hold, hold_reason, hold_at, paid_minor, currency, licence_limit,
   term_days, quota_gb, traffic_total_gb, validity_days, line_ids, started_at,
-  expires_at, anchor_day, balance_gb, remaining_gb, last_settled_at, platform_customer_id`;
+  expires_at, anchor_day, balance_gb, remaining_gb, last_settled_at, platform_customer_id, code`;
 
 export function rowToSubscription(row: SubscriptionRow): Subscription {
   let lineIds: number[] = [];
@@ -74,6 +75,7 @@ export function rowToSubscription(row: SubscriptionRow): Subscription {
     remaining_gb: row.remaining_gb,
     last_settled_at: row.last_settled_at,
     platform_customer_id: row.platform_customer_id,
+    code: row.code,
   };
 }
 
@@ -93,7 +95,10 @@ const UPSERT_SQL = `INSERT INTO platform_subscriptions
      line_ids = excluded.line_ids, started_at = excluded.started_at,
      expires_at = excluded.expires_at, anchor_day = excluded.anchor_day,
      balance_gb = excluded.balance_gb, remaining_gb = excluded.remaining_gb,
-     last_settled_at = excluded.last_settled_at, updated_at = excluded.updated_at`;
+     last_settled_at = excluded.last_settled_at, updated_at = excluded.updated_at,
+     -- 设备数变了就必须删旧建新（crm-api.md §3.4），旧码立即失效 ⇒ 先置空等重新落账
+     code = CASE WHEN platform_subscriptions.licence_limit <> excluded.licence_limit
+                 THEN NULL ELSE platform_subscriptions.code END`;
 
 /**
  * 写入这一行订阅（**一个客户只有一行**，见 `docs/domain.md` §1.2）。

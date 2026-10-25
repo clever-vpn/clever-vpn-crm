@@ -185,7 +185,8 @@ $$R = P + B, \qquad B' = \min(B, R), \qquad R' = P + B'$$
 ## 8. 待办
 
 - [x] 对外 `POST /api/app/v1/quote`（复用 `quotePurchase()`，带 `quote_ttl_s`）
-- [ ] 下单 / 续订 / 升级时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数 + 存 `platform_customer_id`/`code`）
+- [x] 下单 / 续订 / 升级时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数 + 存 `platform_customer_id`/`code`）
+  —— 实现见 `src/platform/{client,provision}.ts`，失败停在 `provisioning`，cron 每小时重试
 - [x] App 端登录（邮箱验证码 + `session_token`）与 `/plans`（每项只带一个 `action`）
 - [ ] 读 cf-api `lines` 填充线路选择器
 - [ ] 支付（网页收银台 + 商店内购）

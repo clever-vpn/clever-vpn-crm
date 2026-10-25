@@ -12,10 +12,14 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { sha256Hex } from "../../src/admin/crypto";
 import { createCharge } from "../../src/payments/checkout";
 import { handlePayNotify } from "../../src/payments/notify";
+import { provisionOrder } from "../../src/platform/provision";
 import { EPAY_V1_MAPPING } from "../../src/payments/builtin/epay";
 import { encryptSecret } from "../../src/payments/secret";
 import { signParams } from "../../src/payments/sign";
 import { env } from "./apply-migrations";
+import { installFakeCfApi } from "./fake-cf-api";
+
+import type { FakeCfApi } from "./fake-cf-api";
 
 import type { Plan } from "../../src/plans/model";
 
@@ -29,6 +33,9 @@ const worker = rawExports as unknown as {
 };
 
 const now = () => new Date().toISOString();
+
+/** 假 cf-api；`beforeAll` 里赋值，`/subscription` 与平台侧断言都用它 */
+let cf: FakeCfApi;
 
 function call(path: string, init: { method?: string; body?: unknown; token?: string } = {}) {
   const headers: Record<string, string> = {};
@@ -61,6 +68,13 @@ async function seedCustomer(email: string, token: string): Promise<number> {
 beforeAll(async () => {
   // 第一道闸门：打开 mock
   (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
+
+  // 平台落账：没有 cf-api 就只能是 provisioning（这是契约行为），
+  // 所以这里装一个假平台，让付款后真的能拿到 code。
+  const cfApi = installFakeCfApi();
+  cf = cfApi;
+  (env as unknown as Record<string, unknown>).CF_API_BASE = cfApi.base;
+  (env as unknown as Record<string, unknown>).CF_API_TOKEN = cfApi.token;
 
   await env.DB.batch([
     env.DB.prepare(
@@ -634,6 +648,52 @@ describe("升级：换成别的套餐（残值抵扣）", () => {
     expect(change?.plan_before).toBe("pay_plan_30d");
     expect(change?.plan_after).toBe(UPGRADE_PLAN);
     expect(change?.residual_minor).toBe(quote.residual_minor);
+  });
+});
+
+describe("落账：付款后真的拿到码", () => {
+  it("订阅 active + 带 code；平台侧写的是字节，quota 恒 NULL", async () => {
+    const res = await call("/api/app/v1/subscription", { token: TOKEN });
+    expect(res.status).toBe(200);
+    const view = (await res.json()) as { status: string; code?: string };
+    // 落账成功才会从 provisioning 变成 active，并且此时才下发 code
+    expect(view.status).toBe("active");
+    expect(view.code).toBeTruthy();
+
+    // 换档会删旧建新（同一 email 可能有多条，只看未删的）
+    const payer = [...cf.customers.values()].find((c) => c.email === PAYER && c._is_deleted === 0);
+    expect(payer).toBeTruthy();
+    // 关键：单位是字节。若误写成 GB（例如 100），下面这条立刻失败
+    expect((payer?.traffic_balance ?? 0) % 1024 ** 3).toBe(0);
+    expect(payer?.traffic_balance).toBeGreaterThan(0);
+    // 月度重置归 CRM：平台的 quota 必须一直是 NULL
+    expect(payer?.quota).toBeNull();
+  });
+
+  it("平台不可用时：provisionOrder 抛错，订单停在 provisioning", async () => {
+    const anyOrder = await env.DB.prepare(
+      `SELECT id FROM orders WHERE status = 'active' ORDER BY id ASC LIMIT 1`,
+    ).first<{ id: number }>();
+    expect(anyOrder).toBeTruthy();
+    const orderId = anyOrder!.id;
+    await env.DB.prepare(`UPDATE orders SET status = 'provisioning' WHERE id = ?`).bind(orderId).run();
+
+    const backup = (env as unknown as Record<string, unknown>).CF_API_TOKEN;
+    (env as unknown as Record<string, unknown>).CF_API_TOKEN = "";
+    try {
+      await expect(provisionOrder(env, orderId)).rejects.toThrow(/CF_API_TOKEN/);
+    } finally {
+      (env as unknown as Record<string, unknown>).CF_API_TOKEN = backup;
+    }
+
+    const after = await env.DB.prepare(`SELECT status FROM orders WHERE id = ?`)
+      .bind(orderId)
+      .first<{ status: string }>();
+    // 钱已收：失败绝不能把订单推成 active
+    expect(after?.status).toBe("provisioning");
+
+    // 恢复现场，避免影响后续用例
+    await env.DB.prepare(`UPDATE orders SET status = 'active' WHERE id = ?`).bind(orderId).run();
   });
 });
 

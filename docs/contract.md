@@ -29,7 +29,8 @@ Last updated: 2026-10-25
 | 可用的平台资源 | **`customers`（读写）+ `lines`（只读，字段白名单，不暴露 `upstream`）** |
 | 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
 | 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |
-| 换套餐 | 删旧客户 → 用**同一 `auth_id`** 建新客户（得到新 `code`）；流量余量/已用额度不继承 |
+| 换套餐 | 删旧客户 → 用**同一 `auth_id`** 建新客户（得到新 `code`）；流量余量/已用额度不继承。**已实现**：`licence_limit` 变化时才删旧建新（它是计费依据，平台不允许改） |
+| 落账 | `src/platform/provision.ts`：订阅快照 → 控制参数；**流量单位是字节**（`1 GiB = 1024³`），`quota` 恒 `NULL`（月度重置归 CRM）。失败停在 `orders.status='provisioning'`，cron 重试（✅） |
 | 支付方式 | App 只认 **`payment_method`**（`alipay` / `wechat` / `paypal` / `stripe`）；服务商与网关都在 CRM 内部，**不进任何 App 响应**（见 [payments.md](payments.md)） |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
 | 控制参数 | `customers` 的 create/update 参数，由租户与 CRM 设定；平台只按它们判定能否使用 |

@@ -80,6 +80,11 @@ export interface Subscription {
   remaining_gb: number | null;
   last_settled_at: string | null;
   platform_customer_id: number | null;
+  /**
+   * 平台激活码（cf-api `customers.code`）。
+   * `null` = 还没落账成功（付款后停在 `provisioning`），或换档后旧码已失效。
+   */
+  code: string | null;
 }
 
 // ---- 从套餐创建订阅 ----
@@ -128,6 +133,8 @@ export function subscriptionFromPlan(
     remaining_gb: plan.kind === "traffic" ? plan.traffic_gb : null,
     last_settled_at: plan.kind === "period" ? now.toISOString() : null,
     platform_customer_id: null,
+    // 落账成功后才由 provisionOrder 写入；命中该字段前订阅停在 provisioning
+    code: null,
   };
 }
 
