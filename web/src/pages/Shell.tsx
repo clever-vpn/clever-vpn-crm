@@ -17,6 +17,7 @@ import {
   CreditCardOutlined,
   DashboardOutlined,
   FileTextOutlined,
+  GiftOutlined,
   LogoutOutlined,
   InboxOutlined,
   MenuOutlined,
@@ -24,34 +25,78 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { api, type Me } from "../api";
+import ComingSoon from "./ComingSoon";
 import Customers from "./Customers";
 import Gateways from "./Gateways";
+import Marketing from "./Marketing";
 import Orders from "./Orders";
 import Plans from "./Plans";
+import Promotions from "./Promotions";
 import Settings from "./Settings";
 
-interface NavItem {
+interface NavLeaf {
   key: string;
   href: string;
   label: string;
-  icon: React.ReactNode;
 }
 
-/** 侧栏只放这六项：少而稳，不往里堆二级菜单 */
+interface NavItem {
+  key: string;
+  label: string;
+  icon: React.ReactNode;
+  /** 叶子节点才有 href；有 children 的就是分组 */
+  href?: string;
+  children?: NavLeaf[];
+}
+
+/**
+ * 侧栏：一级栏目少而稳；「营销」是一个分组，子项直接可点（一次点到位）。
+ * 早期这里写死“只放六项”，现在已经放开 —— 以“用户能不能一步到达”为准。
+ */
 const NAV: NavItem[] = [
   { key: "/admin/", href: "/admin/", label: "概览", icon: <DashboardOutlined /> },
   { key: "/admin/customers", href: "/admin/customers", label: "客户", icon: <TeamOutlined /> },
   { key: "/admin/orders", href: "/admin/orders", label: "订单", icon: <FileTextOutlined /> },
   { key: "/admin/plans", href: "/admin/plans", label: "套餐", icon: <AppstoreOutlined /> },
   { key: "/admin/gateways", href: "/admin/gateways", label: "支付", icon: <CreditCardOutlined /> },
+  {
+    key: "/admin/marketing",
+    label: "营销",
+    icon: <GiftOutlined />,
+    children: [
+      { key: "/admin/marketing/overview", href: "/admin/marketing/overview", label: "营销总览" },
+      { key: "/admin/marketing/coupons", href: "/admin/marketing/coupons", label: "优惠券" },
+      { key: "/admin/marketing/gifts", href: "/admin/marketing/gifts", label: "礼包" },
+      { key: "/admin/marketing/referrals", href: "/admin/marketing/referrals", label: "邀请返利" },
+      { key: "/admin/marketing/report", href: "/admin/marketing/report", label: "营销报表" },
+    ],
+  },
   { key: "/admin/settings", href: "/admin/settings", label: "设置", icon: <SettingOutlined /> },
 ];
+
+/** 所有可点节点（分组本身不可点）——面包屑、选中态、手机 Tab 都靠它 */
+const LEAVES: NavLeaf[] = NAV.flatMap((n) => (n.children ? n.children : [{ key: n.key, href: n.href!, label: n.label }]));
+
+/** antd Menu / Drawer 共用同一份 items（含 SubMenu） */
+const MENU_ITEMS = NAV.map((n) =>
+  n.children
+    ? {
+        key: n.key,
+        icon: n.icon,
+        label: n.label,
+        children: n.children.map((c) => ({ key: c.key, label: c.label })),
+      }
+    : { key: n.key, icon: n.icon, label: n.label },
+);
+
+/** 营销分组默认展开：分类存在的意义是“一眼看全”，不该先让人再点一次 */
+const DEFAULT_OPEN_KEYS = ["/admin/marketing"];
 
 /**
  * 手机底部标签栏只放"每天要点"的入口（Material / iOS 规范：3–5 个）。
  * 其余导航全部进左上角抽屉 —— 以后加功能不用再挤这里。
  */
-const MOBILE_TABS = NAV.slice(0, 3);
+const MOBILE_TABS = NAV.filter((n): n is NavItem & { href: string } => Boolean(n.href)).slice(0, 3);
 
 const PLACEHOLDERS: Record<string, string> = {
   "/admin/": "今日注册 / 今日收入 / 待处理订单 / 即将到期客户 —— 数据来自订单与 cf-api 客户镜像。",
@@ -88,7 +133,7 @@ export default function Shell({
   // 否则会在手机上先闪一下侧栏。
   const isMobile = screens.md === false;
   const { token } = antdTheme.useToken();
-  const current = NAV.find((item) => item.href === path) ?? NAV[0]!;
+  const current = LEAVES.find((item) => item.href === path) ?? LEAVES[0]!;
 
   async function logout() {
     await api.logout().catch(() => undefined);
@@ -106,6 +151,35 @@ export default function Shell({
       <Plans />
     ) : path === "/admin/gateways" ? (
       <Gateways />
+    ) : path === "/admin/marketing/overview" ? (
+      <Marketing />
+    ) : path === "/admin/marketing/coupons" ? (
+      <Promotions kind="coupon" />
+    ) : path === "/admin/marketing/referrals" ? (
+      <Promotions kind="referral" />
+    ) : path === "/admin/marketing/gifts" ? (
+      <ComingSoon
+        title="礼包"
+        stage="P2（礼包化 = 多个奖励组合）"
+        intro="钱不变，白送天数或流量。折扣与赠送分开记账，所以送出去的天数不会影响残值。"
+        bullets={[
+          "一个礼包可以叠加多项：送 N 天 + 送 N GB + 重置本月已用",
+          "触发方式：注册时 / 到期前 / 手动发给指定客户",
+          "兑换码批次：一次生成 N 个，带前缀、有效期，可导出 CSV",
+          "不做：送余额（没有钱包）、送设备数（平台侧 licence_limit 不可改）、盲盒",
+        ]}
+      />
+    ) : path === "/admin/marketing/report" ? (
+      <ComingSoon
+        title="营销报表"
+        stage="P3（核销台账已有，只差聚合）"
+        intro="哪个活动在赚钱、哪个在烧钱。没有这张表，促销就是盲投。"
+        bullets={[
+          "按活动看：核销次数、带动订单数、实收金额、让利金额",
+          "新客占比 / 续费占比（按订单发生时该客户有没有付过钱判定）",
+          "退款把核销标记为作废，名额是否返还由活动配置决定",
+        ]}
+      />
     ) : (
       <Placeholder title={current.label} hint={PLACEHOLDERS[path] ?? "待实现"} />
     );
@@ -124,7 +198,8 @@ export default function Shell({
             theme="dark"
             mode="inline"
             selectedKeys={[current.key]}
-            items={NAV.map((n) => ({ key: n.key, icon: n.icon, label: n.label }))}
+            defaultOpenKeys={DEFAULT_OPEN_KEYS}
+            items={MENU_ITEMS}
             onClick={({ key }) => navigate(key)}
             style={{ borderInlineEnd: "none" }}
           />
@@ -294,7 +369,8 @@ export default function Shell({
         <Menu
           mode="inline"
           selectedKeys={[current.key]}
-          items={NAV.map((n) => ({ key: n.key, icon: n.icon, label: n.label }))}
+          defaultOpenKeys={DEFAULT_OPEN_KEYS}
+          items={MENU_ITEMS}
           onClick={({ key }) => {
             setDrawerOpen(false);
             navigate(key);
