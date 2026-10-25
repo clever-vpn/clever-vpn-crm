@@ -77,7 +77,33 @@ npm run dev:app-web
 | <https://crm.clever-vpn.org/admin/> | 管理后台（**Vite dev server**；首次进用 `SETUP_TOKEN` 初始化管理员） |
 | <http://127.0.0.1:8788/admin/> | 管理后台**编译产物**（对比用，走 Worker assets） |
 | <https://crm.clever-vpn.org/admin/plans> | 套餐设计器 |
-| <https://app-web.clever-vpn.org/> | App 模拟端：登录 → 套餐列表 → 换购报价 |
+| <https://app-web.clever-vpn.org/> | App 模拟端：登录 → 套餐（`action` 渲染）→ 报价 → 下单 → 支付 → 轮询 → 看权益/激活码 |
+
+### 假 cf-api（否则付款后拿不到码）
+
+落账走真实 cf-api；本地没有时，订单会**如实**停在 `provisioning`（契约行为，不是 bug）。
+想跑通“付钱 → 拿到码”，起一个假平台：
+
+```bash
+# 终端 D：假 cf-api（只存在内存，重启即清空）
+node scripts/fake-cf-api.mjs          # 127.0.0.1:8899
+```
+
+再在 `.dev.vars` 里加两行，然后**重启 wrangler dev**（`.dev.vars` 不热重载）：
+
+```ini
+CF_API_BASE=http://127.0.0.1:8899
+CF_API_TOKEN=cv_api_local
+```
+
+验证：付款后 `GET /api/app/v1/subscription` 变成 `active` 并带上 `code`；
+假平台日志会把控制参数打成“人话”，**流量那一项必须是 `xx.xx GB`**：
+
+```
+[fake-cf] CREATE id=4201 code=7391048261558201 auth_id=crm:1 limit=1 frozen=0 expire=2028-10-24 traffic=1000.00 GB quota=NULL
+```
+
+（`traffic_balance` 存的是**字节**；写成 GB 会变成“100 字节”并在几分钟内断网。）
 
 ## 3. 验证码（本地直接回显）
 
