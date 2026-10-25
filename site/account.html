@@ -39,6 +39,23 @@
 
       <section class="card" style="margin-top:18px">
         <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">兑换码</h2>
+          <span class="tag">有码就能领</span>
+        </div>
+        <p class="hint" style="margin:10px 0 0">
+          拿到活动码 / 渠道福利码后在这里输入。兑换的权益会直接加到当前账号上。
+        </p>
+        <div class="row" style="margin-top:14px">
+          <input id="redeem-code" class="grow" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="输入兑换码，例如 GUOQING7"
+                 style="text-transform:uppercase;letter-spacing:1px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+          <button id="redeem-btn" class="btn" type="button">兑换</button>
+        </div>
+        <div id="redeem-result" style="margin-top:12px"></div>
+      </section>
+
+      <section class="card" style="margin-top:18px">
+        <div class="row" style="justify-content:space-between">
           <h2 style="margin:0">邀请好友</h2>
           <span id="invite-count" class="tag"></span>
         </div>
@@ -153,6 +170,60 @@
         }
       });
 
+
+      // ── 兑换码（契约 §2.9.7）──
+      //   业务性失败是 200 + ok:false + reason（不是异常），所以要按 ok 判断。
+      const redeemDone = (payload) => {
+        const bits = [];
+        const a = payload.applied || {};
+        if (a.days) bits.push(`+${a.days} 天`);
+        if (a.gb) bits.push(`+${a.gb} GB`);
+        if (a.reset_month) bits.push('重置本月已用');
+        const head = payload.opened ? '已开通体验套餐' : `「${payload.promotion_name}」已到账`;
+        const detail = bits.length ? `：${bits.join(' + ')}` : '';
+        const tail = payload.expires_at ? `，有效期至 ${fmtDate(payload.expires_at)}` : '';
+        return `${head}${detail}${tail}`;
+      };
+
+      $('redeem-btn').addEventListener('click', async () => {
+        const code = ($('redeem-code').value || '').trim().toUpperCase();
+        const box = $('redeem-result');
+        if (!code) {
+          box.innerHTML = '<div class="err">请输入兑换码</div>';
+          return;
+        }
+        $('redeem-btn').disabled = true;
+        box.innerHTML = '<div class="hint">正在兑换…</div>';
+        try {
+          const res = await fetch('/api/app/v1/redeem', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.status === 401) {
+            location.assign('/login?next=/account');
+            return;
+          }
+          if (res.status === 429) {
+            box.innerHTML = `<div class="err">${data?.message || '试得太频繁了，请稍后再试'}</div>`;
+            return;
+          }
+          if (data.ok) {
+            box.innerHTML = `<div class="ok">${redeemDone(data)}</div>`;
+            $('redeem-code').value = '';
+            renderMe(await api('/me'));   // 权益变了，立刻刷新上面那张卡
+          } else {
+            box.innerHTML = `<div class="err">${data.reason || '兑换失败'}</div>`;
+          }
+        } catch (e) {
+          box.innerHTML = `<div class="err">兑换失败：${e.message}</div>`;
+        } finally {
+          $('redeem-btn').disabled = false;
+        }
+      });
+
       function renderOrders(payload) {
         const items = payload.items ?? [];
         const body = $('orders');
@@ -170,6 +241,10 @@
           </tr>
         `).join('');
       }
+
+      $('redeem-code').addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') $('redeem-btn').click();
+      });
 
       (async () => {
         try {

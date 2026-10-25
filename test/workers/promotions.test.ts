@@ -28,6 +28,11 @@ const REFERRER = "promo-referrer@test.com";
 const GIFT_TO = "gift-receiver@test.com";
 const GIFT_SIGNUP = "gift-signup@test.com";
 const GIFT_NO_SUB = "gift-no-sub@test.com";
+/** 兑换码用例的收件人（网关白名单一并放行） */
+const REDEEM_WITH_SUB = "redeem-sub@test.com";
+const REDEEM_NEW_USER = "redeem-new@test.com";
+const REDEEM_NO_PLAN = "redeem-noplan@test.com";
+const REDEEM_BRUTE = "redeem-brute@test.com";
 
 const worker = rawExports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
@@ -123,7 +128,14 @@ beforeAll(async () => {
          mapping, priority, status, currency, allowed_emails, created_at, updated_at)
        VALUES ('mock', '测试网关（演示）', NULL, 'MOCK-P1', NULL, '["alipay"]',
          NULL, 999, 'live', 'CNY', ?, ?, ?)`,
-    ).bind(JSON.stringify([PAYER, FRIEND, REFERRER, GIFT_TO, GIFT_SIGNUP, GIFT_NO_SUB]), now, now),
+    ).bind(
+      JSON.stringify([
+        PAYER, FRIEND, REFERRER, GIFT_TO, GIFT_SIGNUP, GIFT_NO_SUB,
+        REDEEM_WITH_SUB, REDEEM_NEW_USER, REDEEM_NO_PLAN, REDEEM_BRUTE,
+      ]),
+      now,
+      now,
+    ),
     // 标价 15 元 / 30 元两个周期套餐
     env.DB.prepare(
       `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
@@ -573,7 +585,7 @@ describe("礼包（gift）", () => {
       results: { granted: boolean; skipped: string | null }[];
     };
     expect(body.granted).toBe(0);
-    expect(body.results[0]?.skipped).toContain("订阅");
+    expect(body.results[0]?.skipped).toContain("套餐");
 
     // 没发出去就**不能留 0 元订单**（否则财务会看到一张对不上权益的单）
     const orders = await env.DB.prepare(
@@ -606,5 +618,185 @@ describe("礼包（gift）", () => {
 
     const sub = await snapshotOf(customerId);
     expect(sub!.balance_gb).toBe(2);
+  });
+});
+
+/**
+ * 兑换码（契约 §2.9.7）
+ *
+ * 要钉住的：码错/用完/重复/限流都不抛 5xx（一律 200 + reason），
+ * 以及**没有订阅的新客能用载体套餐 0 元开户** —— 这正是「发码领 7 天」的主场景。
+ */
+describe("兑换码", () => {
+  const customerIdOf = async (email: string): Promise<number> => {
+    const row = await env.DB.prepare(`SELECT id FROM customers WHERE email = ?`)
+      .bind(email)
+      .first<{ id: number }>();
+    expect(row, `客户应存在：${email}`).toBeTruthy();
+    return row!.id;
+  };
+
+  const redeem = (token: string, code: string) =>
+    appCall("/api/app/v1/redeem", token, { method: "POST", body: { code } });
+
+  /** 隐藏套餐 = 后台赠送专用（契约：绝不出现在 /plans） */
+  const insertHiddenPlan = async (id: string, termDays: number) => {
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
+         monthly_quota_gb, line_ids, sort_order, status, visibility, created_at, updated_at)
+       VALUES (?, ?, 'period', 0, 'CNY', 1, ?, 20, '[]', 900, 'active', 'hidden', ?, ?)`,
+    )
+      .bind(id, `体验 ${termDays} 天`, termDays, now, now)
+      .run();
+  };
+
+  it("有订阅：加权益 + 0 元订单；重复兑被挡；码错不抛 5xx", async () => {
+    const promoId = await createPromotion({
+      name: "国庆福利",
+      kind: "gift",
+      code: "GUOQING7",
+      audience: "all",
+      rewards: { days: 3, gb: 1 },
+      max_uses: 100,
+    });
+
+    const email = REDEEM_WITH_SUB;
+    const token = await login(email);
+    await payOrder(token, "promo_30d");
+    const customerId = await customerIdOf(email);
+
+    const before = await env.DB.prepare(
+      `SELECT expires_at FROM platform_subscriptions WHERE customer_id = ?`,
+    )
+      .bind(customerId)
+      .first<{ expires_at: string }>();
+
+    // 大小写不敏感（用户手输常是小写）
+    const ok = await redeem(token, "guoqing7");
+    expect(ok.status).toBe(200);
+    const body = (await ok.json()) as {
+      ok: boolean;
+      promotion_name: string;
+      opened: boolean;
+      applied: { days: number; gb: number };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.promotion_name).toBe("国庆福利");
+    expect(body.opened).toBe(false);
+    expect(body.applied.days).toBe(3);
+
+    const after = await env.DB.prepare(
+      `SELECT expires_at, balance_gb FROM platform_subscriptions WHERE customer_id = ?`,
+    )
+      .bind(customerId)
+      .first<{ expires_at: string; balance_gb: number }>();
+    expect((Date.parse(after!.expires_at) - Date.parse(before!.expires_at)) / 86_400_000).toBe(3);
+
+    const giftOrders = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift' AND promotion_id = ?`,
+    )
+      .bind(customerId, promoId)
+      .first<{ n: number }>();
+    expect(Number(giftOrders?.n ?? 0)).toBe(1);
+
+    // 同一人再兑一次 ⇒ 每人次数用完（默认 1），仍然是 200 + reason
+    const again = await redeem(token, "GUOQING7");
+    expect(again.status).toBe(200);
+    const againBody = (await again.json()) as { ok: boolean; reason: string };
+    expect(againBody.ok).toBe(false);
+    expect(againBody.reason).toBeTruthy();
+
+    // 不存在的码：200 + reason（不是 404/500），且**不泄露**"码不存在"与"已结束"的区别
+    const bad = await redeem(token, "NOSUCHCODE");
+    expect(bad.status).toBe(200);
+    const badBody = (await bad.json()) as { ok: boolean; reason: string };
+    expect(badBody.ok).toBe(false);
+    expect(badBody.reason).toContain("兑换码");
+  });
+
+  it("新客没有订阅：用载体套餐 0 元开户，有效期由礼包天数决定", async () => {
+    await insertHiddenPlan("trial_7d", 30); // 套餐写 30 天，礼包说 7 天 ⇒ 以礼包为准
+    await createPromotion({
+      name: "新人 7 天体验",
+      kind: "gift",
+      code: "TRY7DAYS",
+      audience: "all",
+      rewards: { days: 7 },
+      plan_id: "trial_7d",
+      max_uses: 50,
+    });
+
+    const email = REDEEM_NEW_USER;
+    const token = await login(email);
+    const customerId = await customerIdOf(email);
+
+    const res = await redeem(token, "TRY7DAYS");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; opened: boolean; expires_at: string };
+    expect(body.ok).toBe(true);
+    expect(body.opened).toBe(true);
+
+    const sub = await env.DB.prepare(
+      `SELECT plan_id, expires_at, paid_minor, licence_limit FROM platform_subscriptions WHERE customer_id = ?`,
+    )
+      .bind(customerId)
+      .first<{ plan_id: string; expires_at: string; paid_minor: number; licence_limit: number }>();
+    expect(sub?.plan_id).toBe("trial_7d");
+    expect(sub?.paid_minor).toBe(0); // 0 元开户，残值计算不受影响
+    expect(sub?.licence_limit).toBe(1); // 设备数来自载体套餐
+    const days = Math.round((Date.parse(sub!.expires_at) - Date.now()) / 86_400_000);
+    expect(days).toBe(7);
+
+    // 隐藏套餐绝不能被买：/plans 里不应出现
+    const plans = (await (await appCall("/api/app/v1/plans", token)).json()) as {
+      plan_id: string;
+    }[];
+    expect(plans.some((p) => p.plan_id === "trial_7d")).toBe(false);
+  });
+
+  it("没有订阅又没配载体套餐：200 + 理由，且不生成订单", async () => {
+    await createPromotion({
+      name: "无载体礼包",
+      kind: "gift",
+      code: "NOPLAN99",
+      audience: "all",
+      rewards: { days: 3 },
+    });
+
+    const email = REDEEM_NO_PLAN;
+    const token = await login(email);
+    const customerId = await customerIdOf(email);
+
+    const res = await redeem(token, "NOPLAN99");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; reason: string };
+    expect(body.ok).toBe(false);
+    expect(body.reason).toContain("套餐");
+
+    const orders = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift'`,
+    )
+      .bind(customerId)
+      .first<{ n: number }>();
+    expect(Number(orders?.n ?? 0)).toBe(0);
+  });
+
+  it("猜码过频：超过 5 次失败返回 429（带 Retry-After）", async () => {
+    const token = await login(REDEEM_BRUTE);
+    for (let i = 0; i < 5; i += 1) {
+      const r = await redeem(token, `WRONG${i}XX`);
+      expect(r.status).toBe(200);
+    }
+    const blocked = await redeem(token, "WRONG9XX");
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("Retry-After")).toBeTruthy();
+    const body = (await blocked.json()) as { error: string };
+    expect(body.error).toBe("too_many_attempts");
+  });
+
+  it("未登录：401（不暴露码是否存在）", async () => {
+    const res = await fetchJson("/api/app/v1/redeem", { method: "POST", body: { code: "GUOQING7" } });
+    expect(res.status).toBe(401);
   });
 });

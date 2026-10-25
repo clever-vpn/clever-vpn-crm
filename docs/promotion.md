@@ -3,7 +3,7 @@
 > 对外承诺见 `clever-vpn-docs` `app-crm.md` **§2.9**（contract `15`）。
 > 本文是**内部设计依据与决策记录**：为什么是这三类、为什么砍掉其他玩法。
 > 实现状态：**P1 ✅**（优惠券 + 邀请码）、**P2 ✅**（礼包 / 人群 / 冷却）；
-> **P3 未做**（兑换码批次、营销报表）。
+> **P3 未做**（一码一人的批次 / CSV 导出、营销报表）。
 
 ## 0. 定位决定形态
 
@@ -48,10 +48,22 @@ XBoard 叫礼品卡（gift card），因为它是**可转赠的预付凭证**（
 我们不是：我们的礼包是**运营工具**——注册礼包、续费礼包、到期挽回礼包，由租户
 主动发，不进入流通。叫「礼品卡」会让人误以为可以买来送朋友。
 
-若将来真要做"可转赠"，那是**兑换码（voucher）**，P3 再说：有码一对一时叫
-**兑换码**，无码的权益组合叫**礼包**。
+有码一对一时叫**兑换码**（v16 已做「共享码」），无码的权益组合叫**礼包**。
 
-### 为什么现在不做"兑换码批次"（P3 暂缓）
+### 兑换码（v16 已做，但只做「共享码」）
+
+**码是分发方式，不是第四类物件** —— 所以不是 `kind=voucher`，而是礼包带一个 `code`。
+用户登录后在官网账户页 / App 里输码，直接换权益（`POST /redeem`）。
+
+| 能力 | 状态 |
+|---|---|
+| 共享码（一码多人，`max_uses` 限量 + 每人 1 次） | ✅ v16 |
+| 一码一渠道（建多个活动，核销数各自统计） | ✅ 天然成立，不需要批次表 |
+| 载体套餐：没订阅的新客用隐藏套餐 0 元开户（= 免费体验） | ✅ v16 |
+| 防撞库（同客户每小时 5 次失败即锁） | ✅ v16 |
+| 一码一人批次 / CSV 导出 / 实体卡 | ❌ 不做（那是批发分销的业务） |
+
+### 为什么不做"兑换码批次"
 
 不是"永远不做"，而是**顺序问题**：它要额外解决码的交付（印刷、发货、防撞库、
 防泄露）与批次管理（前缀 / 生效期 / 导出 CSV），成本集中在**分发**而不是产品价值。
@@ -118,6 +130,7 @@ promotions                     一个活动 / 一批码
   max_uses / max_uses_per_customer
   audience / audience_days     人群（all/new/existing/expiring/expired/specific）
   cooldown_hours               同一客户两次核销的最小间隔
+  plan_id                      载体套餐（仅礼包）：无订阅时用它 0 元开户（必须 hidden）
   new_user_within_days         额外的"注册 N 天内"闸门（与 audience 正交）
   badge_label                  "限时 8 折"，直接给 UI 展示
   visible                      是否公开展示
@@ -187,7 +200,9 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 | P2 | 礼包（送天数 / 送流量 / 重置本月） | ✅ |
 | P2 | 人群六值 + 冷却 + 点名名单（`promotion_targets`） | ✅ |
 | P2 | 注册礼包（首单后自动）/ 到期挽回礼包（每日定时） | ✅ |
-| P3 | 兑换码批次（有码一对一，可导出、可防撞库） | ⬜ 见 §1「为什么现在不做」 |
+| P2 | 兑换码（共享码 + 官网/App 兑换入口 + 防撞库） | ✅ v16 |
+| P2 | 载体套餐（隐藏套餐 0 元开户 = 免费体验） | ✅ v16 |
+| P3 | 兑换码批次（一码一人、CSV 导出、实体卡） | ⬜ 见 §1「为什么不做」 |
 | P3 | 营销报表（按活动看核销 / 实收 / 让利） | ⬜ 台账已有，只差聚合 |
 | ❌ | 券包、盲盒、多级分销、佣金提现 | 见 §1 |
 | ❌ | 送余额（没有钱包）、送设备数（`licence_limit` 不可改） | 见 §4 |
@@ -211,6 +226,7 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 | 取数 | `src/promotions/service.ts`：`resolvePromotion`（单套餐，含用户输入的码）、`resolveForPlans`（列表页，一次算完）、`planBadges`（公开角标） |
 | 关系 | `src/promotions/referral.ts`：`ensureReferralCode`（懒生成）、`bindReferral`（静默、幂等）、`referralPanel`、`rewardReferrer` |
 | 礼包 | `src/promotions/gift.ts`：`grantGift`（幂等发放）、`grantSignupGifts`（首单后发 `audience=new`）、`runExpiringGifts`（每日扫 `audience=expiring`） |
+| 兑换 | `src/promotions/redeem.ts`：`redeemGiftCode`（码归一 → 限流 → 找活动 → 发放），失败一律 `ok:false` + 整句原因 |
 | 人群判定 | `model.ts` 的 `checkAudience`（六值）、冷却判定；取数在 `service.ts` 的 `customerFacts` / `targetedOf` |
 | 后台 | `src/admin/promotions.ts`：`GET/POST /api/admin/promotions`、`PATCH /:id`、`POST /:id/publish|end`、`POST /:id/grant`（礼包手动发放）、`GET/PUT /:id/targets`（点名名单） |
 | 核销 | 只在 `src/payments/notify.ts` 的 `grant()` 里调（钱到账之后），`INSERT OR IGNORE` |

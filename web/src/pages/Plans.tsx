@@ -24,6 +24,7 @@ const emptyDraft = (): PlanDraft => ({
   kind: "period",
   price_minor: 0,
   currency: "CNY",
+  visibility: "public",
   licence_limit: 1,
   term_days: 30,
   monthly_quota_gb: 100,
@@ -118,6 +119,7 @@ export default function Plans() {
       down_mbps: plan.speed?.down_mbps ?? null,
       sales_channels: plan.sales_channels,
       store_product_id: plan.store_product_id,
+      visibility: plan.visibility ?? "public",
       sort_order: plan.sort_order,
     });
   }
@@ -174,6 +176,9 @@ export default function Plans() {
                   <td>{plan.licence_limit}</td>
                   <td>
                     <span className={`tag tag-${plan.status}`}>{plan.status}</span>
+                    {plan.visibility === "hidden" && (
+                      <div className="mono" style={{ marginTop: 4 }}>隐藏（仅后台）</div>
+                    )}
                   </td>
                   <td className="actions">
                     {plan.status === "draft" && (
@@ -412,6 +417,20 @@ function PlanForm({
             />
           </label>
         )}
+
+        <label>
+          上架方式
+          <select
+            value={draft.visibility ?? "public"}
+            onChange={(e) => set("visibility", e.target.value as "public" | "hidden")}
+          >
+            <option value="public">公开（App 与官网可购买）</option>
+            <option value="hidden">隐藏（仅后台，用作礼包的体验套餐）</option>
+          </select>
+          <small className="hint">
+            隐藏套餐不会出现在任何售卖列表里；礼包用它给没有订阅的客户 0 元开户
+          </small>
+        </label>
 
         <label>
           可用线路 ID（逗号分隔，留空 = 全部）

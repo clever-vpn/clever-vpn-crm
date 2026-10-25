@@ -320,6 +320,7 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
     term_days: 30,
     monthly_quota_gb: 100,
     traffic_gb: null,
+    visibility: "public",
     validity_days: null,
     line_ids: [],
     up_mbps: null,

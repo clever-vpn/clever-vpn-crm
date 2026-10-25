@@ -476,6 +476,12 @@ export const promotions = sqliteTable(
     max_uses_per_customer: integer("max_uses_per_customer").notNull().default(1),
     /** 同一客户同一活动两次核销的最小间隔（小时）；NULL = 不限 */
     cooldown_hours: integer("cooldown_hours"),
+    /**
+     * 载体套餐（契约 §2.9.7）：礼包发给**没有订阅**的客户时，用它 0 元开通。
+     * 必须是 `visibility='hidden'` 的套餐 —— 套餐给“是什么包”，礼包的 `rewards.days`
+     * 给“送多久”。有订阅时这个字段被忽略。
+     */
+    plan_id: text("plan_id"),
     /** 角标文案，如"限时 8 折"；NULL = 列表页不展示 */
     badge_label: text("badge_label"),
     /** 是否公开展示（0 = 定向活动，只能靠码命中） */
