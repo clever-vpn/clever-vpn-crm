@@ -69,6 +69,11 @@
         return data;
       }
 
+      // 分享链接形如 /login?ref=FRIEND-A1B2 ：预填，但**不隐藏**输入框，
+      // 用户可以看见并改掉（iOS 拿不到 deferred deep link，只能靠这条路）
+      const refFromUrl = new URLSearchParams(location.search).get('ref');
+      if (refFromUrl) $('ref').value = refFromUrl.trim().toUpperCase();
+
       $('send').addEventListener('click', async () => {
         flash('', '');
         const email = $('email').value.trim();

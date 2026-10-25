@@ -57,6 +57,14 @@ export interface CreateChargeInput {
    * 升级时必须传 `quote.payable_minor`（新价 − 残值），否则会按原价收钱。
    */
   amountMinor?: number;
+  /**
+   * 促销减免（分）与命中的活动。**只用于记账与事后核销**，
+   * 不再二次计算 —— 金额已经包含在 `amountMinor` 里了。
+   */
+  discountMinor?: number;
+  promotionId?: number | null;
+  /** 入口：`web`（品牌官网）/ `app`；只用于统计，不参与计价 */
+  entry?: string | null;
   /** 本站 origin（拼 pay_url 与 notify_url 用） */
   origin: string;
   clientIp?: string;
@@ -82,16 +90,20 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   const now = input.now ?? new Date();
   const nowIso = now.toISOString();
   const origin = input.origin.replace(/\/+$/, "");
+  const amountMinor = input.amountMinor ?? input.plan.price_minor;
 
-  // ── 1. 防双击：60 秒内同一 plan + 方式还在 pending ⇒ 复用（不新建行）──
+  // ── 1. 防双击：60 秒内同一 plan + 方式 + **金额**还在 pending ⇒ 复用（不新建行）──
+  //    金额必须参与匹配：用户中途换了个优惠码，价格变了就该新建一单，
+  //    否则会把“旧价的收银台”当成新单交回去。
   const cutoff = new Date(now.getTime() - REUSE_WINDOW_SECONDS * 1000).toISOString();
   const recent = await env.DB.prepare(
     `SELECT code, pay_url, amount_minor, currency, expires_at FROM orders
       WHERE customer_id = ? AND plan_id = ? AND payment_method = ? AND status = 'pending'
+        AND amount_minor = ?
         AND pay_url IS NOT NULL AND created_at >= ? AND expires_at > ?
       ORDER BY id DESC LIMIT 1`,
   )
-    .bind(input.customerId, input.plan.id, input.method, cutoff, nowIso)
+    .bind(input.customerId, input.plan.id, input.method, amountMinor, cutoff, nowIso)
     .first<{ code: string; pay_url: string; amount_minor: number; currency: string; expires_at: string | null }>();
 
   if (recent?.pay_url) {
@@ -116,7 +128,6 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
     return { ok: false, status: 400, code: "gateway_misconfigured", message: "该支付网关的映射配置无效" };
   }
 
-  const amountMinor = input.amountMinor ?? input.plan.price_minor;
   const currency = input.plan.currency;
   const orderCode = newOrderCode(now);
   const expiresAt = new Date(now.getTime() + ORDER_TTL_MINUTES * 60_000).toISOString();
@@ -197,9 +208,10 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   // ── 4. 落订单（单号创建后不可改）──
   await env.DB.prepare(
     `INSERT INTO orders (code, customer_id, plan_id, kind, plan_snapshot, amount_minor, currency,
+       discount_minor, promotion_id, entry,
        source, payment_method, gateway_id, provider_order_no, provider_trade_no, pay_url,
        raw_create, expires_at, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
   )
     .bind(
       orderCode,
@@ -209,6 +221,9 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
       JSON.stringify(input.plan),
       amountMinor,
       currency,
+      input.discountMinor ?? 0,
+      input.promotionId ?? null,
+      input.entry ?? null,
       input.method,
       route.gateway.id,
       orderCode,

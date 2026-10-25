@@ -1,8 +1,8 @@
 # 促销（promotion / referral）
 
-> 对外承诺见 `clever-vpn-docs` `app-crm.md` **§2.9**（contract `12`）。
+> 对外承诺见 `clever-vpn-docs` `app-crm.md` **§2.9**（contract `13`）。
 > 本文是**内部设计依据与决策记录**：为什么只做这两种、为什么砍掉另外三种。
-> 实现状态：⬜ 未实现（字段位已定，见 §6）。
+> 实现状态：**P1 ✅ 已实现**（自动活动 + 优惠码 + 邀请码；P2 带码投放未做）。
 
 ## 0. 定位决定形态
 
@@ -143,11 +143,11 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 
 实施顺序：
 
-| 阶段 | 内容 | 理由 |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| P1 | 自动活动（新人首单 / 续费 / 节日全场） | 零触达，用户打开就见 |
-| P1 | 邀请码（注册绑定 + 首单双向奖励） | 唯一零成本拉新 |
-| P2 | 带码投放（KOL / 群） | 租户做外部推广时才需要 |
+| P1 | 自动活动（新人首单 / 续费 / 节日全场） | ✅ |
+| P1 | 邀请码（注册绑定 + 首单双向奖励） | ✅ |
+| P2 | 带码投放（KOL / 群） | ⬜ 建活动即可，无需新能力 |
 | ❌ | 兑换码、券包、多级分销、佣金提现 | 见 §1 |
 
 ## 7. 已知的坑（实现时注意）
@@ -159,3 +159,27 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 4. **最低消费必须有**：百分比券对低价套餐会击穿（$1 买年付）。
 5. **`origin` 不是 `channel`**：`origin` = 从哪个壳进来；`channel` = 钱在哪里付。
    两者正交，别混用。
+
+## 8. 实现地图（P1）
+
+| 关注点 | 位置 |
+|---|---|
+| 表 | `promotions`（规则层）、`referrals`（关系层）、`redemptions`（核销台账，`(promotion_id, order_id)` 唯一） |
+| 纯逻辑 | `src/promotions/model.ts`：时间窗 / 套餐范围 / 门槛 / 次数 / 首单 → `checkPromotion`；`discountOf`；`bestPromotion` |
+| 取数 | `src/promotions/service.ts`：`resolvePromotion`（单套餐，含用户输入的码）、`resolveForPlans`（列表页，一次算完）、`planBadges`（公开角标） |
+| 关系 | `src/promotions/referral.ts`：`ensureReferralCode`（懒生成）、`bindReferral`（静默、幂等）、`referralPanel`、`rewardReferrer` |
+| 后台 | `src/admin/promotions.ts`：`GET/POST /api/admin/promotions`、`PATCH /:id`、`POST /:id/publish|end` |
+| 核销 | 只在 `src/payments/notify.ts` 的 `grant()` 里调（钱到账之后），`INSERT OR IGNORE` |
+| 金额 | `payable = max(0, price − discount − residual)`；`orders.amount_minor` 是实收，`orders.discount_minor` 只记促销那部分 |
+
+几个**实现上的硬约束**（改代码时别破坏）：
+
+1. `promotions.code` 为 `NULL` = 自动活动；**`kind='referral'` 的活动不能当码用**
+   （否则等于一个匿名优惠码且不产生归因）。
+2. 邀请码存在 `customers.referral_code`（懒生成 + 唯一索引），**不是** `promotions.code`。
+3. 60 秒复用窗口按「用户 + 套餐 + 方式 + **金额**」匹配 —— 中途换码换了价，必须新建订单。
+4. `referrals.rewarded_at` 带 `IS NULL` 条件更新 ⇒ 回调重放不会重复发奖励。
+5. 推荐人奖励（天/GB）落在 `subscription_changes.action='gift'`，并立刻 `provisionSubscription`
+   把 `expire_date` / `traffic_balance` 推到平台；推送失败只记日志，本地账已生效。
+
+已知未做（有意）：0 元单（100% 抵扣）直接拒绝，不接"免费试用"；跨订单残值结转不做。

@@ -7,7 +7,7 @@ Last updated: 2026-10-25
 - [`clever-vpn-docs/docs/contracts/crm-api.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/crm-api.md)
   —— 认证、`customers` 字段与可写性、激活码语义、错误码、限流、缺口清单。
 - [`clever-vpn-docs/docs/contracts/app-crm.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/app-crm.md)
-  —— App 是 CRM 的终端客户端：注册/付费/取码都在 App 内（`/api/app/v1`，⬜），许可仍只由 cf-api 签发。
+  —— App 是 CRM 的终端客户端：注册/付费/取码都在 App 内（`/api/app/v1`，✅），许可仍只由 cf-api 签发。
 - [`clever-vpn-docs/docs/contracts/README.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/README.md)
   —— 状态图例与版本策略（`contract: 1`，只加不删）。
 
@@ -17,11 +17,11 @@ Last updated: 2026-10-25
 
 | 项 | 值 |
 |---|---|
-| 契约版本 | `CRM_CONTRACT_VERSION`（当前 `12`，对齐 `app-crm.md` v12），由 `GET /__version` 回显 |
+| 契约版本 | `CRM_CONTRACT_VERSION`（当前 `13`，对齐 `app-crm.md` v13），由 `GET /__version` 回显 |
 | 客户端 | **两个壳（App + 品牌官网）调同一批 `/api/app/v1`**；App 用 `Bearer`，官网用 httpOnly Cookie |
-| App 端接口 | `/api/app/v1/*`（⬜ 未实现）；契约见 `app-crm.md`，`app_contract: 12` |
+| App 端接口 | `/api/app/v1/*`（✅ 登录/套餐/报价/下单/订阅/邀请已实现）；契约见 `app-crm.md`，`app_contract: 13` |
 | 客服 / 官网 | `GET /support` 免登录；官网**持有登录态**（同一个 `/auth` + `session_token`），已删游客结账 `checkout_token` |
-| 促销 | 两层：`promotion`（自动/带码）+ `referral`（关系），见 [promotion.md](promotion.md)；字段位已在契约 v12 定下，⬜ 未实现 |
+| 促销 | 两层：`promotion`（自动/带码）+ `referral`（关系），见 [promotion.md](promotion.md)；✅ 已实现（`/plans` 角标、`/quote` 折扣、`/auth/verify` 邀请码、`/me.referral`、支付成功才核销） |
 | 套餐 | **`kind` 三选一**（`period` / `traffic` / `addon`），见 [plans.md](plans.md)；**销售策略全在 CRM**，App 只渲染 |
 | 币种 | **单币种**，初始化时设定（默认 `CNY`），之后不可改；金额一律用最小单位整数（分） |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |

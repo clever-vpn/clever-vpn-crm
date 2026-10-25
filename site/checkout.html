@@ -26,6 +26,11 @@
       <section class="card">
         <dl id="summary" class="kv"></dl>
         <div class="row" style="margin-top:16px">
+          <label class="hint">优惠码</label>
+          <input id="promo" class="grow" placeholder="选填，没有就留空" autocomplete="off" />
+          <button id="apply" class="btn ghost" type="button">使用</button>
+        </div>
+        <div class="row" style="margin-top:16px">
           <label class="hint">支付方式</label>
           <select id="method" class="grow"></select>
         </div>
@@ -44,6 +49,9 @@
       };
       const planId = new URLSearchParams(location.search).get('plan') || '';
       let quote = null;
+      let plan = null;
+      /** 已经**通过 /quote 校验**的码；Pay 时原样再传一次，让 CRM 重新校验 */
+      let appliedCode = '';
 
       async function api(path, init = {}) {
         const res = await fetch(`/api/app/v1${path}`, { credentials: 'same-origin', ...init });
@@ -57,6 +65,36 @@
         return data;
       }
 
+      function renderSummary() {
+        const rows = {
+          套餐: plan.name,
+          动作: { buy: '新购', renewal: '续订', upgrade: '升级' }[quote.action] ?? quote.action,
+          标价: yuan(quote.price_minor),
+        };
+        // discount_label 已经是整句「新人券 −¥3.00」，别再拼一次金额
+        if (quote.discount_minor > 0) rows['优惠'] = quote.discount_label || `−${yuan(quote.discount_minor)}`;
+        if (quote.residual_minor) rows['残值抵扣'] = `−${yuan(quote.residual_minor)}`;
+        rows['应付'] = yuan(quote.payable_minor);
+        rows['买后有效期至'] = quote.expires_at ? String(quote.expires_at).slice(0, 10) : '—';
+
+        $('summary').innerHTML = Object.entries(rows)
+          .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+          .join('');
+      }
+
+      /** 用（可选的）码重新报价；失败时保持原金额并提示原因 */
+      async function reQuote(code) {
+        const next = await api('/quote', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ plan_id: planId, ...(code ? { promo_code: code } : {}) }),
+        });
+        if (!next.allowed) throw new Error(next.reason || '当前不可购买');
+        quote = next;
+        appliedCode = code;
+        renderSummary();
+      }
+
       (async () => {
         if (!planId) {
           flash('err', '缺少套餐参数');
@@ -64,27 +102,10 @@
         }
         try {
           const plans = await api('/plans');
-          const plan = plans.find((p) => p.plan_id === planId);
+          plan = plans.find((p) => p.plan_id === planId);
           if (!plan) throw new Error('套餐不存在或已下架');
 
-          quote = await api('/quote', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ plan_id: planId }),
-          });
-          if (!quote.allowed) throw new Error(quote.reason || '当前不可购买');
-
-          const rows = {
-            套餐: plan.name,
-            动作: { buy: '新购', renewal: '续订', upgrade: '升级' }[quote.action] ?? quote.action,
-            标价: yuan(quote.price_minor),
-            残值抵扣: quote.residual_minor ? `−${yuan(quote.residual_minor)}` : '—',
-            应付: yuan(quote.payable_minor),
-            买后有效期至: quote.expires_at ? String(quote.expires_at).slice(0, 10) : '—',
-          };
-          $('summary').innerHTML = Object.entries(rows)
-            .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
-            .join('');
+          await reQuote('');
 
           const methods = await api('/payment-methods');
           $('method').innerHTML = methods.length
@@ -94,6 +115,22 @@
           if (e.message !== 'unauthorized') flash('err', e.message);
         }
       })();
+
+      $('apply').addEventListener('click', async () => {
+        flash('', '');
+        const code = $('promo').value.trim();
+        $('apply').disabled = true;
+        try {
+          await reQuote(code);
+          flash(code ? 'ok' : '', code ? '优惠码已生效' : '已取消优惠码');
+        } catch (e) {
+          // 码无效不影响继续购买：回落到无码报价
+          flash('err', e.message);
+          await reQuote('').catch(() => {});
+        } finally {
+          $('apply').disabled = false;
+        }
+      });
 
       $('pay').addEventListener('click', async () => {
         flash('', '');
@@ -108,9 +145,11 @@
             body: JSON.stringify({
               plan_id: planId,
               payment_method: method,
+              // 报价是唯一金额来源：带上它，价格变了 CRM 会 409 让用户重来
               expected_payable_minor: quote.payable_minor,
               // origin 区分下单入口（web / app），不参与计价
               origin: 'web',
+              ...(appliedCode ? { promo_code: appliedCode } : {}),
             }),
           });
           location.assign(order.pay_url);

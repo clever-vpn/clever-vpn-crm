@@ -38,6 +38,21 @@
       </section>
 
       <section class="card" style="margin-top:18px">
+        <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">邀请好友</h2>
+          <span id="invite-count" class="tag"></span>
+        </div>
+        <p class="hint" style="margin:10px 0 0">
+          把码发给朋友，他在注册时（选填）填上即可。奖励只给权益，不提现。
+        </p>
+        <div class="row" style="margin-top:14px">
+          <code id="invite-code" class="mono grow" style="font-size:18px;letter-spacing:1px">—</code>
+          <button id="copy" class="btn ghost" type="button">复制</button>
+        </div>
+        <dl id="invite" class="kv" style="margin-top:14px"></dl>
+      </section>
+
+      <section class="card" style="margin-top:18px">
         <h2 style="margin-top:0">订单</h2>
         <table>
           <thead>
@@ -104,6 +119,40 @@
           .join('');
       }
 
+      function renderReferral(ref) {
+        if (!ref) return;
+        $('invite-code').textContent = ref.code || '生成失败，请联系客服';
+        $('invite-count').className = 'tag';
+        $('invite-count').textContent = `已邀请 ${ref.invited} 人`;
+        const rows = {
+          已邀请: `${ref.invited} 人（已完成首单）`,
+          累计奖励: [
+            ref.reward_days ? `${ref.reward_days} 天` : '',
+            ref.reward_gb ? `${ref.reward_gb} GB` : '',
+          ].filter(Boolean).join(' + ') || '—',
+        };
+        $('invite').innerHTML = Object.entries(rows)
+          .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+          .join('');
+      }
+
+      $('copy').addEventListener('click', async () => {
+        const code = $('invite-code').textContent || '';
+        if (!code || code === '—') return;
+        try {
+          await navigator.clipboard.writeText(code);
+          flash('ok', `已复制邀请码 ${code}`);
+        } catch {
+          // 非 https / 无权限时就地选中，让用户自己复制
+          const range = document.createRange();
+          range.selectNodeContents($('invite-code'));
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          flash('err', '复制失败，请手动选中上面的码');
+        }
+      });
+
       function renderOrders(payload) {
         const items = payload.items ?? [];
         const body = $('orders');
@@ -126,6 +175,7 @@
         try {
           const me = await api('/me');
           renderMe(me);
+          renderReferral(me.referral);
           renderOrders(await api('/orders?pagination[limit]=20'));
         } catch (e) {
           if (e.message !== 'unauthorized') flash('err', `加载失败：${e.message}`);
