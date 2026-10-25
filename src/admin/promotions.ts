@@ -12,6 +12,7 @@
 
 import { AUDIENCES, PROMOTION_COLUMNS, hasRewards, normalizeRewards, rowToPromotion } from "../promotions/model";
 import { grantGift } from "../promotions/gift";
+import { generateCodes, listCodes, revokeCode } from "../promotions/codes";
 
 import type { Env } from "../env";
 import type { GiftRewards, Promotion, PromotionRow } from "../promotions/model";
@@ -415,6 +416,57 @@ export async function handleAdminPromotions(
     }
     await audit(env, actor, "promotion_targets_set", String(id), { count: ids.length });
     return json({ ok: true, count: ids.length });
+  }
+
+
+  // ── 批次码：生成 / 列表 / 作废（契约 §2.9.7）──
+  const codes = path.match(/^\/promotions\/(\d+)\/codes$/);
+  if (codes && (method === "GET" || method === "POST")) {
+    const id = Number(codes[1]);
+    const exists = await env.DB.prepare(`SELECT kind, code FROM promotions WHERE id = ?`)
+      .bind(id)
+      .first<{ kind: string; code: string | null }>();
+    if (!exists) return fail(404, "promotion_not_found");
+
+    if (method === "GET") {
+      return json({ codes: await listCodes(env, id) });
+    }
+
+    const body = await readBody(request);
+    const count = Number(body.count ?? 0);
+    if (!Number.isInteger(count) || count < 1 || count > 500) {
+      return fail(400, "invalid_request", "count 必须是 1–500 的整数");
+    }
+    const maxUses = body.max_uses === undefined ? 1 : Number(body.max_uses);
+    if (!Number.isInteger(maxUses) || maxUses < 1) {
+      return fail(400, "invalid_request", "max_uses 必须是 ≥1 的整数");
+    }
+    const prefix = typeof body.prefix === "string" ? body.prefix : null;
+
+    const { batchId, codes: created } = await generateCodes(env, {
+      promotionId: id,
+      count,
+      maxUses,
+      prefix,
+      expiresAt: typeof body.expires_at === "string" && body.expires_at ? body.expires_at : null,
+      note: typeof body.note === "string" && body.note ? body.note : null,
+    });
+    await audit(env, actor, "promotion_codes_generated", String(id), {
+      batch_id: batchId,
+      requested: count,
+      created: created.length,
+    });
+    // 数量不够就如实返回（撞码重试有上限，不假装成功）
+    return json({ batch_id: batchId, codes: created, requested: count }, 201);
+  }
+
+  const oneCode = path.match(/^\/promotions\/(\d+)\/codes\/(\d+)$/);
+  if (method === "DELETE" && oneCode) {
+    const [promotionId, codeId] = [Number(oneCode[1]), Number(oneCode[2])];
+    const ok = await revokeCode(env, promotionId, codeId);
+    if (!ok) return fail(404, "code_not_found", "这个码不存在或已经作废");
+    await audit(env, actor, "promotion_code_revoked", String(promotionId), { code_id: codeId });
+    return json({ ok: true });
   }
 
   // ── 手动发放（礼包）──

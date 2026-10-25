@@ -260,6 +260,8 @@ export async function grantGift(
     source: GiftSource;
     now?: Date;
     assumeFirstPurchase?: boolean;
+    /** 命中的批次码 id（`promotion_codes.id`）；用主码 / 系统发放时为 null */
+    codeId?: number | null;
   },
 ): Promise<GiftGrant | null> {
   const now = opts.now ?? new Date();
@@ -324,10 +326,17 @@ export async function grantGift(
 
   await env.DB.prepare(
     `INSERT OR IGNORE INTO redemptions
-       (promotion_id, customer_id, order_id, discount_minor, granted_json, created_at)
-     VALUES (?, ?, ?, 0, ?, ?)`,
+       (promotion_id, customer_id, order_id, code_id, discount_minor, granted_json, created_at)
+     VALUES (?, ?, ?, ?, 0, ?, ?)`,
   )
-    .bind(promo.id, opts.customerId, orderId, JSON.stringify(promo.rewards), now.toISOString())
+    .bind(
+      promo.id,
+      opts.customerId,
+      orderId,
+      opts.codeId ?? null,
+      JSON.stringify(promo.rewards),
+      now.toISOString(),
+    )
     .run();
 
   return {
