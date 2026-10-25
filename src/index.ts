@@ -12,6 +12,7 @@ import type { Env } from "./env";
 import { handleAppApi } from "./app/router";
 import { handleAdminApi } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
+import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
 
 export type { Env };
@@ -90,6 +91,16 @@ export default {
    */
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env.DB);
+    ctx.waitUntil(
+      // 先补落账：付款成功但 cf-api 没通时，订单停在 provisioning，用户拿不到码
+      retryProvisioning(env)
+        .then((report) => {
+          if (report.retried || report.failed) {
+            console.log(`[provision] retried=${report.retried} failed=${report.failed}`);
+          }
+        })
+        .catch((e: unknown) => console.error("[provision] 重试失败", e)),
+    );
     ctx.waitUntil(
       runSettlement(env)
         .then((report) => {

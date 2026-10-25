@@ -198,14 +198,8 @@ async function currentContext(
 
 function subscriptionView(sub: Subscription | null): Record<string, unknown> {
   if (!sub) return { status: "none", reason: null, status_text: "还没有订阅" };
-  const state = statusOf(sub);
   const unlimited = sub.kind === "period" && sub.quota_gb === null;
-  return {
-    status: state.status,
-    // 不能用的原因只有三种：到期 / 用完 / 冻结（撤销、退款也归 frozen）
-    reason: state.reason,
-    // 用户可见文案的唯一来源，App 不拼文案
-    status_text: state.status_text,
+  const base = {
     kind: sub.kind,
     plan_id: sub.plan_id,
     expires_at: sub.expires_at,
@@ -214,6 +208,28 @@ function subscriptionView(sub: Subscription | null): Record<string, unknown> {
     // traffic 用同步过来的余量；period 由结算任务维护
     remaining_gb: unlimited ? null : sub.kind === "traffic" ? sub.remaining_gb : sub.quota_gb,
     line_ids: sub.line_ids,
+  };
+
+  // 已付款但 cf-api 还没建好客户 ⇒ 还没有码。App 应显示"正在开通"而不是"无订阅"
+  if (!sub.code) {
+    return {
+      status: "provisioning",
+      reason: null,
+      status_text: "正在开通，通常 1 分钟内完成",
+      ...base,
+    };
+  }
+
+  const state = statusOf(sub);
+  return {
+    status: state.status,
+    // 不能用的原因只有三种：到期 / 用完 / 冻结（撤销、退款也归 frozen）
+    reason: state.reason,
+    // 用户可见文案的唯一来源，App 不拼文案
+    status_text: state.status_text,
+    ...base,
+    // 激活码只给 App 自己用：不展示、不写日志（app-crm.md §2.3）
+    code: sub.code,
   };
 }
 

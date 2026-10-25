@@ -18,6 +18,7 @@ import {
   type GatewayMapping,
 } from "./mapping";
 import { gatewaySecret } from "./checkout";
+import { provisionOrder } from "../platform/provision";
 import { customerSubscription, logChange, upsertSubscription } from "../subscriptions/store";
 import {
   isOver,
@@ -111,11 +112,12 @@ async function grant(env: Env, order: OrderRow, tradeNo: string | null, raw: str
       detail: { order_id: order.id, order_code: order.code, plan_id: plan.id, kind: plan.kind },
     });
     await env.DB.prepare(
-      `UPDATE orders SET status = 'active', subscription_id = ?, provisioned_at = ?, updated_at = ?
-        WHERE id = ?`,
+      // 先记关联，再落账：落账失败时订单停在 provisioning，cron 只重做这一步
+      `UPDATE orders SET subscription_id = ?, updated_at = ? WHERE id = ?`,
     )
-      .bind(subscriptionId, now.toISOString(), now.toISOString(), order.id)
+      .bind(subscriptionId, now.toISOString(), order.id)
       .run();
+    await provisionOrder(env, order.id);
   } catch (e) {
     // 钱已收：绝不能回退订单状态，只记错误等重试（provision_attempts 供运维查看）
     const msg = e instanceof Error ? e.message : String(e);
