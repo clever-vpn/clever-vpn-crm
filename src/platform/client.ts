@@ -9,6 +9,9 @@
 
 import type { Env } from "../env";
 
+/** 1 GiB = 1024³ 字节（与 cf-api `bandwidth.ts` 的 `GIGA` 一致） */
+export const GIGA = 1024 ** 3;
+
 export interface PlatformCustomer {
   id: number;
   code: string;

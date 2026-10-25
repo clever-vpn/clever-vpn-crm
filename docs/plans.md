@@ -26,7 +26,7 @@ Last updated: 2026-10-24
 
 平台的月度重置边界是**记账自然月**：10 号买的用户永远拿不到完整的 30 天额度，
 和「每月 100GB」这句话对不上。所以重置权收归 CRM，按**每个用户的购买锚点**结算
-（`traffic_balance` 是唯一账本）。代价是要跑一个每小时一次的幂等结算任务（⬜ 待实现）。
+（`traffic_balance` 是唯一账本）。代价是要跑一个每小时一次的幂等结算任务（✅ 已实现，见 §6）。
 
 `traffic_balance = NULL` 就是**不限量**：cf-api 对 `NULL` 直接不计费
 （`packages/tenant/src/modules/customers/bandwidth.ts:263`），不需要额外标志位。
@@ -167,6 +167,15 @@ $$R = P + B, \qquad B' = \min(B, R), \qquad R' = P + B'$$
 `R` = 平台余额、`P` = 本月额度、`B` = 加购包余额。等价于"按已用量扣包"，但**不需要记录已用量**。
 
 - 触发：`crons = ["17 * * * *"]`（`src/index.ts` 的 `scheduled`），幂等——`settle()` 只看 `last_settled_at`。
+- **单位**：`settle()` 内部全程用 **GB**；回写 cf-api 时乘 `1024³`（平台存的是字节），
+  读写都过 `src/platform/client.ts`，换算只在这一层发生。
+- **读不到平台余额就跳过本轮**：绝不能拿 `quota_gb` 兜底（那等于凭空造额度），
+  `failed` 记一条错误，下一小时重试；还没落账的订阅直接跳过（交给 `retryProvisioning`）。
+- **单位**：`settle()` 内部全程用 **GB**；回写 cf-api 时乘 `1024³`（平台存的是字节）。
+  读写都经过 `src/platform/client.ts`，换算只在这一层发生。
+- **读不到平台余额就跳过本轮**：绝不能拿 `quota_gb` 兜底（那等于凭空造额度）；
+  `failed` 会记一条错误，下一小时重试。
+- 还没落账的订阅（无 `platform_customer_id`）直接跳过，交给 `retryProvisioning`。
 - 漏跑几个月：只结算一次并把锚点推到最近一期，**不重放**（中间用量已经滚进 R 了，重放等于凭空发额度）。
 - 平台写入失败：`last_settled_at` 不动，下一小时自动重试（不会出现"CRM 以为重置了、平台还是旧余额"）。
 - 本地试跑：`POST /api/admin/subscriptions/settle {"dry_run": true}` —— 默认就是 dry-run，
