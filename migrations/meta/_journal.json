@@ -15,6 +15,20 @@
       "when": 1792894871699,
       "tag": "0001_optimal_fallen_one",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792907723908,
+      "tag": "0002_classy_vertigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1792907740837,
+      "tag": "0003_powerful_rhodey",
+      "breakpoints": true
     }
   ]
 }

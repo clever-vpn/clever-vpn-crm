@@ -14,6 +14,7 @@ import { handleAdminApi } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
+import { runExpiringGifts } from "./promotions/gift";
 
 export type { Env };
 
@@ -133,6 +134,16 @@ export default {
           if (report.failed) console.warn(`[settle] errors: ${report.errors.join(" | ")}`);
         })
         .catch((e: unknown) => console.error("[settle] 失败", e)),
+    );
+    // 到期前挽回：把 `audience='expiring'` 的礼包发给快到期的人（幂等，重复跑不会双发）
+    ctx.waitUntil(
+      runExpiringGifts(env)
+        .then((report) => {
+          if (report.granted || report.skipped) {
+            console.log(`[gift] expiring granted=${report.granted} skipped=${report.skipped}`);
+          }
+        })
+        .catch((e: unknown) => console.error("[gift] 到期礼包失败", e)),
     );
   },
 } satisfies ExportedHandler<Env>;

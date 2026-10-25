@@ -41,7 +41,7 @@ import type { Plan, PlanRow } from "../plans/model";
 import type { CurrentSubscription } from "../plans/quote";
 import type { Subscription } from "../plans/subscription";
 
-const APP_CONTRACT = 13;
+const APP_CONTRACT = 15;
 /** 报价有效期：超过这个时间，App 必须重新 `POST /quote`（契约 §2.4.8） */
 const QUOTE_TTL_SECONDS = 900;
 /**

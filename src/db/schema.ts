@@ -439,19 +439,33 @@ export const promotions = sqliteTable(
     code: text("code").unique(),
     /** 后台可见名称，不下发给用户 */
     name: text("name").notNull(),
-    /** coupon | referral */
+    /** coupon（改金额） | gift（改权益） | referral（关系）—— 见 `app-crm.md` §2.9 */
     kind: text("kind").notNull().default("coupon"),
-    /** amount（分） | percent（1–100，表示减掉的百分比） */
+    /**
+     * coupon 才有：amount（分） | percent（1–100，表示减掉的百分比）。
+     * gift / referral 不靠它，但列是 NOT NULL，一律写 `amount` + 0。
+     */
     benefit_type: text("benefit_type").notNull(),
     benefit_value: integer("benefit_value").notNull(),
+    /**
+     * kind=gift 的奖励项（JSON）：`{days, gb, reset_month}`，可组合。
+     * **只改权益不改金额** —— 所以与 benefit_* 是两套账。
+     * 刻意没有 device_limit：平台侧 `licence_limit` 建客户时固定、不可改。
+     */
+    rewards_json: text("rewards_json").notNull().default("{}"),
     /** 门槛：折扣前金额低于这个数就不适用（百分比券会击穿低价套餐，必须有） */
     min_subtotal_minor: integer("min_subtotal_minor").notNull().default(0),
     /** JSON 数组：`["period"]`；空数组 = 不限 */
     limit_plan_kinds: text("limit_plan_kinds").notNull().default("[]"),
     /** JSON 数组：指定套餐 id；空数组 = 不限 */
     limit_plan_ids: text("limit_plan_ids").notNull().default("[]"),
-    /** 只对"从未付过钱"的人生效 */
-    first_purchase_only: integer("first_purchase_only").notNull().default(0),
+    /**
+     * 人群：all | new | existing | expiring | expired | specific（契约 §2.9.6）。
+     * 取代早期的 boolean `first_purchase_only` —— 布尔表达不了「老客 / 快到期」。
+     */
+    audience: text("audience").notNull().default("all"),
+    /** audience=expiring 时必填：到期前 N 天内（1–90） */
+    audience_days: integer("audience_days"),
     /** 注册后 N 天内可用；NULL = 不限 */
     new_user_within_days: integer("new_user_within_days"),
     starts_at: text("starts_at"),
@@ -460,6 +474,8 @@ export const promotions = sqliteTable(
     max_uses: integer("max_uses"),
     /** 每人最多用几次（0 = 谁都不能用，等于下线） */
     max_uses_per_customer: integer("max_uses_per_customer").notNull().default(1),
+    /** 同一客户同一活动两次核销的最小间隔（小时）；NULL = 不限 */
+    cooldown_hours: integer("cooldown_hours"),
     /** 角标文案，如"限时 8 折"；NULL = 列表页不展示 */
     badge_label: text("badge_label"),
     /** 是否公开展示（0 = 定向活动，只能靠码命中） */
@@ -476,8 +492,26 @@ export const promotions = sqliteTable(
 );
 
 /**
- * 邀请关系 = **关系层**（唯一归因来源）。
+ * 「只给这几个客户」的名单（`audience = 'specific'` 时生效）。
  *
+ * 单独建表而不是在活动上塞 JSON 数组：名单可能上千人，JSON 塞不下也没法索引，
+ * 而这里的查询永远是「这个活动 + 这个客户」，一个复合主键就够。
+ */
+export const promotionTargets = sqliteTable(
+  "promotion_targets",
+  {
+    promotion_id: integer("promotion_id").notNull(),
+    customer_id: integer("customer_id").notNull(),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_promotion_targets").on(t.promotion_id, t.customer_id),
+    index("idx_promotion_targets_customer").on(t.customer_id),
+  ],
+);
+
+/**
+ * 邀请关系 = **关系层**（唯一归因来源）。 *
  * 一人只能被邀请一次（`uq_referrals_customer`）。这里**不存钱**：
  * 奖励明细落 `redemptions`，本表只回答"谁拉了谁"。
  */
@@ -614,3 +648,4 @@ export type Customer = typeof customers.$inferSelect;
 export type PromotionRow = typeof promotions.$inferSelect;
 export type ReferralRow = typeof referrals.$inferSelect;
 export type RedemptionRow = typeof redemptions.$inferSelect;
+export type PromotionTargetRow = typeof promotionTargets.$inferSelect;

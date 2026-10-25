@@ -158,17 +158,7 @@ export default function Shell({
     ) : path === "/admin/marketing/referrals" ? (
       <Promotions kind="referral" />
     ) : path === "/admin/marketing/gifts" ? (
-      <ComingSoon
-        title="礼包"
-        stage="P2（礼包化 = 多个奖励组合）"
-        intro="钱不变，白送天数或流量。折扣与赠送分开记账，所以送出去的天数不会影响残值。"
-        bullets={[
-          "一个礼包可以叠加多项：送 N 天 + 送 N GB + 重置本月已用",
-          "触发方式：注册时 / 到期前 / 手动发给指定客户",
-          "兑换码批次：一次生成 N 个，带前缀、有效期，可导出 CSV",
-          "不做：送余额（没有钱包）、送设备数（平台侧 licence_limit 不可改）、盲盒",
-        ]}
-      />
+      <Promotions kind="gift" />
     ) : path === "/admin/marketing/report" ? (
       <ComingSoon
         title="营销报表"

@@ -10,10 +10,11 @@
  * 建一个 `visible=0` 的活动把码单独发给他即可。
  */
 
-import { PROMOTION_COLUMNS, rowToPromotion } from "../promotions/model";
+import { AUDIENCES, PROMOTION_COLUMNS, hasRewards, normalizeRewards, rowToPromotion } from "../promotions/model";
+import { grantGift } from "../promotions/gift";
 
 import type { Env } from "../env";
-import type { Promotion, PromotionRow } from "../promotions/model";
+import type { GiftRewards, Promotion, PromotionRow } from "../promotions/model";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -56,18 +57,44 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   }
 
   const kind = str(input.kind) || "coupon";
-  if (kind !== "coupon" && kind !== "referral") errors.push("kind 只能是 coupon 或 referral");
+  if (!["coupon", "gift", "referral"].includes(kind)) errors.push("kind 只能是 coupon / gift / referral");
 
   const benefitType = str(input.benefit_type) || "amount";
   if (benefitType !== "amount" && benefitType !== "percent") {
     errors.push("benefit_type 只能是 amount 或 percent");
   }
   const benefitValue = num(input.benefit_value) ?? 0;
-  if (benefitType === "percent") {
-    if (!(benefitValue >= 1 && benefitValue <= 100)) errors.push("percent 的 benefit_value 必须在 1–100");
-  } else if (!(benefitValue > 0)) {
-    errors.push("amount 的 benefit_value 必须 > 0（单位：分）");
+  // 礼包不涉及金额（只改权益），所以不校验 benefit_*
+  if (kind !== "gift") {
+    if (benefitType === "percent") {
+      if (!(benefitValue >= 1 && benefitValue <= 100)) errors.push("percent 的 benefit_value 必须在 1–100");
+    } else if (!(benefitValue > 0)) {
+      errors.push("amount 的 benefit_value 必须 > 0（单位：分）");
+    }
   }
+
+  // ── 礼包的奖励项与人群（契约 §2.9.6）──
+  const rewards = normalizeRewards(input.rewards);
+  if (kind === "gift" && !hasRewards(rewards)) errors.push("礼包至少要送一项：天数 / GB / 重置本月已用");
+
+  const audience = str(input.audience) || "all";
+  if (!(AUDIENCES as readonly string[]).includes(audience)) {
+    errors.push(`audience 只能是 ${AUDIENCES.join(" / ")}`);
+  }
+  const audienceDays = input.audience_days === null || input.audience_days === undefined
+    ? null
+    : num(input.audience_days);
+  if (audience === "expiring") {
+    if (audienceDays === null || !(audienceDays >= 1 && audienceDays <= 90)) {
+      errors.push("audience=expiring 时必须填 audience_days（1–90）");
+    }
+  } else if (audienceDays !== null) {
+    errors.push("只有 audience=expiring 才用 audience_days");
+  }
+  const cooldownHours = input.cooldown_hours === null || input.cooldown_hours === undefined
+    ? null
+    : num(input.cooldown_hours);
+  if (cooldownHours !== null && !(cooldownHours >= 0)) errors.push("cooldown_hours 不能为负");
 
   const minSubtotal = num(input.min_subtotal_minor) ?? 0;
   if (minSubtotal < 0) errors.push("min_subtotal_minor 不能为负");
@@ -108,11 +135,14 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
       name,
       kind: kind as Promotion["kind"],
       benefit_type: benefitType as Promotion["benefit_type"],
-      benefit_value: Math.round(benefitValue),
+      benefit_value: kind === "gift" ? 0 : Math.round(benefitValue),
       min_subtotal_minor: Math.round(minSubtotal),
       limit_plan_kinds: kinds as Promotion["limit_plan_kinds"],
       limit_plan_ids: ids,
-      first_purchase_only: input.first_purchase_only === true ? 1 : 0,
+      rewards,
+      audience: audience as Promotion["audience"],
+      audience_days: audience === "expiring" ? Math.round(audienceDays ?? 7) : null,
+      cooldown_hours: cooldownHours === null ? null : Math.round(cooldownHours),
       new_user_within_days: num(input.new_user_within_days),
       starts_at: startsAt,
       ends_at: endsAt,
@@ -135,7 +165,10 @@ interface PromotionInput {
   min_subtotal_minor: number;
   limit_plan_kinds: Promotion["limit_plan_kinds"];
   limit_plan_ids: string[];
-  first_purchase_only: number;
+  rewards: GiftRewards;
+  audience: Promotion["audience"];
+  audience_days: number | null;
+  cooldown_hours: number | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
@@ -151,15 +184,16 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
   const now = new Date().toISOString();
   const res = await env.DB.prepare(
     `INSERT INTO promotions (code, name, kind, benefit_type, benefit_value, min_subtotal_minor,
-       limit_plan_kinds, limit_plan_ids, first_purchase_only, new_user_within_days,
-       starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
+       limit_plan_kinds, limit_plan_ids, rewards_json, audience, audience_days, cooldown_hours,
+       new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
        referrer_reward_type, referrer_reward_value, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       input.code, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
-      JSON.stringify(input.limit_plan_ids), input.first_purchase_only,
+      JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
+      input.audience, input.audience_days, input.cooldown_hours,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
       input.referrer_reward_type, input.referrer_reward_value, status, now, now,
@@ -171,16 +205,17 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
 async function updatePromotion(env: Env, id: number, input: PromotionInput): Promise<void> {
   await env.DB.prepare(
     `UPDATE promotions SET code = ?, name = ?, kind = ?, benefit_type = ?, benefit_value = ?,
-       min_subtotal_minor = ?, limit_plan_kinds = ?, limit_plan_ids = ?,
-       first_purchase_only = ?, new_user_within_days = ?, starts_at = ?, ends_at = ?,
-       max_uses = ?, max_uses_per_customer = ?, badge_label = ?, visible = ?,
-       referrer_reward_type = ?, referrer_reward_value = ?, updated_at = ?
+       min_subtotal_minor = ?, limit_plan_kinds = ?, limit_plan_ids = ?, rewards_json = ?,
+       audience = ?, audience_days = ?, cooldown_hours = ?,
+       new_user_within_days = ?, starts_at = ?, ends_at = ?, max_uses = ?, max_uses_per_customer = ?,
+       badge_label = ?, visible = ?, referrer_reward_type = ?, referrer_reward_value = ?, updated_at = ?
      WHERE id = ?`,
   )
     .bind(
       input.code, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
-      JSON.stringify(input.limit_plan_ids), input.first_purchase_only,
+      JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
+      input.audience, input.audience_days, input.cooldown_hours,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
       input.referrer_reward_type, input.referrer_reward_value,
@@ -202,7 +237,10 @@ function view(row: PromotionRow, uses?: number): Record<string, unknown> {
     min_subtotal_minor: promo.min_subtotal_minor,
     limit_plan_kinds: promo.limit_plan_kinds,
     limit_plan_ids: promo.limit_plan_ids,
-    first_purchase_only: promo.first_purchase_only,
+    rewards: promo.rewards,
+    audience: promo.audience,
+    audience_days: promo.audience_days,
+    cooldown_hours: promo.cooldown_hours,
     new_user_within_days: promo.new_user_within_days,
     starts_at: promo.starts_at,
     ends_at: promo.ends_at,
@@ -313,5 +351,90 @@ export async function handleAdminPromotions(
     return json({ ok: true });
   }
 
+  // ── 点名名单（`audience='specific'`）──
+  const targets = path.match(/^\/promotions\/(\d+)\/targets$/);
+  if (targets && (method === "GET" || method === "PUT")) {
+    const id = Number(targets[1]);
+    const exists = await env.DB.prepare(`SELECT 1 AS x FROM promotions WHERE id = ?`)
+      .bind(id)
+      .first<{ x: number }>();
+    if (!exists) return fail(404, "promotion_not_found");
+
+    if (method === "GET") {
+      const rows = await env.DB.prepare(
+        `SELECT c.id, c.email, c.display_name
+           FROM promotion_targets t JOIN customers c ON c.id = t.customer_id
+          WHERE t.promotion_id = ? ORDER BY c.id`,
+      )
+        .bind(id)
+        .all<{ id: number; email: string; display_name: string | null }>();
+      return json({ customers: rows.results ?? [] });
+    }
+
+    const ids = readIdList((await readBody(request)).customer_ids);
+    if (ids === null) return fail(400, "invalid_request", "customer_ids 必须是整数数组");
+
+    // 整体替换：先删后插，语义与"这份名单就是全部"一致
+    await env.DB.prepare(`DELETE FROM promotion_targets WHERE promotion_id = ?`).bind(id).run();
+    const now = new Date().toISOString();
+    for (const customerId of ids) {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO promotion_targets (promotion_id, customer_id, created_at)
+         VALUES (?, ?, ?)`,
+      )
+        .bind(id, customerId, now)
+        .run();
+    }
+    await audit(env, actor, "promotion_targets_set", String(id), { count: ids.length });
+    return json({ ok: true, count: ids.length });
+  }
+
+  // ── 手动发放（礼包）──
+  const grant = path.match(/^\/promotions\/(\d+)\/grant$/);
+  if (method === "POST" && grant) {
+    const id = Number(grant[1]);
+    const ids = readIdList((await readBody(request)).customer_ids);
+    if (ids === null || !ids.length) {
+      return fail(400, "invalid_request", "customer_ids 必须是非空整数数组");
+    }
+
+    const row = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
+      .bind(id)
+      .first<PromotionRow>();
+    if (!row) return fail(404, "promotion_not_found");
+    const promo = rowToPromotion(row);
+    if (promo.kind !== "gift") return fail(409, "not_gift", "只有礼包能直接发放（优惠券请让用户输码）");
+
+    const results = [];
+    for (const customerId of ids) {
+      const result = await grantGift(env, { promotionId: id, customerId, source: "manual" });
+      results.push(
+        result ?? {
+          promotion_id: id,
+          customer_id: customerId,
+          granted: false,
+          skipped: "礼包不存在或已不是礼包",
+          order_id: null,
+          applied: { days: 0, gb: 0, reset_month: false },
+        },
+      );
+    }
+    const granted = results.filter((r) => r.granted).length;
+    await audit(env, actor, "promotion_granted", String(id), { granted, total: results.length });
+    return json({ granted, total: results.length, results });
+  }
+
   return null;
+}
+
+/** 把 `[1,2,3]` 归一成去重后的正整数数组；含非法值返回 null（整体拒绝） */
+function readIdList(raw: unknown): number[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out = new Set<number>();
+  for (const v of raw) {
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isInteger(n) || n <= 0) return null;
+    out.add(n);
+  }
+  return [...out];
 }

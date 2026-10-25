@@ -1,0 +1,1 @@
+ALTER TABLE `promotions` DROP COLUMN `first_purchase_only`;

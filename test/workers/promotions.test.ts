@@ -24,6 +24,10 @@ const DEV_PASSWORD_HASH =
 const PAYER = "promo-payer@test.com";
 const FRIEND = "promo-friend@test.com";
 const REFERRER = "promo-referrer@test.com";
+/** 礼包用例的收件人（网关白名单要一并放行） */
+const GIFT_TO = "gift-receiver@test.com";
+const GIFT_SIGNUP = "gift-signup@test.com";
+const GIFT_NO_SUB = "gift-no-sub@test.com";
 
 const worker = rawExports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
@@ -119,7 +123,7 @@ beforeAll(async () => {
          mapping, priority, status, currency, allowed_emails, created_at, updated_at)
        VALUES ('mock', '测试网关（演示）', NULL, 'MOCK-P1', NULL, '["alipay"]',
          NULL, 999, 'live', 'CNY', ?, ?, ?)`,
-    ).bind(JSON.stringify([PAYER, FRIEND, REFERRER]), now, now),
+    ).bind(JSON.stringify([PAYER, FRIEND, REFERRER, GIFT_TO, GIFT_SIGNUP, GIFT_NO_SUB]), now, now),
     // 标价 15 元 / 30 元两个周期套餐
     env.DB.prepare(
       `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
@@ -153,7 +157,7 @@ beforeAll(async () => {
     kind: "referral",
     benefit_type: "amount",
     benefit_value: 500,
-    first_purchase_only: true,
+    audience: "new",
     referrer_reward_type: "days",
     referrer_reward_value: 7,
   });
@@ -168,7 +172,7 @@ describe("后台建活动", () => {
         kind: "coupon",
         benefit_type: "amount",
         benefit_value: 300,
-        first_purchase_only: true,
+        audience: "new",
         badge_label: "首单立减 3 元",
       },
     });
@@ -458,5 +462,149 @@ describe("邀请码（关系层）", () => {
     };
     expect(panel.referral.invited).toBe(1);
     expect(panel.referral.reward_days).toBe(7);
+  });
+});
+
+/**
+ * 礼包（契约 `app-crm.md` §2.9.6）
+ *
+ * 要钉住的是"**权益**这条线"：一次发放 = 一张 0 元已付订单 + 订阅参数真的变了，
+ * 并且重复发放不会发第二次。
+ */
+describe("礼包（gift）", () => {
+  const customerIdOf = async (email: string): Promise<number> => {
+    const row = await env.DB.prepare(`SELECT id FROM customers WHERE email = ?`)
+      .bind(email)
+      .first<{ id: number }>();
+    expect(row, `客户应存在：${email}`).toBeTruthy();
+    return row!.id;
+  };
+
+  const snapshotOf = async (customerId: number) =>
+    env.DB.prepare(
+      `SELECT expires_at, balance_gb FROM platform_subscriptions WHERE customer_id = ?`,
+    )
+      .bind(customerId)
+      .first<{ expires_at: string | null; balance_gb: number | null }>();
+
+  it("手动发放：加天数加流量、写 0 元订单、再发一次被挡", async () => {
+    const promoId = await createPromotion({
+      name: "国庆礼包",
+      kind: "gift",
+      audience: "all",
+      rewards: { days: 7, gb: 5 },
+      cooldown_hours: 24,
+    });
+
+    const email = GIFT_TO;
+    const token = await login(email);
+    await payOrder(token, "promo_30d"); // 先造一个有效订阅
+    const customerId = await customerIdOf(email);
+
+    const before = await snapshotOf(customerId);
+    expect(before?.expires_at).toBeTruthy();
+
+    const granted = await adminCall(`/api/admin/promotions/${promoId}/grant`, {
+      method: "POST",
+      body: { customer_ids: [customerId] },
+    });
+    expect(granted.status).toBe(200);
+    const result = (await granted.json()) as { granted: number; total: number };
+    expect(result.granted).toBe(1);
+    expect(result.total).toBe(1);
+
+    // ① 订阅参数真的变了：+7 天、+5 GB
+    const after = await snapshotOf(customerId);
+    expect((Date.parse(after!.expires_at!) - Date.parse(before!.expires_at!)) / 86_400_000).toBe(7);
+    expect(after!.balance_gb).toBe((before!.balance_gb ?? 0) + 5);
+
+    // ② 账簿上留下了一张 0 元已付订单（否则财务永远解释不了这 7 天）
+    const order = await env.DB.prepare(
+      `SELECT amount_minor, status, source, promotion_id FROM orders
+        WHERE customer_id = ? AND source = 'gift'`,
+    )
+      .bind(customerId)
+      .first<{ amount_minor: number; status: string; source: string; promotion_id: number }>();
+    expect(order).toBeTruthy();
+    expect(order!.amount_minor).toBe(0);
+    expect(order!.status).toBe("paid");
+    expect(order!.promotion_id).toBe(promoId);
+
+    // ③ 变更留痕：action = gift
+    const change = await env.DB.prepare(
+      `SELECT action FROM subscription_changes WHERE customer_id = ? ORDER BY id DESC LIMIT 1`,
+    )
+      .bind(customerId)
+      .first<{ action: string }>();
+    expect(change?.action).toBe("gift");
+
+    // ④ 再发一次：本人次数用完 ⇒ 跳过，且**不产生第二张订单**
+    const again = await adminCall(`/api/admin/promotions/${promoId}/grant`, {
+      method: "POST",
+      body: { customer_ids: [customerId] },
+    });
+    expect(((await again.json()) as { granted: number }).granted).toBe(0);
+    const count = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift'`,
+    )
+      .bind(customerId)
+      .first<{ n: number }>();
+    expect(Number(count?.n ?? 0)).toBe(1);
+  });
+
+  it("没有订阅的人：跳过并给理由，不建订单", async () => {
+    const promoId = await createPromotion({
+      name: "空订阅礼包",
+      kind: "gift",
+      audience: "all",
+      rewards: { days: 3 },
+    });
+
+    const email = GIFT_NO_SUB;
+    await login(email); // 只注册，不买
+    const customerId = await customerIdOf(email);
+
+    const res = await adminCall(`/api/admin/promotions/${promoId}/grant`, {
+      method: "POST",
+      body: { customer_ids: [customerId] },
+    });
+    const body = (await res.json()) as {
+      granted: number;
+      results: { granted: boolean; skipped: string | null }[];
+    };
+    expect(body.granted).toBe(0);
+    expect(body.results[0]?.skipped).toContain("订阅");
+
+    // 没发出去就**不能留 0 元订单**（否则财务会看到一张对不上权益的单）
+    const orders = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift'`,
+    )
+      .bind(customerId)
+      .first<{ n: number }>();
+    expect(Number(orders?.n ?? 0)).toBe(0);
+  });
+
+  it("注册礼包（audience=new）：首单开通后自动发，且只发一次", async () => {
+    const promoId = await createPromotion({
+      name: "新人礼包",
+      kind: "gift",
+      audience: "new",
+      rewards: { gb: 2 },
+    });
+
+    const email = GIFT_SIGNUP;
+    const token = await login(email);
+    await payOrder(token, "promo_30d");
+    const customerId = await customerIdOf(email);
+
+    const mine = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift' AND promotion_id = ?`,
+    )
+      .bind(customerId, promoId)
+      .first<{ n: number }>();
+    expect(Number(mine?.n ?? 0)).toBe(1);
+
+    const sub = await snapshotOf(customerId);
+    expect(sub!.balance_gb).toBe(2);
   });
 });

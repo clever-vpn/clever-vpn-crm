@@ -18,11 +18,42 @@ import type { PlanKind } from "../plans/model";
 
 /** 收益形态：只允许"少收钱"，不给权益 */
 export type BenefitType = "amount" | "percent";
-/** coupon = 结账时用；referral = 注册时建立关系 */
-export type PromotionKind = "coupon" | "referral";
+/** coupon = 结账时用；gift = 送权益；referral = 注册时建立关系 */
+export type PromotionKind = "coupon" | "gift" | "referral";
 export type PromotionStatus = "draft" | "active" | "ended";
 /** 推荐人奖励：给权益，不给现金（合规，也避免"佣金提现"那套） */
 export type RewardType = "days" | "gb" | "none";
+
+/**
+ * 人群（契约 §2.9.6）。取代早期的 boolean `first_purchase_only` ——
+ * 布尔表达不了「老客」「快到期」这两种真实场景。
+ */
+export type Audience = "all" | "new" | "existing" | "expiring" | "expired" | "specific";
+
+export const AUDIENCES: readonly Audience[] = ["all", "new", "existing", "expiring", "expired", "specific"];
+
+/**
+ * 礼包的奖励项（`kind = gift`）。**只改权益，不改金额** —— 所以它与
+ * `benefit_*` 是两套账，残值计算完全不受影响。
+ *
+ * 刻意没有 `device`：cf-api 的 `licence_limit` 建客户时固定、1–3、不可改，
+ * 加设备等于删旧建新并换激活码（契约 §2.7）。也刻意没有 `balance`：我们没有钱包。
+ */
+export interface GiftRewards {
+  /** 延长有效期（天） */
+  days: number;
+  /** 加到加购余额（GB，跨期不清零那部分） */
+  gb: number;
+  /** 重置本月已用（补偿场景） */
+  reset_month: boolean;
+}
+
+export const EMPTY_REWARDS: GiftRewards = { days: 0, gb: 0, reset_month: false };
+
+/** 礼包是否真的给了什么（全 0 = 空礼包，不允许上线） */
+export function hasRewards(r: GiftRewards): boolean {
+  return r.days > 0 || r.gb > 0 || r.reset_month;
+}
 
 export interface Promotion {
   id: number;
@@ -38,7 +69,14 @@ export interface Promotion {
   limit_plan_kinds: PlanKind[];
   /** 空数组 = 不限 */
   limit_plan_ids: string[];
-  first_purchase_only: boolean;
+  /** 礼包奖励项（kind=gift 才有意义） */
+  rewards: GiftRewards;
+  /** 人群（取代旧的 first_purchase_only） */
+  audience: Audience;
+  /** audience=expiring 时必填 */
+  audience_days: number | null;
+  /** 同一客户两次核销的最小间隔（小时）；null = 不限 */
+  cooldown_hours: number | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
@@ -63,7 +101,10 @@ export interface PromotionRow {
   min_subtotal_minor: number;
   limit_plan_kinds: string;
   limit_plan_ids: string;
-  first_purchase_only: number;
+  rewards_json: string;
+  audience: string;
+  audience_days: number | null;
+  cooldown_hours: number | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
@@ -76,9 +117,9 @@ export interface PromotionRow {
   status: string;
 }
 
-export const PROMOTION_COLUMNS = `id, code, name, kind, benefit_type, benefit_value,
-  min_subtotal_minor, limit_plan_kinds, limit_plan_ids, first_purchase_only,
-  new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
+export const PROMOTION_COLUMNS = `id, code, name, kind, benefit_type, benefit_value, rewards_json,
+  min_subtotal_minor, limit_plan_kinds, limit_plan_ids, audience, audience_days,
+  cooldown_hours, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
   badge_label, visible, referrer_reward_type, referrer_reward_value, status`;
 
 function parseJsonArray(raw: string): string[] {
@@ -90,18 +131,41 @@ function parseJsonArray(raw: string): string[] {
   }
 }
 
+/** 礼包奖励项入库前一律归一：负数归 0、小数取 1 位 */
+export function normalizeRewards(raw: unknown): GiftRewards {
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const num = (v: unknown): number => {
+    const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
+    return n > 0 ? Math.round(n * 10) / 10 : 0;
+  };
+  return { days: num(o.days), gb: num(o.gb), reset_month: o.reset_month === true };
+}
+
+function parseRewards(raw: string): GiftRewards {
+  try {
+    return normalizeRewards(JSON.parse(raw));
+  } catch {
+    return { ...EMPTY_REWARDS };
+  }
+}
+
 export function rowToPromotion(row: PromotionRow): Promotion {
   return {
     id: row.id,
     code: row.code,
     name: row.name,
-    kind: row.kind === "referral" ? "referral" : "coupon",
+    kind: row.kind === "referral" ? "referral" : row.kind === "gift" ? "gift" : "coupon",
     benefit_type: row.benefit_type === "percent" ? "percent" : "amount",
     benefit_value: row.benefit_value,
     min_subtotal_minor: row.min_subtotal_minor,
     limit_plan_kinds: parseJsonArray(row.limit_plan_kinds) as PlanKind[],
     limit_plan_ids: parseJsonArray(row.limit_plan_ids),
-    first_purchase_only: row.first_purchase_only === 1,
+    rewards: parseRewards(row.rewards_json),
+    audience: (AUDIENCES as readonly string[]).includes(row.audience)
+      ? (row.audience as Audience)
+      : "all",
+    audience_days: row.audience_days,
+    cooldown_hours: row.cooldown_hours,
     new_user_within_days: row.new_user_within_days,
     starts_at: row.starts_at,
     ends_at: row.ends_at,
@@ -134,10 +198,18 @@ export interface PromoContext {
   now: Date;
   first_purchase: boolean | null;
   customer_age_days: number | null;
+  /** 当前是否有生效中的订阅（null = 匿名） */
+  has_active_sub: boolean | null;
+  /** 离到期还有几天（无订阅 / 永久 / 匿名 = null） */
+  days_to_expiry: number | null;
+  /** 该活动是否点名了这个客户（audience=specific 用） */
+  targeted: boolean;
   /** 该活动全站已核销次数 */
   uses_total: number;
   /** 该活动在这个用户名下已核销次数 */
   uses_by_customer: number;
+  /** 该活动在这个用户名下的**上次核销时间**（冷却用） */
+  last_used_at: string | null;
 }
 
 export type PromotionCheck = { ok: true } | { ok: false; reason: string };
@@ -159,7 +231,7 @@ export function checkPromotion(p: Promotion, ctx: PromoContext): PromotionCheck 
   if (p.limit_plan_ids.length && !p.limit_plan_ids.includes(ctx.plan_id)) {
     return { ok: false, reason: "这个优惠码不适用于该套餐" };
   }
-  if (ctx.subtotal_minor < p.min_subtotal_minor) {
+  if (ctx.subtotal_minor < p.min_subtotal_minor && p.kind !== "gift") {
     return { ok: false, reason: `满 ${yuan(p.min_subtotal_minor)} 才能使用这个优惠码` };
   }
 
@@ -171,10 +243,16 @@ export function checkPromotion(p: Promotion, ctx: PromoContext): PromotionCheck 
     return { ok: false, reason: "你已经用过这个优惠码了" };
   }
 
-  if (p.first_purchase_only) {
-    if (ctx.first_purchase === null) return { ok: false, reason: "登录后才能使用这个优惠码" };
-    if (!ctx.first_purchase) return { ok: false, reason: "这个优惠码仅限首次购买使用" };
+  if (p.cooldown_hours !== null && ctx.last_used_at) {
+    const readyAt = Date.parse(ctx.last_used_at) + p.cooldown_hours * 3_600_000;
+    if (now < readyAt) {
+      return { ok: false, reason: `这个活动还在冷却中，${Math.ceil((readyAt - now) / 3_600_000)} 小时后再试` };
+    }
   }
+
+  const audience = checkAudience(p, ctx);
+  if (!audience.ok) return audience;
+
   if (p.new_user_within_days !== null) {
     if (ctx.customer_age_days === null) return { ok: false, reason: "登录后才能使用这个优惠码" };
     if (ctx.customer_age_days > p.new_user_within_days) {
@@ -183,6 +261,41 @@ export function checkPromotion(p: Promotion, ctx: PromoContext): PromotionCheck 
   }
 
   return { ok: true };
+}
+
+/**
+ * 人群判定（契约 §2.9.6 的六种取值）。
+ * 匿名（`first_purchase === null`）时，**任何个人条件都一律不适用** ——
+ * 不能因为“看起来像新人”就给他打折。
+ */
+export function checkAudience(p: Promotion, ctx: PromoContext): PromotionCheck {
+  if (p.audience === "all") return { ok: true };
+  if (ctx.first_purchase === null) return { ok: false, reason: "登录后才能使用这个优惠" };
+
+  switch (p.audience) {
+    case "new":
+      return ctx.first_purchase
+        ? { ok: true }
+        : { ok: false, reason: "这个优惠仅限首次购买使用" };
+    case "existing":
+      return ctx.has_active_sub
+        ? { ok: true }
+        : { ok: false, reason: "这个优惠仅限已有订阅的用户（续费用）" };
+    case "expiring": {
+      const days = p.audience_days ?? 7;
+      if (ctx.days_to_expiry === null) return { ok: false, reason: "当前没有即将到期的订阅" };
+      if (ctx.days_to_expiry < 0 || ctx.days_to_expiry > days) {
+        return { ok: false, reason: `这个优惠仅限 ${days} 天内到期的用户` };
+      }
+      return { ok: true };
+    }
+    case "expired":
+      return ctx.has_active_sub === false
+        ? { ok: true }
+        : { ok: false, reason: "这个优惠仅限订阅已结束的用户" };
+    case "specific":
+      return ctx.targeted ? { ok: true } : { ok: false, reason: "这个优惠仅限指定用户使用" };
+  }
 }
 
 /**
