@@ -12,6 +12,7 @@ import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
+import { installFakeCfApi } from "./fake-cf-api";
 
 const BASE = "https://crm.test";
 const CSRF = { "x-crm-request": "1" };
@@ -101,6 +102,11 @@ async function payOrder(token: string, planId: string, promoCode?: string): Prom
 
 beforeAll(async () => {
   (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
+  // 没有平台时订单就该停在 provisioning（契约行为），但这里要断言「付款后真的生效」，
+  // 所以装一个假 cf-api —— 与 payment-flow / settlement 测试同一个做法。
+  const cfApi = installFakeCfApi();
+  (env as unknown as Record<string, unknown>).CF_API_BASE = cfApi.base;
+  (env as unknown as Record<string, unknown>).CF_API_TOKEN = cfApi.token;
   const now = new Date().toISOString();
 
   await env.DB.batch([
