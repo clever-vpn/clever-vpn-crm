@@ -92,6 +92,8 @@ export interface PlanView {
   sales_channels: PlanChannel[];
   store_product_id: { apple?: string; google?: string };
   status: PlanStatus;
+  /** public = 上架可见；hidden = 仅后台（体验包 / 礼品包，用于礼包载体） */
+  visibility: "public" | "hidden";
   sort_order: number;
   retired_at: string | null;
 }
@@ -113,6 +115,7 @@ export interface PlanDraft {
   down_mbps: number | null;
   sales_channels: PlanChannel[];
   store_product_id: { apple?: string; google?: string };
+  visibility: "public" | "hidden";
   sort_order: number;
 }
 
@@ -227,6 +230,17 @@ export const api = {
       `/promotions/${id}/grant`,
       { customer_ids: customerIds },
     ),
+  /** 用户侧兑换（官网账户页用；App 走同一个端点） */
+  redeem: (code: string) =>
+    call<{
+      ok: boolean;
+      promotion_name?: string;
+      applied?: GiftRewards;
+      opened?: boolean;
+      expires_at?: string | null;
+      remaining_gb?: number | null;
+      reason?: string;
+    }>("POST", "/redeem", { code }),
   promotionTargets: (id: number) =>
     call<{ customers: { id: number; email: string; display_name: string | null }[] }>(
       "GET",
@@ -283,6 +297,8 @@ export interface PromotionView {
   /** audience=expiring 时必填（N 天内到期） */
   audience_days: number | null;
   cooldown_hours: number | null;
+  /** 载体套餐（仅礼包）：客户没订阅时用它 0 元开户；必须是 hidden 套餐 */
+  plan_id: string | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;

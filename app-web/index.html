@@ -101,6 +101,18 @@
     <dl id="me" class="kv"></dl>
     <p class="hint" style="margin:10px 0 0">session_token 存在 sessionStorage，刷新页面即失效（模拟 App 每次启动登录）。</p>
   </section>
+  <section class="card" id="redeem-card" hidden>
+    <h2>6 · 兑换码 <code>POST /redeem</code>（契约 §2.9.7）</h2>
+    <p class="hint" style="margin:0 0 10px">
+      业务性失败是 <code>200 + ok:false + reason</code>（不是异常）；猜码过频才是 <code>429</code>。
+    </p>
+    <div class="row">
+      <input id="redeem-code" placeholder="GUOQING7" style="flex:1;text-transform:uppercase">
+      <button id="redeem-btn" type="button">兑换</button>
+    </div>
+    <pre id="redeem-out" class="out" style="margin-top:10px"></pre>
+  </section>
+
 </main>
 
 <script>
@@ -263,8 +275,48 @@ async function quote(planId) {
   } catch (e) { flash('err', e.message); }
 }
 
+
+/** 兑换码：一次完整的"请求 + 结果渲染"，顺带刷新 /me */
+async function redeem() {
+  const code = ($('redeem-code').value || '').trim();
+  const out = $('redeem-out');
+  if (!code) return flash('err', '请输入兑换码');
+  $('redeem-btn').disabled = true;
+  out.textContent = '请求中…';
+  try {
+    const res = await fetch(`${base()}/api/app/v1/redeem`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(state.token ? { authorization: `Bearer ${state.token}` } : {}),
+      },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json().catch(() => ({}));
+    out.textContent = `${res.status} ${res.statusText}\n${JSON.stringify(data, null, 2)}`;
+    if (res.status === 429) {
+      flash('err', `被限流：${data.message ?? ''}（Retry-After: ${res.headers.get('retry-after') ?? '—'}s）`);
+    } else if (data.ok) {
+      flash('ok', `兑换成功：${data.promotion_name}${data.opened ? '（本次用体验套餐开户）' : ''}`);
+      $('redeem-code').value = '';
+      await loadMe();
+    } else {
+      flash('err', data.reason ?? '兑换失败');
+    }
+  } catch (e) {
+    out.textContent = String(e);
+    flash('err', e.message);
+  } finally {
+    $('redeem-btn').disabled = false;
+  }
+}
+$('redeem-btn').addEventListener('click', redeem);
+$('redeem-code').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') redeem();
+});
+
 async function loadMe() {
-  if (!state.token) { show('me-card', false); show('plans-card', false); return; }
+  if (!state.token) { show('me-card', false); show('plans-card', false); show('redeem-card', false); return; }
   try {
     const me = await call('GET', '/me');
     state.me = me;
@@ -272,6 +324,7 @@ async function loadMe() {
     $('logout').hidden = false;
     show('login-card', false);
     show('me-card', true);
+    show('redeem-card', true);
     $('me').innerHTML = (() => {
       const s = me.subscription || {};
       // 激活码：正式客户端内部持有、不展示也不复制。这里是调试视图，只露首尾 4 位。

@@ -55,6 +55,12 @@ export interface Plan {
   store_product_id: { apple?: string; google?: string };
   sort_order: number;
   status: PlanStatus;
+  /**
+   * `public` = 上架可见；`hidden` = 仅后台可见（**体验包 / 礼品包**专用）。
+   * hidden 绝不出现在 `/plans`，也不能被 `POST /orders` 点出来 ——
+   * 礼包的「载体套餐」（契约 §2.9.7）必须是 hidden，否则等于开了 0 元购买通道。
+   */
+  visibility: "public" | "hidden";
   retired_at: string | null;
 }
 
@@ -188,6 +194,7 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
       store_product_id,
       sort_order: int(input.sort_order) ?? 0,
       status: (input.status as PlanStatus) ?? "draft",
+      visibility: input.visibility === "hidden" ? "hidden" : "public",
       retired_at: null,
     },
   };
@@ -213,6 +220,7 @@ export function planToFields(plan: Plan): Record<string, unknown> {
     store_product_id: plan.store_product_id,
     sort_order: plan.sort_order,
     status: plan.status,
+    visibility: plan.visibility,
   };
 }
 
@@ -311,6 +319,7 @@ export interface PlanRow {
   store_product_id: string;
   sort_order: number;
   status: string;
+  visibility: string;
   retired_at: string | null;
 }
 
@@ -342,6 +351,7 @@ export function rowToPlan(row: PlanRow): Plan {
     store_product_id: parseJson<Record<string, string>>(row.store_product_id, {}) as Plan["store_product_id"],
     sort_order: row.sort_order,
     status: row.status as PlanStatus,
+    visibility: row.visibility === "hidden" ? "hidden" : "public",
     retired_at: row.retired_at,
   };
 }

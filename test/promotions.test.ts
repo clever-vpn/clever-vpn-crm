@@ -34,6 +34,7 @@ function promo(over: Partial<Promotion> = {}): Promotion {
     audience: "all",
     audience_days: null,
     cooldown_hours: null,
+    plan_id: null,
     new_user_within_days: null,
     starts_at: null,
     ends_at: null,
@@ -233,5 +234,22 @@ describe("不变量：折扣只改金额，不改权益", () => {
     expect(Math.max(0, price - discount - 500)).toBe(1900);
     // 折扣 + 残值超过标价 ⇒ 应付 0，不出现负数
     expect(Math.max(0, 1500 - 1500 - 500)).toBe(0);
+  });
+});
+
+describe("兑换码的纯逻辑", () => {
+  it("码归一：去空格 + 大写（用户手输常见这两种）", async () => {
+    const { normalizePromoCode } = await import("../src/promotions/redeem");
+    expect(normalizePromoCode("  guoqing7 ")).toBe("GUOQING7");
+    expect(normalizePromoCode("GuoQing7")).toBe("GUOQING7");
+    expect(normalizePromoCode(123)).toBe("");
+    expect(normalizePromoCode(undefined)).toBe("");
+  });
+
+  it("码长下限 6 位：太短的码等于送（可穷举）", async () => {
+    const { MIN_CODE_LENGTH, MAX_FAILED_ATTEMPTS } = await import("../src/promotions/redeem");
+    expect(MIN_CODE_LENGTH).toBeGreaterThanOrEqual(6);
+    // 与契约 §2.9.7 一致
+    expect(MAX_FAILED_ATTEMPTS).toBe(5);
   });
 });

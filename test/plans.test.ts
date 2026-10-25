@@ -42,6 +42,7 @@ function makePlan(over: Partial<Plan> = {}): Plan {
     store_product_id: {},
     sort_order: 0,
     status: "active",
+    visibility: "public",
     retired_at: null,
     ...over,
   };
@@ -370,7 +371,7 @@ describe("rowToPlan", () => {
       term_days: 30, monthly_quota_gb: 10, traffic_gb: null, validity_days: null,
       line_ids: "[1,2]", up_mbps: null, down_mbps: null,
       sales_channels: "not-json", store_product_id: "{}", sort_order: 0, status: "active",
-      retired_at: null,
+      visibility: "public", retired_at: null,
     };
     const plan = rowToPlan(row);
     expect(plan.line_ids).toEqual([1, 2]);

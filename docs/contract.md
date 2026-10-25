@@ -17,10 +17,11 @@ Last updated: 2026-10-25
 
 | 项 | 值 |
 |---|---|
-| 契约版本 | `CRM_CONTRACT_VERSION`（当前 `15`，对齐 `app-crm.md` v15），由 `GET /__version` 回显 |
+| 契约版本 | `CRM_CONTRACT_VERSION`（当前 `16`，对齐 `app-crm.md` v16），由 `GET /__version` 回显 |
 | 客户端 | **两个壳（App + 品牌官网）调同一批 `/api/app/v1`**；App 用 `Bearer`，官网用 httpOnly Cookie |
-| App 端接口 | `/api/app/v1/*`（✅ 登录/套餐/报价/下单/订阅/邀请已实现）；契约见 `app-crm.md`，`app_contract: 15` |
+| App 端接口 | `/api/app/v1/*`（✅ 登录/套餐/报价/下单/订阅/邀请已实现）；契约见 `app-crm.md`，`app_contract: 16` |
 | 客服 / 官网 | `GET /support` 免登录；官网**持有登录态**（同一个 `/auth` + `session_token`），已删游客结账 `checkout_token` |
+| 兑换码 | `POST /api/app/v1/redeem`（v16）：登录后输码换礼包权益；失败一律 `200 + ok:false + reason`，猜码过频 `429`；见 [promotion.md](promotion.md) §1 |
 | 促销 | 三类物件：优惠券（金额）+ 礼包（权益）+ 邀请（关系），见 [promotion.md](promotion.md)；✅ v15 已实现（`/plans` 角标、`/quote` 折扣、`/auth/verify` 邀请码、`/me.referral`、支付成功才核销、礼包发放 / 人群六值 / 冷却 / 到期挽回定时任务） |
 | 套餐 | **`kind` 三选一**（`period` / `traffic` / `addon`），见 [plans.md](plans.md)；**销售策略全在 CRM**，App 只渲染 |
 | 币种 | **单币种**，初始化时设定（默认 `CNY`），之后不可改；金额一律用最小单位整数（分） |

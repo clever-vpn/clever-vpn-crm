@@ -37,6 +37,7 @@ const emptyDraft = (kind: PromotionKind): PromotionDraft => ({
   audience: kind === "referral" || kind === "gift" ? "new" : "all",
   audience_days: null,
   cooldown_hours: null,
+  plan_id: null,
   new_user_within_days: null,
   starts_at: null,
   ends_at: null,
@@ -450,6 +451,34 @@ function PromotionForm({
                 placeholder={codeMode === "auto" ? "（自动生效，无需填）" : "NEW2026"}
               />
               <small className="hint">A-Z / 0-9 / _ / -，2–32 位，大小写不敏感</small>
+            </label>
+          </>
+        )}
+
+        {isGift && (
+          <>
+            <label>
+              兑换码（留空 = 只能后台／系统发放）
+              <input
+                value={draft.code ?? ""}
+                onChange={(e) => set("code", e.target.value.trim().toUpperCase() || null)}
+                placeholder="GUOQING7"
+              />
+              <small className="hint">
+                A-Z / 0-9 / _ / -，至少 6 位（太短的码等于送）。用户登录后在账户页 / App 里输它
+              </small>
+            </label>
+
+            <label>
+              体验套餐（客户还没有订阅时用它 0 元开户）
+              <input
+                value={draft.plan_id ?? ""}
+                onChange={(e) => set("plan_id", e.target.value.trim() || null)}
+                placeholder="trial_7d"
+              />
+              <small className="hint">
+                必须是「隐藏」套餐；有订阅的客户会忽略它，只加天数/流量
+              </small>
             </label>
           </>
         )}

@@ -32,6 +32,7 @@ import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
 import { bindReferral, referralPanel } from "../promotions/referral";
+import { redeemGiftCode } from "../promotions/redeem";
 import { planBadges, resolveForPlans, resolvePromotion } from "../promotions/service";
 import { customerSubscription } from "../subscriptions/store";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
@@ -41,7 +42,7 @@ import type { Plan, PlanRow } from "../plans/model";
 import type { CurrentSubscription } from "../plans/quote";
 import type { Subscription } from "../plans/subscription";
 
-const APP_CONTRACT = 15;
+const APP_CONTRACT = 16;
 /** 报价有效期：超过这个时间，App 必须重新 `POST /quote`（契约 §2.4.8） */
 const QUOTE_TTL_SECONDS = 900;
 /**
@@ -496,6 +497,22 @@ async function route(request: Request, env: Env, path: string, method: string): 
     if (!customer) return err(401, "unauthorized");
     const sub = await customerSubscription(env, customer.id);
     return json(subscriptionView(sub));
+  }
+
+  // ── 兑换码（契约 §2.9.7）──
+  //  业务性失败（码错 / 用完 / 冷却 / 没订阅）一律 200 + ok:false + reason，
+  //  与 /quote 的 allowed:false 同口径；只有猜码过频才是 429。
+  if (method === "POST" && path === "/redeem") {
+    if (!customer) return err(401, "unauthorized");
+    const body = await readBody(request);
+    const result = await redeemGiftCode(env, {
+      customerId: customer.id,
+      code: typeof body.code === "string" ? body.code : "",
+    });
+    if (result.status === 429) {
+      return json(result.body, 429, { "Retry-After": String(result.body.retry_after_s) });
+    }
+    return json(result.body);
   }
 
   // ── 我的订单（列表）──

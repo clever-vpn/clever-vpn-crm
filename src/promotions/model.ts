@@ -77,6 +77,8 @@ export interface Promotion {
   audience_days: number | null;
   /** 同一客户两次核销的最小间隔（小时）；null = 不限 */
   cooldown_hours: number | null;
+  /** 载体套餐（仅 kind=gift 且客户无订阅时生效）：用它 0 元开户 */
+  plan_id: string | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
@@ -105,6 +107,7 @@ export interface PromotionRow {
   audience: string;
   audience_days: number | null;
   cooldown_hours: number | null;
+  plan_id: string | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
@@ -119,7 +122,7 @@ export interface PromotionRow {
 
 export const PROMOTION_COLUMNS = `id, code, name, kind, benefit_type, benefit_value, rewards_json,
   min_subtotal_minor, limit_plan_kinds, limit_plan_ids, audience, audience_days,
-  cooldown_hours, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
+  cooldown_hours, plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
   badge_label, visible, referrer_reward_type, referrer_reward_value, status`;
 
 function parseJsonArray(raw: string): string[] {
@@ -166,6 +169,7 @@ export function rowToPromotion(row: PromotionRow): Promotion {
       : "all",
     audience_days: row.audience_days,
     cooldown_hours: row.cooldown_hours,
+    plan_id: row.plan_id,
     new_user_within_days: row.new_user_within_days,
     starts_at: row.starts_at,
     ends_at: row.ends_at,
@@ -223,24 +227,24 @@ export function checkPromotion(p: Promotion, ctx: PromoContext): PromotionCheck 
 
   const now = ctx.now.getTime();
   if (p.starts_at && Date.parse(p.starts_at) > now) return { ok: false, reason: "这个优惠活动还没开始" };
-  if (p.ends_at && Date.parse(p.ends_at) <= now) return { ok: false, reason: "这个优惠码已过期" };
+  if (p.ends_at && Date.parse(p.ends_at) <= now) return { ok: false, reason: "这个码已经过期了" };
 
   if (p.limit_plan_kinds.length && !p.limit_plan_kinds.includes(ctx.plan_kind)) {
-    return { ok: false, reason: "这个优惠码不适用于该套餐" };
+    return { ok: false, reason: "这个码不适用于该套餐" };
   }
   if (p.limit_plan_ids.length && !p.limit_plan_ids.includes(ctx.plan_id)) {
-    return { ok: false, reason: "这个优惠码不适用于该套餐" };
+    return { ok: false, reason: "这个码不适用于该套餐" };
   }
   if (ctx.subtotal_minor < p.min_subtotal_minor && p.kind !== "gift") {
-    return { ok: false, reason: `满 ${yuan(p.min_subtotal_minor)} 才能使用这个优惠码` };
+    return { ok: false, reason: `满 ${yuan(p.min_subtotal_minor)} 才能使用这个码` };
   }
 
   if (p.max_uses !== null && ctx.uses_total >= p.max_uses) {
-    return { ok: false, reason: "这个优惠码已被领完" };
+    return { ok: false, reason: "这个码已经被领完了" };
   }
-  if (p.max_uses_per_customer <= 0) return { ok: false, reason: "这个优惠码已停用" };
+  if (p.max_uses_per_customer <= 0) return { ok: false, reason: "这个码已停用" };
   if (ctx.uses_by_customer >= p.max_uses_per_customer) {
-    return { ok: false, reason: "你已经用过这个优惠码了" };
+    return { ok: false, reason: "你已经用过这个码了" };
   }
 
   if (p.cooldown_hours !== null && ctx.last_used_at) {
@@ -254,9 +258,9 @@ export function checkPromotion(p: Promotion, ctx: PromoContext): PromotionCheck 
   if (!audience.ok) return audience;
 
   if (p.new_user_within_days !== null) {
-    if (ctx.customer_age_days === null) return { ok: false, reason: "登录后才能使用这个优惠码" };
+    if (ctx.customer_age_days === null) return { ok: false, reason: "登录后才能使用这个码" };
     if (ctx.customer_age_days > p.new_user_within_days) {
-      return { ok: false, reason: "这个优惠码仅限新用户使用" };
+      return { ok: false, reason: "这个码仅限新用户使用" };
     }
   }
 
