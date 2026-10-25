@@ -292,7 +292,12 @@ export function PromotionForm({
                 <select
                   value={draft.auto_apply ? "auto" : "code"}
                   disabled={codesIssued}
-                  onChange={(e) => patch({ auto_apply: e.target.value === "auto" })}
+                  onChange={(e) => {
+                    const auto = e.target.value === "auto";
+                    patch({ auto_apply: auto });
+                    // 自动生效不发码：清掉已选的发码方式，否则切回来会带着旧值
+                    if (auto) setCodeMode("none");
+                  }}
                 >
                   <option value="auto">自动生效（打开就看见，不用码）</option>
                   <option value="code">凭码使用（发到群 / 博主 / 官网）</option>
@@ -302,12 +307,14 @@ export function PromotionForm({
           )}
 
           {/* ── 发码：先选类型，再填数字 ── */}
-          {!isReferral && (
+          {/* 自动生效的券**不发码**（契约 §2.9.3 v19）：门已经对所有人开了，
+              再发码不增加任何折扣，只会白吃名额、让渠道归因失真。所以这里整块不渲染，
+              而不是渲染后置灰 —— 留着就是给人“可以选”。 */}
+          {!isReferral && !(isCoupon && draft.auto_apply) && (
             <Section
-              title={isCoupon && draft.auto_apply ? "发码" : "发码方式"}
-              hint={isCoupon && draft.auto_apply ? "自动生效的券不需要码；也可以同时发码给渠道" : undefined}
-            >
-              {isNew ? (
+              title="发码方式"
+              hint="凭码使用是站外推广（博主 / 群 / 实体卡）：码不进定价页，只发给拿到的人"
+            >              {isNew ? (
                 <>
                   <Field
                     label="类型"
@@ -355,7 +362,6 @@ export function PromotionForm({
                         : codeStats.codes === 0
                           ? "还没有码"
                           : `${codeStats.codes} 个码（可用 ${codeStats.active} 个，总容量 ${codeStats.capacity ?? "不限"}）`}
-                      {draft.auto_apply ? " · 自动生效不需要码" : ""}
                     </span>
                   </div>
                 </Field>
@@ -696,7 +702,13 @@ export function PromotionForm({
           <button
             className="primary"
             disabled={busy}
-            onClick={() => void onSave({ mode: isNew ? codeMode : "none", count: codeCount })}
+            onClick={() =>
+              void onSave({
+                // 自动生效不发码（契约 v19）：即使状态里还留着旧值也不带出去
+                mode: isNew && !draft.auto_apply ? codeMode : "none",
+                count: codeCount,
+              })
+            }
           >
             {isNew ? "创建草稿" : "保存"}
           </button>
