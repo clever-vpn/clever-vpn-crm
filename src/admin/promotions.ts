@@ -52,13 +52,12 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   if (!name) errors.push("name 必填");
   if (name.length > 60) errors.push("name 太长（≤60）");
 
-  const rawCode = input.code === null || input.code === undefined ? "" : str(input.code).toUpperCase();
-  if (rawCode && !/^[A-Z0-9_-]{2,32}$/.test(rawCode)) {
-    errors.push("code 只能包含 A-Z / 0-9 / _ / -，长度 2–32（留空 = 自动活动）");
-  }
-
   const kind = str(input.kind) || "coupon";
   if (!["coupon", "gift", "referral"].includes(kind)) errors.push("kind 只能是 coupon / gift / referral");
+
+  // v18：码不再手填（由 `POST /promotions/{id}/codes` 生成）。
+  // `auto_apply` 只对优惠券有意义：不用码、打开就生效。
+  const autoApply = kind === "coupon" && input.auto_apply === true;
 
   const benefitType = str(input.benefit_type) || "amount";
   if (benefitType !== "amount" && benefitType !== "percent") {
@@ -110,10 +109,13 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   const idsRaw = Array.isArray(input.limit_plan_ids) ? input.limit_plan_ids : [];
   const ids = idsRaw.map((v) => str(v)).filter(Boolean);
 
-  const maxUses = input.max_uses === null || input.max_uses === undefined ? null : num(input.max_uses);
-  if (maxUses !== null && maxUses <= 0) errors.push("max_uses 必须 > 0，或不填表示不限");
-  const perCustomer = num(input.max_uses_per_customer) ?? 1;
-  if (perCustomer < 0) errors.push("max_uses_per_customer 不能为负");
+  const maxUsesRaw = num(input.max_uses);
+  if (maxUsesRaw !== null && maxUsesRaw <= 0) errors.push("max_uses 必须 > 0，或不填表示不限");
+  // 名额只有一个来源：自动活动记在活动上；凭码活动记在码上（`promotion_codes.max_uses`）
+  const maxUses = autoApply ? maxUsesRaw : null;
+  // 每人每活动固定 1 次（契约 §2.9.7）：同一人反复用同一个优惠违背营销语义，
+  // 也让"核销次数 = 触达人数"这条报表口径失效。
+  const perCustomer = 1;
 
   const startsAt = str(input.starts_at) || null;
   const endsAt = str(input.ends_at) || null;
@@ -135,7 +137,7 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   return {
     ok: true,
     value: {
-      code: rawCode || null,
+      auto_apply: autoApply,
       name,
       kind: kind as Promotion["kind"],
       benefit_type: benefitType as Promotion["benefit_type"],
@@ -162,7 +164,7 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
 }
 
 interface PromotionInput {
-  code: string | null;
+  auto_apply: boolean;
   name: string;
   kind: Promotion["kind"];
   benefit_type: Promotion["benefit_type"];
@@ -189,14 +191,14 @@ interface PromotionInput {
 async function insertPromotion(env: Env, input: PromotionInput, status: "draft" | "active"): Promise<number> {
   const now = new Date().toISOString();
   const res = await env.DB.prepare(
-    `INSERT INTO promotions (code, name, kind, benefit_type, benefit_value, min_subtotal_minor,
+    `INSERT INTO promotions (auto_apply, name, kind, benefit_type, benefit_value, min_subtotal_minor,
        limit_plan_kinds, limit_plan_ids, rewards_json, audience, audience_days, cooldown_hours,
        plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
        referrer_reward_type, referrer_reward_value, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
-      input.code, input.name, input.kind, input.benefit_type, input.benefit_value,
+      input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
       input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
@@ -210,7 +212,7 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
 
 async function updatePromotion(env: Env, id: number, input: PromotionInput): Promise<void> {
   await env.DB.prepare(
-    `UPDATE promotions SET code = ?, name = ?, kind = ?, benefit_type = ?, benefit_value = ?,
+    `UPDATE promotions SET auto_apply = ?, name = ?, kind = ?, benefit_type = ?, benefit_value = ?,
        min_subtotal_minor = ?, limit_plan_kinds = ?, limit_plan_ids = ?, rewards_json = ?,
        audience = ?, audience_days = ?, cooldown_hours = ?, plan_id = ?,
        new_user_within_days = ?, starts_at = ?, ends_at = ?, max_uses = ?, max_uses_per_customer = ?,
@@ -218,7 +220,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
      WHERE id = ?`,
   )
     .bind(
-      input.code, input.name, input.kind, input.benefit_type, input.benefit_value,
+      input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
       input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
@@ -231,11 +233,15 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
 }
 
 /** 后台视图 = 行本身 + 已核销次数（判断"这个活动还有没有名额"） */
-function view(row: PromotionRow, uses?: number): Record<string, unknown> {
+function view(
+  row: PromotionRow,
+  uses?: number,
+  codeStats?: { codes: number; active: number; capacity: number | null },
+): Record<string, unknown> {
   const promo = rowToPromotion(row);
   return {
     id: promo.id,
-    code: promo.code,
+    auto_apply: promo.auto_apply,
     name: promo.name,
     kind: promo.kind,
     benefit_type: promo.benefit_type,
@@ -259,9 +265,65 @@ function view(row: PromotionRow, uses?: number): Record<string, unknown> {
     referrer_reward_value: promo.referrer_reward_value,
     status: promo.status,
     ...(uses === undefined ? {} : { uses }),
+    ...(codeStats ? { code_stats: codeStats } : {}),
   };
 }
 
+
+
+/**
+ * 编辑锁定（契约 §2.9.7）：**码一旦生成，规则就在外面流通了**。
+ *
+ * 500 个渠道码里可能只用了 3 个，但另外 497 个在用户手里 ——
+ * 这时候改力度/范围/载体套餐，等于单方面改承诺。
+ *
+ * 可以改的：名称、角标、公开展示、人群、冷却、结束时间、名额调大。
+ * 全部作废之后自动解锁（外面没有流通的码了）。
+ */
+const LOCKED_LABELS: [keyof Promotion, string][] = [
+  ["kind", "类型"],
+  ["benefit_type", "优惠方式"],
+  ["benefit_value", "力度"],
+  ["rewards", "礼包内容"],
+  ["min_subtotal_minor", "最低消费"],
+  ["limit_plan_kinds", "适用套餐类型"],
+  ["limit_plan_ids", "指定套餐"],
+  ["plan_id", "体验套餐"],
+  ["auto_apply", "是否自动生效"],
+];
+
+async function lockedFields(
+  env: Env,
+  promotionId: number,
+  current: Promotion,
+  next: PromotionInput,
+): Promise<string[]> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM promotion_codes WHERE promotion_id = ? AND status = 'active'`,
+  )
+    .bind(promotionId)
+    .first<{ n: number }>();
+  if (!Number(row?.n ?? 0)) return [];
+
+  const incoming: Promotion = {
+    ...current,
+    kind: next.kind as Promotion["kind"],
+    auto_apply: next.auto_apply,
+    benefit_type: next.benefit_type as Promotion["benefit_type"],
+    benefit_value: next.benefit_value,
+    rewards: next.rewards,
+    min_subtotal_minor: next.min_subtotal_minor,
+    limit_plan_kinds: next.limit_plan_kinds,
+    limit_plan_ids: next.limit_plan_ids,
+    plan_id: next.plan_id,
+  };
+
+  const diffs: string[] = [];
+  for (const [key, label] of LOCKED_LABELS) {
+    if (JSON.stringify(current[key]) !== JSON.stringify(incoming[key])) diffs.push(label);
+  }
+  return diffs;
+}
 
 /**
  * 载体套餐必须存在、上架、且 `visibility='hidden'`。
@@ -301,25 +363,44 @@ export async function handleAdminPromotions(
       `SELECT promotion_id, COUNT(*) AS n FROM redemptions GROUP BY promotion_id`,
     ).all<{ promotion_id: number; n: number }>();
     const byId = new Map((counts.results ?? []).map((r) => [r.promotion_id, r.n]));
-    return json({ promotions: (rows.results ?? []).map((row) => view(row, byId.get(row.id) ?? 0)) });
+
+    // 码统计：个数 / 可用个数 / 总容量（NULL 表示有不限量的码）
+    const codeRows = await env.DB.prepare(
+      `SELECT promotion_id,
+              COUNT(*) AS codes,
+              SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+              SUM(CASE WHEN status = 'active' AND max_uses IS NULL THEN 1 ELSE 0 END) AS unlimited,
+              SUM(CASE WHEN status = 'active' THEN COALESCE(max_uses, 0) ELSE 0 END) AS capacity
+         FROM promotion_codes GROUP BY promotion_id`,
+    ).all<{ promotion_id: number; codes: number; active: number; unlimited: number; capacity: number }>();
+    const codesById = new Map(
+      (codeRows.results ?? []).map((r) => [
+        r.promotion_id,
+        {
+          codes: Number(r.codes),
+          active: Number(r.active),
+          capacity: Number(r.unlimited) > 0 ? null : Number(r.capacity),
+        },
+      ]),
+    );
+
+    return json({
+      promotions: (rows.results ?? []).map((row) =>
+        view(row, byId.get(row.id) ?? 0, codesById.get(row.id) ?? { codes: 0, active: 0, capacity: 0 }),
+      ),
+    });
   }
 
   // ── 新建（默认 draft；要上线再调 publish）──
   if (method === "POST" && path === "/promotions") {
     const result = validate(await readBody(request));
     if (!result.ok) return json({ error: "invalid_promotion", errors: result.errors }, 400);
-    if (result.value.code) {
-      const dup = await env.DB.prepare(`SELECT 1 AS x FROM promotions WHERE code = ?`)
-        .bind(result.value.code)
-        .first<{ x: number }>();
-      if (dup) return fail(409, "code_exists", "这个码已经被用了");
-    }
     const carrierError = await checkCarrierPlan(env, result.value.plan_id);
     if (carrierError) return fail(400, "invalid_promotion", carrierError);
     const id = await insertPromotion(env, result.value, "draft");
     await audit(env, actor, "promotion_created", String(id), {
-      code: result.value.code,
       kind: result.value.kind,
+      auto_apply: result.value.auto_apply,
       benefit: `${result.value.benefit_type}:${result.value.benefit_value}`,
     });
     const row = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
@@ -337,16 +418,21 @@ export async function handleAdminPromotions(
     if (!row) return fail(404, "promotion_not_found");
     const result = validate({ ...view(row), ...(await readBody(request)) });
     if (!result.ok) return json({ error: "invalid_promotion", errors: result.errors }, 400);
-    if (result.value.code) {
-      const dup = await env.DB.prepare(`SELECT id FROM promotions WHERE code = ? AND id <> ?`)
-        .bind(result.value.code, id)
-        .first<{ id: number }>();
-      if (dup) return fail(409, "code_exists", "这个码已经被别的活动用了");
+    const locked = await lockedFields(env, id, rowToPromotion(row), result.value);
+    if (locked.length) {
+      return fail(
+        409,
+        "promotion_locked",
+        `已经发出码了，不能再改：${locked.join("、")}。要改请先作废这些码，或新建一个活动。`,
+      );
     }
     const carrierError = await checkCarrierPlan(env, result.value.plan_id);
     if (carrierError) return fail(400, "invalid_promotion", carrierError);
     await updatePromotion(env, id, result.value);
-    await audit(env, actor, "promotion_updated", String(id), { code: result.value.code });
+    await audit(env, actor, "promotion_updated", String(id), {
+      kind: result.value.kind,
+      auto_apply: result.value.auto_apply,
+    });
     const saved = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
       .bind(id)
       .first<PromotionRow>();
@@ -419,13 +505,42 @@ export async function handleAdminPromotions(
   }
 
 
+  // ── 删除：只在「草稿 + 没有码 + 没有核销」时允许 ──
+  //   其余情况只能"结束" —— 已经发出去的承诺不能凭空消失。
+  const del = path.match(/^\/promotions\/(\d+)$/);
+  if (method === "DELETE" && del) {
+    const id = Number(del[1]);
+    const row = await env.DB.prepare(`SELECT status FROM promotions WHERE id = ?`)
+      .bind(id)
+      .first<{ status: string }>();
+    if (!row) return fail(404, "promotion_not_found");
+    if (row.status !== "draft") return fail(409, "invalid_state", "只有草稿能删除；进行中/已结束请用「结束」");
+
+    const used = await env.DB.prepare(
+      `SELECT (SELECT COUNT(*) FROM promotion_codes WHERE promotion_id = ?) AS codes,
+              (SELECT COUNT(*) FROM redemptions WHERE promotion_id = ?) AS redemptions`,
+    )
+      .bind(id, id)
+      .first<{ codes: number; redemptions: number }>();
+    if (Number(used?.redemptions ?? 0) > 0) {
+      return fail(409, "invalid_state", "已经有核销记录，不能删除");
+    }
+    if (Number(used?.codes ?? 0) > 0) {
+      return fail(409, "invalid_state", "已经生成过码。先把码全部作废，再删除");
+    }
+
+    await env.DB.prepare(`DELETE FROM promotions WHERE id = ?`).bind(id).run();
+    await audit(env, actor, "promotion_deleted", String(id), null);
+    return json({ ok: true });
+  }
+
   // ── 批次码：生成 / 列表 / 作废（契约 §2.9.7）──
   const codes = path.match(/^\/promotions\/(\d+)\/codes$/);
   if (codes && (method === "GET" || method === "POST")) {
     const id = Number(codes[1]);
-    const exists = await env.DB.prepare(`SELECT kind, code FROM promotions WHERE id = ?`)
+    const exists = await env.DB.prepare(`SELECT kind FROM promotions WHERE id = ?`)
       .bind(id)
-      .first<{ kind: string; code: string | null }>();
+      .first<{ kind: string }>();
     if (!exists) return fail(404, "promotion_not_found");
 
     if (method === "GET") {

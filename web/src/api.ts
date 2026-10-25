@@ -223,6 +223,8 @@ export const api = {
     call<{ promotion: PromotionView }>("PATCH", `/promotions/${id}`, input),
   publishPromotion: (id: number) => call<{ ok: true }>("POST", `/promotions/${id}/publish`),
   endPromotion: (id: number) => call<{ ok: true }>("POST", `/promotions/${id}/end`),
+  /** 只有「草稿 + 无码 + 无核销」能删 */
+  deletePromotion: (id: number) => call<{ ok: true }>("DELETE", `/promotions/${id}`),
   /** 礼包手动发放：返回每个客户的结论（含为什么没发出去） */
   grantPromotion: (id: number, customerIds: number[]) =>
     call<{ granted: number; total: number; results: GiftGrantResult[] }>(
@@ -306,7 +308,8 @@ export type RewardType = "days" | "gb" | "none";
  */
 export interface PromotionView {
   id: number;
-  code: string | null;
+  /** 优惠券是否「不用码就生效」（礼包 / 邀请恒为 false） */
+  auto_apply: boolean;
   name: string;
   kind: PromotionKind;
   benefit_type: BenefitType;
@@ -335,6 +338,8 @@ export interface PromotionView {
   status: PromotionStatus;
   /** 已核销次数 */
   uses?: number;
+  /** 码统计：个数 / 可用个数 / 总容量（null = 有不限量的码） */
+  code_stats?: { codes: number; active: number; capacity: number | null };
 }
 
 export type PromotionDraft = Omit<PromotionView, "id" | "status" | "uses">;

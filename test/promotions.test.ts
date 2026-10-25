@@ -22,7 +22,7 @@ const NOW = new Date("2026-10-25T12:00:00.000Z");
 function promo(over: Partial<Promotion> = {}): Promotion {
   return {
     id: 1,
-    code: null,
+    auto_apply: false,
     name: "新人券",
     kind: "coupon",
     benefit_type: "amount",

@@ -250,7 +250,7 @@ export async function resolvePromotion(
   const facts = await customerFacts(env, opts.customerId, now);
   const referralId = await referralPromotionId(env, opts.customerId);
 
-  const auto = active.filter((p) => p.code === null && p.kind === "coupon");
+  const auto = active.filter((p) => p.auto_apply && p.kind === "coupon");
   const referral = referralId === null ? [] : active.filter((p) => p.id === referralId);
   // 只有 coupon 能当代码用：referral 活动靠**关系**生效，它的码没法也不应该被
   // 任何人拿去直接抵扣（否则等于一个匿名优惠码 + 不产生归因）
@@ -350,7 +350,7 @@ export async function resolveForPlans(
   const active = await allActivePromotions(env);
   const referralId = await referralPromotionId(env, opts.customerId);
   const candidates = active.filter(
-    (p) => (p.code === null && p.kind === "coupon") || (referralId !== null && p.id === referralId),
+    (p) => (p.auto_apply && p.kind === "coupon") || (referralId !== null && p.id === referralId),
   );
   if (!candidates.length) return out;
 

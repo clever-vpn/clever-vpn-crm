@@ -437,8 +437,13 @@ export const promotions = sqliteTable(
   "promotions",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    /** 促销码；NULL = 自动活动（用户不需要输任何东西） */
-    code: text("code").unique(),
+    /**
+     * 优惠券是否「不用码就生效」（契约 §2.9.7）。
+     *
+     * 以前靠 `code IS NULL` 推断，但码搬进 `promotion_codes` 之后
+     * 所有活动都“没有 code”了，必须显式声明。礼包 / 邀请恒为 0。
+     */
+    auto_apply: integer("auto_apply").notNull().default(0),
     /** 后台可见名称，不下发给用户 */
     name: text("name").notNull(),
     /** coupon（改金额） | gift（改权益） | referral（关系）—— 见 `app-crm.md` §2.9 */
@@ -575,6 +580,9 @@ export const redemptions = sqliteTable(
     index("idx_redemptions_promotion").on(t.promotion_id),
     // 批次码的用量 = 数这里有多少行；不另存 used_count，避免两份数对不上
     index("idx_redemptions_code").on(t.code_id),
+    // 同一个码，同一个人只能核销一次（码级去重，比"每人每活动 1 次"更贴语义）。
+    // 自动发放时 code_id 为 NULL，SQLite 的唯一索引允许多个 NULL ⇒ 不影响那种情况。
+    uniqueIndex("uq_redemptions_code_customer").on(t.code_id, t.customer_id),
   ],
 );
 

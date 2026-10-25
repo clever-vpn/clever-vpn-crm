@@ -27,7 +27,7 @@
     "CF_API_BASE": "https://api.clever-vpn.org",
     // 由 CI/部署脚本注入；本地开发可保持 dev
     "CRM_CODE_VERSION": "dev",
-    "CRM_CONTRACT_VERSION": "17"
+    "CRM_CONTRACT_VERSION": "18"
   }
   // 自定义域名（可选）：在租户自己的 Cloudflare zone 里给这个 Worker 配 Custom Domain，
   // 不需要在这里写 routes。
