@@ -67,6 +67,11 @@
       <input id="code" type="text" placeholder="6 位验证码" inputmode="numeric" maxlength="6" style="width:140px" />
       <button id="verify">登录</button>
     </div>
+    <div class="row" style="margin-top:8px">
+      <!-- 契约 v12：邀请码是「选填」，永远不能阻挡注册 -->
+      <input id="ref" type="text" placeholder="邀请码（选填）" style="width:200px" />
+      <span class="hint">填了才有归因与首单奖励，不填照样注册</span>
+    </div>
   </section>
 
   <section class="card" id="plans-card" hidden>
@@ -87,12 +92,12 @@
   </section>
 
   <section class="card" id="quote-card" hidden>
-    <h2>4 · 报价明细 <code>POST /upgrade/quote</code></h2>
+    <h2>4 · 报价明细 <code>POST /quote</code></h2>
     <pre id="quote"></pre>
   </section>
 
   <section class="card" id="me-card" hidden>
-    <h2>5 · 当前状态</h2>
+    <h2>5 · 我的权益（与 App 同一份 <code>/me</code> 响应）</h2>
     <dl id="me" class="kv"></dl>
     <p class="hint" style="margin:10px 0 0">session_token 存在 sessionStorage，刷新页面即失效（模拟 App 每次启动登录）。</p>
   </section>
@@ -151,6 +156,8 @@ async function buy(plan) {
       plan_id: plan.plan_id,
       payment_method: method,
       expected_payable_minor: q.payable_minor,
+      // origin 区分「哪个壳下的单」（web / app），不参与计价
+      origin: 'app',
     });
     state.payUrl = r.pay_url;
     show('pay-card', true);
@@ -164,7 +171,38 @@ async function buy(plan) {
       <dt>报价有效期</dt><dd>${q.quote_ttl_s} 秒</dd>
       <dt>说明</dt><dd>${r.reused ? '复用了 60 秒内的未支付单（防双击）' : '新建订单'}</dd>
     </dl>`;
+    // 契约 §5.1：轮询 2s→4s→8s，上限 15 分钟
+    pollOrder(r.order_code);
   } catch (e) { flash('err', e.message); }
+}
+
+/**
+ * 等支付结果。这也是 App 的标准行为：拿 pay_url 后不阻塞，后台轮询订单状态，
+ * 一旦 `active` 就去刷新 `/me`（此时激活码才真正下发）。
+ */
+async function pollOrder(orderCode) {
+  const startedAt = Date.now();
+  let delay = 2000;
+  while (Date.now() - startedAt < 15 * 60 * 1000) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    delay = Math.min(delay * 2, 8000);
+    let order;
+    try {
+      order = await call('GET', `/orders/${orderCode}`);
+    } catch {
+      continue; // 网络抖动不终止，下一轮继续
+    }
+    if (order.status === 'active') {
+      await loadMe();
+      flash('ok', '已开通：激活码已下发（正式客户端内部持有，不展示）');
+      return;
+    }
+    if (['failed', 'expired', 'refunded'].includes(order.status)) {
+      flash('err', `订单状态：${order.status}`);
+      return;
+    }
+  }
+  flash('err', '等待超时：可点「我已支付，刷新状态」继续确认');
 }
 const kindName = { period: '周期套餐', traffic: '流量套餐', addon: '加购包' };
 const quotaText = (p) =>
@@ -183,13 +221,16 @@ function renderPlans(plans) {
     el.innerHTML = `
       <div class="row" style="justify-content:space-between">
         <span class="name">${p.name}</span>
-        <span class="price">${yuan(p.price_minor)}</span>
+        <span class="price">${p.original_price_minor && p.original_price_minor !== p.price_minor
+          ? `<s class="hint">${yuan(p.original_price_minor)}</s> ${yuan(p.price_minor)}`
+          : yuan(p.price_minor)}</span>
       </div>
       <div class="row" style="gap:6px">
         <span class="badge">${kindName[p.kind] ?? p.kind}</span>
         <span class="badge">${quotaText(p)}</span>
         <span class="badge">${p.kind === 'period' ? p.term_days + ' 天' : (p.validity_days ? p.validity_days + ' 天' : '永久')}</span>
         <span class="badge">${p.licence_limit} 台设备</span>
+        ${p.promo_badge ? `<span class="badge">${p.promo_badge}</span>` : ''}
       </div>
       <div class="meta">${canBuy
         ? `${ACTION[p.action]} · ` +
@@ -231,15 +272,28 @@ async function loadMe() {
     $('logout').hidden = false;
     show('login-card', false);
     show('me-card', true);
-    $('me').innerHTML = Object.entries({
-      用户: `${me.user.id} · ${me.user.email}`,
-      订阅状态: me.subscription.status,
-      订阅类型: me.subscription.kind ?? '—',
-      套餐: me.subscription.plan_id ?? '—',
-      到期: me.subscription.expires_at ?? '—',
-      剩余额度: me.subscription.unlimited ? '不限量' : (me.subscription.remaining_gb ?? '—'),
-      设备数: me.subscription.licence_limit ?? '—',
-    }).map(([k, v]) => `<dt>${k}</dt><dd>${String(v)}</dd>`).join('');
+    $('me').innerHTML = (() => {
+      const s = me.subscription || {};
+      // 激活码：正式客户端内部持有、不展示也不复制。这里是调试视图，只露首尾 4 位。
+      const masked = s.code
+        ? `${String(s.code).slice(0, 4)}••••${String(s.code).slice(-4)}`
+        : '';
+      const rows = {
+        用户: `${me.user.id} · ${me.user.email}`,
+        // status 只有 active / inactive；具体原因看 status_text（契约 v11/v12）
+        状态: s.status === 'provisioning'
+          ? 'provisioning · 正在开通（平台还没建好客户，此时没有码）'
+          : `${s.status ?? '—'} · ${s.status_text ?? '—'}`,
+        订阅类型: s.kind ?? '—',
+        套餐: s.plan_id ?? '—',
+        到期: s.expires_at ? String(s.expires_at).slice(0, 10) : '—',
+        剩余额度: s.unlimited ? '不限量' : (s.remaining_gb ?? '—'),
+        设备数: s.licence_limit ?? '—',
+        激活码: s.code ? `${masked}（App 内部持有，不展示不复制）` : '—',
+      };
+      if (s.reason) rows['停用原因'] = `${s.reason}（机读值，用户看的是上面那句）`;
+      return Object.entries(rows).map(([k, v]) => `<dt>${k}</dt><dd>${String(v)}</dd>`).join('');
+    })();
     const plans = await call('GET', '/plans');
     show('plans-card', true);
     renderPlans(plans);
@@ -286,7 +340,13 @@ $('verify').addEventListener('click', async () => {
   const email = $('email').value.trim();
   const code = $('code').value.trim();
   try {
-    const r = await call('POST', '/auth/verify', { email, code, appId: 'app-web-local' });
+    const r = await call('POST', '/auth/verify', {
+      email,
+      code,
+      appId: 'app-web-local',
+      // 契约 v12：邀请码选填；已注册用户传了会被忽略（不报错，更不能因此登录失败）
+      ...($('ref').value.trim() ? { referral_code: $('ref').value.trim() } : {}),
+    });
     state.token = r.session_token;
     sessionStorage.setItem('app_session', r.session_token);
     flash('ok', '登录成功');
