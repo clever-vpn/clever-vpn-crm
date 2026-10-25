@@ -96,14 +96,13 @@ export function installFakeCfApi(base = "https://api.cf.test"): FakeCfApi {
 
     if (method === "PATCH") {
       patches.push({ id, body });
-      // licence_limit 不可改：平台静默丢弃（crm-api.md §3.2）
-      const next: FakeCustomer = {
-        ...current,
-        frozen: Number(body.frozen ?? current.frozen),
-        expire_date: (body.expire_date as string | null) ?? null,
-        traffic_balance: (body.traffic_balance as number | null) ?? null,
-        quota: (body.quota as number | null) ?? null,
-      };
+      // 真实 cf-api：只改 allow-list 里**传了的**字段（licence_limit 静默丢弃）
+      const next: FakeCustomer = { ...current };
+      for (const key of ["frozen", "expire_date", "traffic_balance", "quota", "up_mbps", "down_mbps"] as const) {
+        if (Object.prototype.hasOwnProperty.call(body, key)) {
+          Object.assign(next, { [key]: body[key] });
+        }
+      }
       customers.set(id, next);
       return json(next);
     }

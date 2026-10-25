@@ -112,16 +112,11 @@ const server = createServer(async (req, res) => {
 
   if (method === "PATCH") {
     const body = await readJson(req);
-    const next = {
-      ...current,
-      // licence_limit 不在 allow-list：平台**静默丢弃**（crm-api.md §3.2）
-      frozen: Number(body.frozen ?? current.frozen),
-      expire_date: body.expire_date ?? null,
-      traffic_balance: body.traffic_balance ?? null,
-      quota: body.quota ?? null,
-      up_mbps: body.up_mbps ?? current.up_mbps,
-      down_mbps: body.down_mbps ?? current.down_mbps,
-    };
+    // 真实 cf-api：只改 allow-list 里**传了的**字段，没传的保持原值
+    const next = { ...current };
+    for (const key of ["frozen", "expire_date", "traffic_balance", "quota", "up_mbps", "down_mbps"]) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) next[key] = body[key];
+    }
     db.set(id, next);
     console.log(`[fake-cf] PATCH  ${describe(next)}`);
     return send(res, 200, next);

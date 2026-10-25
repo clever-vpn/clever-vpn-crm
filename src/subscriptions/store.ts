@@ -10,6 +10,7 @@
 
 import { settle } from "../plans/subscription";
 import { rowToPlan } from "../plans/model";
+import { GIGA, getCustomer, updateCustomer } from "../platform/client";
 
 import type { Env } from "../env";
 import type { PlanRow } from "../plans/model";
@@ -266,8 +267,17 @@ export async function runSettlement(
       continue;
     }
 
-    // 平台余额从这里读；拿不到就跳过（不要用"以为的值"结算）
+    // 还没落账（付款后 cf-api 没通）：跳过，交给 retryProvisioning 处理，不算失败
+    if (!sub.platform_customer_id) continue;
+
+    // 平台余额从这里读；拿不到就**跳过本轮**（不能拿"以为的值"去重置）。
+    // 跳过不是错：下一小时会重试，而且宁可晚一期重置，也不能凭空造额度。
     const platformBalance = await readPlatformBalance(env, sub);
+    if (platformBalance === null) {
+      report.failed += 1;
+      report.errors.push(`#${sub.id} 读不到平台余额（cf-api 不可达或已删），跳过`);
+      continue;
+    }
     const result = settle(
       {
         quota_gb: sub.quota_gb,
@@ -335,40 +345,41 @@ async function loadPlanSnapshot(env: Env, planId: string) {
   return row ? rowToPlan(row) : null;
 }
 
-/** 平台侧余额。本地开发没有 `CF_API_TOKEN` 时返回 `null`（结算会被跳过并记错）。 */
+/**
+ * 平台侧当前余额，**换算成 GB**（cf-api 存的是字节）。
+ *
+ * 拿不到就返回 `null`，调用方必须跳过本轮：用 `quota_gb` 兜底等于凭空造额度。
+ */
 async function readPlatformBalance(
   env: Env,
   sub: Subscription,
 ): Promise<number | null> {
-  if (!env.CF_API_TOKEN || !sub.platform_customer_id) return null;
-  const res = await fetch(
-    `${env.CF_API_BASE}/api/v1/customers/${sub.platform_customer_id}`,
-    { headers: { Authorization: `Bearer ${env.CF_API_TOKEN}` } },
-  ).catch(() => null);
-  if (!res?.ok) return null;
-  const body = (await res.json().catch(() => null)) as { data?: { traffic_balance?: number | null } } | null;
-  return body?.data?.traffic_balance ?? null;
+  if (!sub.platform_customer_id) return null;
+  try {
+    const customer = await getCustomer(env, sub.platform_customer_id);
+    if (customer.traffic_balance === null) return null; // 不限量 / 尚未写
+    return customer.traffic_balance / GIGA;
+  } catch {
+    return null;
+  }
 }
 
+/** 把新的剩余额度写回平台（GB → 字节） */
 async function writePlatformBalance(
   env: Env,
   sub: Subscription,
-  balance: number | null,
+  balanceGb: number | null,
 ): Promise<{ ok: boolean; error?: string }> {
-  if (!env.CF_API_TOKEN || !sub.platform_customer_id) {
-    return { ok: false, error: "missing CF_API_TOKEN 或 platform_customer_id" };
+  if (!sub.platform_customer_id) {
+    return { ok: false, error: "没有 platform_customer_id（尚未落账）" };
   }
-  const res = await fetch(
-    `${env.CF_API_BASE}/api/v1/customers/${sub.platform_customer_id}`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${env.CF_API_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ traffic_balance: balance }),
-    },
-  ).catch(() => null);
-  if (!res?.ok) return { ok: false, error: `HTTP ${res?.status ?? "network"}` };
-  return { ok: true };
+  try {
+    await updateCustomer(env, sub.platform_customer_id, {
+      // 单位：cf-api 的 traffic_balance 是**字节**
+      traffic_balance: balanceGb === null ? null : Math.round(balanceGb * GIGA),
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }

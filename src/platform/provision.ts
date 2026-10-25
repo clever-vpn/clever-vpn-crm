@@ -20,14 +20,15 @@ import {
   getCustomer,
   updateCustomer,
   PlatformError,
+  GIGA,
 } from "./client";
 import { loadSubscription } from "../subscriptions/store";
 
 import type { Env } from "../env";
 import type { Subscription } from "../plans/subscription";
 
-/** 1 GiB = 1024³ 字节（与 cf-api `bandwidth.ts` 的 `GIGA` 一致） */
-export const GIGA = 1024 ** 3;
+/** 1 GiB = 1024³ 字节（定义在 `client.ts`，这里重导出方便引用） */
+export { GIGA };
 
 export interface Provisioned {
   platformCustomerId: number;
