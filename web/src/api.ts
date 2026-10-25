@@ -211,7 +211,56 @@ export const api = {
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/publish`),
   disableGateway: (id: number) =>
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/disable`),
+
+  // ── 营销 / 促销（`docs/promotion.md`）──
+  promotions: () => call<{ promotions: PromotionView[] }>("GET", "/promotions"),
+  createPromotion: (input: PromotionDraft) =>
+    call<{ promotion: PromotionView }>("POST", "/promotions", input),
+  updatePromotion: (id: number, input: Partial<PromotionDraft>) =>
+    call<{ promotion: PromotionView }>("PATCH", `/promotions/${id}`, input),
+  publishPromotion: (id: number) => call<{ ok: true }>("POST", `/promotions/${id}/publish`),
+  endPromotion: (id: number) => call<{ ok: true }>("POST", `/promotions/${id}/end`),
 };
+
+// ── 营销 / 促销 ──
+
+/** coupon = 优惠券（改订单金额）；referral = 邀请返利（关系 + 双方奖励） */
+export type PromotionKind = "coupon" | "referral";
+export type PromotionStatus = "draft" | "active" | "ended";
+export type BenefitType = "amount" | "percent";
+export type RewardType = "days" | "gb" | "none";
+
+/**
+ * 后台视图。`code` 为 null 表示**自动生效**（用户不需要输入任何码）。
+ * 与 `src/admin/promotions.ts` 的 `view()` 一一对应。
+ */
+export interface PromotionView {
+  id: number;
+  code: string | null;
+  name: string;
+  kind: PromotionKind;
+  benefit_type: BenefitType;
+  /** amount = 分；percent = 1–100 */
+  benefit_value: number;
+  min_subtotal_minor: number;
+  limit_plan_kinds: PlanKind[];
+  limit_plan_ids: string[];
+  first_purchase_only: boolean;
+  new_user_within_days: number | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  max_uses: number | null;
+  max_uses_per_customer: number;
+  badge_label: string | null;
+  visible: boolean;
+  referrer_reward_type: RewardType | null;
+  referrer_reward_value: number | null;
+  status: PromotionStatus;
+  /** 已核销次数 */
+  uses?: number;
+}
+
+export type PromotionDraft = Omit<PromotionView, "id" | "status" | "uses">;
 
 
 // ── 客户与订单 ──
