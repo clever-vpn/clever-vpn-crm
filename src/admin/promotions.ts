@@ -110,7 +110,10 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   const ids = idsRaw.map((v) => str(v)).filter(Boolean);
 
   const maxUsesRaw = num(input.max_uses);
-  if (maxUsesRaw !== null && maxUsesRaw <= 0) errors.push("max_uses 必须 > 0，或不填表示不限");
+  // 留空 = 不限；填了就必须 ≥ 1（0 和负数不允许 —— “0 单”不是不限，是没有意义）
+  if (maxUsesRaw !== null && maxUsesRaw <= 0) {
+    errors.push("总名额留空表示不限；要限制就填大于 0 的整数");
+  }
   // 名额只有一个来源：自动活动记在活动上；凭码活动记在码上（`promotion_codes.max_uses`）
   const maxUses = autoApply ? maxUsesRaw : null;
   // 每人每活动固定 1 次（契约 §2.9.7）：同一人反复用同一个优惠违背营销语义，

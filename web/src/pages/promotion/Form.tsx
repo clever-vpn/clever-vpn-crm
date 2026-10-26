@@ -655,7 +655,7 @@ export function PromotionForm({
               </div>
             )}
             {draft.auto_apply && (
-              <Field label="总名额（留空 = 不限，0 = 不限）" hint="只对自动生效的券有意义；凭码的名额在码上">
+              <Field label="总名额（留空 = 不限）" hint="只对自动生效的券有意义；凭码的名额在码上">
                 <input
                   value={draft.max_uses ?? ""}
                   onChange={(e) => patch({ max_uses: e.target.value ? Number(e.target.value) : null })}
