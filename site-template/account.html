@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>我的 · Clever VPN</title>
     <meta name="robots" content="noindex" />
-    <link rel="stylesheet" href="/site.css" />
+    <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
       <div class="wrap">
-        <a class="brand" href="/">Clever VPN</a>
+        <a class="brand" href="index.html">Clever VPN</a>
         <nav>
-          <a href="/pricing">套餐</a>
-          <a href="/account" class="active">我的</a>
+          <a href="pricing.html">套餐</a>
+          <a href="account.html" class="active">我的</a>
           <a href="#" id="logout">退出</a>
         </nav>
       </div>
@@ -32,8 +32,8 @@
         </div>
         <dl id="me" class="kv" style="margin-top:14px"></dl>
         <div class="row" style="margin-top:16px">
-          <a class="btn" href="/pricing">续费 / 升级</a>
-          <a class="btn ghost" href="/download">下载 App</a>
+          <a class="btn" href="pricing.html">续费 / 升级</a>
+          <a class="btn ghost" href="download.html">下载 App</a>
         </div>
       </section>
 
@@ -82,10 +82,12 @@
 
     <footer class="site">
       <div class="wrap">
-        <a href="/legal/terms">服务条款</a> · <a href="/legal/privacy">隐私政策</a>
+        <a href="legal/terms.html">服务条款</a> · <a href="legal/privacy.html">隐私政策</a>
       </div>
     </footer>
 
+<script src="config.js"></script>
+      <script src="api.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
@@ -102,10 +104,10 @@
       };
 
       async function api(path, init = {}) {
-        const res = await fetch(`/api/app/v1${path}`, { credentials: 'same-origin', ...init });
+        const res = await fetch(`${API_BASE}/api/app/v1${path}`, { ...init });
         const data = await res.json().catch(() => ({}));
         if (res.status === 401) {
-          location.assign('/login?next=/account');
+          location.assign('login.html?next=account.html');
           throw new Error('unauthorized');
         }
         if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
@@ -195,15 +197,14 @@
         $('redeem-btn').disabled = true;
         box.innerHTML = '<div class="hint">正在兑换…</div>';
         try {
-          const res = await fetch('/api/app/v1/redeem', {
+          const res = await fetch(`${API_BASE}/api/app/v1/redeem`, {
             method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ code }),
           });
           const data = await res.json().catch(() => ({}));
           if (res.status === 401) {
-            location.assign('/login?next=/account');
+            location.assign('login.html?next=account.html');
             return;
           }
           if (res.status === 429) {
@@ -260,9 +261,10 @@
       $('logout').addEventListener('click', async (ev) => {
         ev.preventDefault();
         try {
-          await fetch('/api/app/v1/auth/logout', { method: 'POST', credentials: 'same-origin' });
+          await fetch(`${API_BASE}/api/app/v1/auth/logout`, { method: 'POST' });
         } finally {
-          location.assign('/');
+          CrmAuth.clear(); // 服务端已撤销；本地这份也要删掉
+          location.assign('index.html');
         }
       });
     </script>

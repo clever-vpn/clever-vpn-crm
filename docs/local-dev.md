@@ -54,7 +54,7 @@ SETUP_TOKEN=dev-setup-token-1234      # 首次 /api/admin/setup 用
 # 终端 A：管理后台 dev server（Vite，HMR，5181）
 npm run dev:web
 
-# 终端 B：CRM Worker（wrangler dev，8788）—— 接口与品牌官网
+# 终端 B：CRM Worker（wrangler dev，8788）—— 只有后台与接口（官网独立部署）
 npm run build:web            # 只在没产物时需要跑一次（assets 目录必须存在）
 ./node_modules/.bin/wrangler dev --port 8788 --test-scheduled
 

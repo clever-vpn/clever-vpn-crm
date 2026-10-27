@@ -67,7 +67,7 @@ src/db/schema.ts      Drizzle schema（表结构的唯一来源）
 migrations/           生产迁移链（drizzle-kit 生成，CI 应用）
 migrations-dev/       开发迁移链（reset 脚本生成，不入库）
 web/                  管理后台 SPA（React + Vite，产物 web/dist/admin）
-site/                 品牌官网静态页（占位；构建时复制到 web/dist/ 根）
+site-template/       官网静态站模板（独立部署，不进 CRM 构建；见其 README）
 docs/admin.md         管理后台说明（认证、初始化、恢复、API）
 docs/contract.md      契约指针（正文在 clever-vpn-docs/docs/contracts/）
 docs/domain.md        领域模型（客户 / 订单 / 订阅 / 退款 / 礼品包）

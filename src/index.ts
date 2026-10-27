@@ -1,10 +1,15 @@
 /**
  * Clever VPN CRM — Worker 入口
  *
- * 三个面，同一个 Worker + 同一个 D1：
- *   /                → 静态资源（管理后台 SPA）
+ * 只做两件事，同一个 Worker + 同一个 D1：
+ *   /admin/*         → 管理后台 SPA（assets）
  *   /api/admin/*     → 管理后台 API（Cookie 会话）
- *   /api/app/v1/*    → App 接口（待实现，契约见 app-crm.md）
+ *   /api/app/v1/*    → App / 静态站共用的接口（Bearer 或 Cookie）
+ *
+ * **官网不在这个 Worker 里**。静态站（首页 / 定价 / 我的 …）完全独立部署，
+ * 可以是任何域名，通过 `Authorization: Bearer <session_token>` 调 `/api/app/v1/*`。
+ * 样例见 `site-template/`。这样做的好处：官网和后台不同源，租户（或 AI）改官网
+ * 的脚本伤不到后台；CRM 也不必关心第三方 Cookie 政策。
  */
 
 import { ensureSchema } from "./db";
@@ -20,22 +25,6 @@ export type { Env };
 
 /** 管理后台是 SPA：文件不存在时回落到 /admin/index.html */
 const ADMIN_INDEX = "/admin/index.html";
-
-/**
- * 品牌官网的静态页。
- *
- * assets 配了 `html_handling: "none"`（为了 /admin 深链接），所以 `/pricing`
- * 不会自动找到 `pricing.html` —— 必须在这里显式映射。
- */
-const SITE_PAGES: Record<string, string> = {
-  "/login": "/login.html",
-  "/pricing": "/pricing.html",
-  "/checkout": "/checkout.html",
-  "/account": "/account.html",
-  "/download": "/download.html",
-  "/legal/terms": "/legal/terms.html",
-  "/legal/privacy": "/legal/privacy.html",
-};
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -84,16 +73,21 @@ export default {
       );
     }
 
-    if (url.pathname === "/") {
-      // 官网首页。assets 的 html_handling 设了 none，所以这里显式取 index.html。
-      return env.ASSETS.fetch(
-        new Request(new URL("/index.html", url).toString(), request),
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      // 官网独立部署：配了 SITE_URL 就跳过去；没配就给一句可读的提示。
+      const site = (env.SITE_URL ?? "").trim();
+      if (site) return Response.redirect(site, 302);
+      return new Response(
+        `<!doctype html><meta charset="utf-8"><title>CRM 已部署</title>
+<div style="font:16px/1.7 system-ui;max-width:560px;margin:15vh auto;padding:0 20px">
+  <h1 style="font-size:20px">CRM 已部署</h1>
+  <p>管理后台：<a href="/admin/">/admin/</a></p>
+  <p style="color:#666">官网是独立部署的静态站。部署好后在 <code>wrangler.jsonc</code>
+  里配置 <code>SITE_URL</code>，这里就会自动跳转；样例见仓库的
+  <code>site-template/</code>。</p>
+</div>`,
+        { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
       );
-    }
-
-    const sitePage = SITE_PAGES[url.pathname];
-    if (sitePage) {
-      return env.ASSETS.fetch(new Request(new URL(sitePage, url).toString(), request));
     }
 
     const asset = await env.ASSETS.fetch(request);
