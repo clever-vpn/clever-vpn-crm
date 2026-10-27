@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>套餐与价格 · Clever VPN</title>
     <meta name="description" content="按月或按流量购买，随时续费升级。" />
-    <link rel="stylesheet" href="/site.css" />
+    <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
       <div class="wrap">
-        <a class="brand" href="/">Clever VPN</a>
+        <a class="brand" href="index.html">Clever VPN</a>
         <nav>
-          <a href="/pricing" class="active">套餐</a>
-          <a href="/account">我的</a>
+          <a href="pricing.html" class="active">套餐</a>
+          <a href="account.html">我的</a>
         </nav>
       </div>
     </header>
@@ -27,10 +27,12 @@
 
     <footer class="site">
       <div class="wrap">
-        <a href="/legal/terms">服务条款</a> · <a href="/legal/privacy">隐私政策</a>
+        <a href="legal/terms.html">服务条款</a> · <a href="legal/privacy.html">隐私政策</a>
       </div>
     </footer>
 
+<script src="config.js"></script>
+      <script src="api.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
@@ -88,8 +90,8 @@
           <div class="meta">${canBuy ? payable : note}</div>
           <div class="row" style="margin-top:14px">
             ${canBuy
-              ? `<a class="btn" href="/checkout?plan=${encodeURIComponent(p.plan_id)}">${ACTION[p.action]}</a>`
-              : `<a class="btn ghost" href="/login?next=/pricing">${p.action === 'login_required' ? '登录后订阅' : '不可购买'}</a>`}
+              ? `<a class="btn" href="checkout.html?plan=${encodeURIComponent(p.plan_id)}">${ACTION[p.action]}</a>`
+              : `<a class="btn ghost" href="login.html?next=pricing.html">${p.action === 'login_required' ? '登录后订阅' : '不可购买'}</a>`}
           </div>
         `;
         return el;
@@ -97,7 +99,7 @@
 
       (async () => {
         try {
-          const res = await fetch('/api/app/v1/plans', { credentials: 'same-origin' });
+          const res = await fetch(`${API_BASE}/api/app/v1/plans`});
           const plans = await res.json();
           if (!res.ok) throw new Error(plans?.error?.message || `HTTP ${res.status}`);
           const box = $('plans');

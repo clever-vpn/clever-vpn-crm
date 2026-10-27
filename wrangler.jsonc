@@ -41,6 +41,9 @@
     // 非 production ⇒ 验证码直接回显给客户端（本地联调）；部署时由 CI 覆盖
     "ENVIRONMENT": "development",
     // App 端跨域白名单（精确匹配 Origin）；本地用 app-web 模拟端
-    "APP_ORIGINS": "https://app-web.clever-vpn.org,http://localhost:5180"
+    "APP_ORIGINS": "https://app-web.clever-vpn.org,http://localhost:5180",
+    // 官网（独立静态站）地址。留空则根路径显示一句部署提示。
+    // 静态站调 /api/app/v1 时必须把它的 origin 加进上面的 APP_ORIGINS。
+    "SITE_URL": ""
   }
 }

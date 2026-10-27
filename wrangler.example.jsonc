@@ -27,7 +27,12 @@
     "CF_API_BASE": "https://api.clever-vpn.org",
     // 由 CI/部署脚本注入；本地开发可保持 dev
     "CRM_CODE_VERSION": "dev",
-    "CRM_CONTRACT_VERSION": "19"
+    "CRM_CONTRACT_VERSION": "19",
+    // 官网（独立静态站，可以完全不同域名）。留空 = 根路径只显示一句部署提示
+    "SITE_URL": "https://www.example.com",
+    // 允许跨域调用 /api/app/v1 的 origin，逗号分隔。静态站的域名必须在这里，
+    // 否则浏览器会拦掉它的请求（Bearer 头也带不过去）。
+    "APP_ORIGINS": "https://www.example.com,http://localhost:5180"
   }
   // 自定义域名（可选）：在租户自己的 Cloudflare zone 里给这个 Worker 配 Custom Domain，
   // 不需要在这里写 routes。

@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>确认订单 · Clever VPN</title>
     <meta name="robots" content="noindex" />
-    <link rel="stylesheet" href="/site.css" />
+    <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
       <div class="wrap">
-        <a class="brand" href="/">Clever VPN</a>
+        <a class="brand" href="index.html">Clever VPN</a>
         <nav>
-          <a href="/pricing" class="active">套餐</a>
-          <a href="/account">我的</a>
+          <a href="pricing.html" class="active">套餐</a>
+          <a href="account.html">我的</a>
         </nav>
       </div>
     </header>
@@ -36,11 +36,13 @@
         </div>
         <div class="row" style="margin-top:16px">
           <button id="pay">去支付</button>
-          <a class="btn ghost" href="/pricing">返回</a>
+          <a class="btn ghost" href="pricing.html">返回</a>
         </div>
       </section>
     </main>
 
+<script src="config.js"></script>
+      <script src="api.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
@@ -54,11 +56,11 @@
       let appliedCode = '';
 
       async function api(path, init = {}) {
-        const res = await fetch(`/api/app/v1${path}`, { credentials: 'same-origin', ...init });
+        const res = await fetch(`${API_BASE}/api/app/v1${path}`, { ...init });
         const data = await res.json().catch(() => ({}));
         if (res.status === 401) {
           // 结账页不强制先登录：提交时才要求验证邮箱（契约 §2.8.1）
-          location.assign(`/login?next=${encodeURIComponent(`/checkout?plan=${planId}`)}`);
+          location.assign(`login.html?next=${encodeURIComponent(`checkout.html?plan=${planId}`)}`);
           throw new Error('unauthorized');
         }
         if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);

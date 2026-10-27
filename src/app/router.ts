@@ -285,11 +285,15 @@ export async function handleAppApi(request: Request, env: Env): Promise<Response
     return new Response(null, { status: 204, headers: cors });
   }
 
-  // CSRF：靠 Cookie 认证时，写操作必须同源。
-  // Bearer 不会被浏览器自动附加，所以 App 天然免疫。
+  // CSRF：靠 Cookie 认证时，写操作必须是同源或**白名单内的跨域**。
+  //
+  // Bearer 不会被浏览器自动附加，所以 App 天然免疫。登录（还没有 token）也是写操作：
+  // 官网独立部署后要跨域发起 `/auth/send-code`，所以 `APP_ORIGINS` 里的 origin 必须放行
+  // —— 它拿不到 Cookie（跨域响应的 Set-Cookie 会被浏览器丢掉），也就无从 CSRF。
   if (method !== "GET" && !bearerToken(request)) {
     const origin = request.headers.get("Origin");
-    if (origin && origin !== url.origin) {
+    const sameOrigin = !origin || origin === url.origin;
+    if (!sameOrigin && !allowedOrigins(env).includes(origin)) {
       return err(403, "forbidden", "跨站请求被拒绝");
     }
   }

@@ -33,6 +33,8 @@ export interface Env {
    * 为空时**不返回任何 CORS 头**（同源部署不需要）。
    */
   APP_ORIGINS?: string;
+  /** 官网地址（独立静态站）。配了以后访问 CRM 根路径会 302 过去 */
+  SITE_URL?: string;
   /** 可选：Cloudflare Email Service 绑定（未配置时用 RESEND_API_KEY） */
   EMAIL?: { send(options: Record<string, unknown>): Promise<unknown> };
   /** 可选：Resend API key（HTTP 发信，与 EMAIL 绑定二选一） */

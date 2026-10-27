@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>登录 · Clever VPN</title>
     <meta name="robots" content="noindex" />
-    <link rel="stylesheet" href="/site.css" />
+    <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
       <div class="wrap">
-        <a class="brand" href="/">Clever VPN</a>
+        <a class="brand" href="index.html">Clever VPN</a>
         <nav>
-          <a href="/pricing">套餐</a>
-          <a href="/account">我的</a>
+          <a href="pricing.html">套餐</a>
+          <a href="account.html">我的</a>
         </nav>
       </div>
     </header>
@@ -42,10 +42,12 @@
 
     <footer class="site">
       <div class="wrap">
-        <a href="/legal/terms">服务条款</a> · <a href="/legal/privacy">隐私政策</a>
+        <a href="legal/terms.html">服务条款</a> · <a href="legal/privacy.html">隐私政策</a>
       </div>
     </footer>
 
+<script src="config.js"></script>
+      <script src="api.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const flash = (kind, text) => {
@@ -54,14 +56,13 @@
       const next = () => {
         const n = new URLSearchParams(location.search).get('next');
         // 只接受站内路径，避免开放重定向
-        return n && n.startsWith('/') && !n.startsWith('//') ? n : '/account';
+        return n && !n.startsWith('//') ? n : 'account.html';
       };
 
       async function post(path, body) {
-        const res = await fetch(`/api/app/v1${path}`, {
+        const res = await fetch(`${API_BASE}/api/app/v1${path}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          credentials: 'same-origin',
           body: JSON.stringify(body),
         });
         const data = await res.json().catch(() => ({}));
@@ -102,13 +103,15 @@
         const code = $('code').value.trim();
         const ref = $('ref').value.trim();
         try {
-          // session_token 由服务端写进 httpOnly Cookie，这里不保存任何 token
-          await post('/auth/verify', {
+          // 静态站与 CRM 不同源 ⇒ 不用 Cookie，把 token 存进 localStorage，
+          // 之后 api.js 会给每个打到 CRM 的请求补 Authorization
+          const r = await post('/auth/verify', {
             email,
             code,
             appId: 'website',
             ...(ref ? { referral_code: ref } : {}),
           });
+          if (r.session_token) CrmAuth.set(r.session_token);
           location.assign(next());
         } catch (e) {
           flash('err', e.message);

@@ -10,13 +10,26 @@
 
 | 路径 | 内容 | 鉴权 |
 |---|---|---|
-| `/` | 品牌官网占位页（源文件 `site/index.html`，构建时复制到 assets 根） | 公开 |
+| `/` | 只做跳转：配了 `SITE_URL` 就 302 过去，否则显示一行部署提示 | 公开 |
 | `/admin/*` | 管理后台 SPA（React + Vite，产物 `web/dist/admin`） | Cookie 会话 |
 | `/api/admin/*` | 管理后台 API | Cookie 会话（`/bootstrap`、`/setup`、`/login*` 公开） |
-| `/api/app/v1/*` | App 接口（⬜ 待实现，契约在 `clever-vpn-docs`） | Bearer（另说） |
+| `/api/app/v1/*` | App 与静态站共用的接口（契约在 `clever-vpn-docs`） | Bearer 或 Cookie |
 
-官网目前是**占位页**：`/` 直接返回 `site/index.html`（不再 302 到 `/admin/`）。
-正式官网（价格 / 下载 / 条款 / 客服）待页面做完再替换同目录文件，路由不变。
+**官网不在这个 Worker 里。** 静态站（首页 / 定价 / 登录 / 我的 / 条款）独立部署，
+可以是完全不同的域名，通过 `Authorization: Bearer <session_token>` 调 `/api/app/v1/*`。
+模板见 [`../site-template/`](../site-template/README.md)。
+
+这样做的好处：官网与后台**不同源**，租户（或 AI）在官网上写的脚本碰不到 `/api/admin/*`；
+CRM 也不必应付各家浏览器的第三方 Cookie 政策。代价是登录态存在浏览器 `localStorage`
+（见模板 README 的取舍说明）。
+
+两个配置项决定它怎么工作（`wrangler.jsonc` 的 vars）：
+
+| 变量 | 作用 |
+|---|---|
+| `SITE_URL` | 访问 CRM 根路径时 302 到官网。留空只显示部署提示 |
+| `APP_ORIGINS` | 允许跨域调 `/api/app/v1` 的 origin（逗号分隔）。**静态站域名必须在这里** |
+
 
 ## 2. 认证
 
@@ -137,9 +150,8 @@ console.log(`pbkdf2$sha256$50000$${b64(salt)}$${b64(bits)}`);' '新密码'
 ## 7. 开发
 
 ```bash
-npm run dev        # 构建官网 + SPA，再起 wrangler dev（:8788）
+npm run dev        # 构建 SPA，再起 wrangler dev（:8788）
 npm run dev:web    # 只跑 vite（:5273，/api 代理到 8788）
-npm run build:site # 只把 site/ 复制到 web/dist/
 npm run typecheck  # Worker + web
 npm test           # 单测（Node）+ 集成测试（workerd），见 local-dev.md §6.1
 ```
@@ -149,5 +161,5 @@ npm test           # 单测（Node）+ 集成测试（workerd），见 local-dev
 ## 8. 尚未实现
 
 - 业务页面（客户 / 订单 / 套餐）：目前是占位卡片。
-- 官网正式内容（价格页 / 下载页 / 条款 / 隐私）：目前 `site/index.html` 只是占位。
+- 官网内容：不在本仓库构建产物里，见 `site-template/`（独立部署）。
 - App 接口 `/api/app/v1/*`（登录/套餐/下单/取码），契约见 `clever-vpn-docs`。
