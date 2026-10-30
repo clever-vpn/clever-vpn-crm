@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "61681581-e27b-41d8-b05b-b919f05c447b",
+  "id": "0b157532-ca16-4f77-8bcf-cdfc91eb0650",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "adjustments": {
@@ -819,6 +819,21 @@
           "notNull": false,
           "autoincrement": false
         },
+        "next_poll_at": {
+          "name": "next_poll_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "poll_attempts": {
+          "name": "poll_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -941,6 +956,14 @@
           "columns": [
             "customer_id",
             "id"
+          ],
+          "isUnique": false
+        },
+        "idx_orders_poll": {
+          "name": "idx_orders_poll",
+          "columns": [
+            "status",
+            "next_poll_at"
           ],
           "isUnique": false
         },

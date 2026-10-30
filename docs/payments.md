@@ -466,13 +466,33 @@ v1:<base64(iv(12B) || AES-GCM 密文+tag)>
 9. **后台「支付」页**：`src/admin/gateways.ts` + `web/src/pages/Gateways.tsx`
    （列表 / 新建草稿 / 编辑 / 发布 / 停用；密钥只写不读；映射可覆盖）
 
+**主动查单**（`src/payments/poll.ts`，v20）：
+
+- 一个 cron 时钟（`*/2`）里跑，取数条件 = `pending` + 创建超过 20 秒 + 到点该查。
+- **按订单年龄退避**，不是死查：
+
+  | 年龄 | 间隔 | 说明 |
+  |---|---|---|
+  | 0–10 min | 2 min | 用户正盯着页面，最可能刚付完 |
+  | 10–30 min | 5 min | 还在收银台犹豫的人 |
+  | 30–60 min | 10 min | 非典型付款，只有零星延迟回调 |
+  | ≥ 60 min | **停** | 置 `expired`，不再主动问网关 |
+
+  一单约 12 次查询（死查 2 分钟 = 30 次），省下的是**网关的 QPS**。
+- **过期即停**：`expired` 之后只有两条路 —— ① 回调（`settlePaidOrder` 接受
+  `pending|expired`，钱晚到照样记账）；② 后台「查一次」
+  （`POST /api/admin/orders/{code}/poll`，客服手动，走同一段判据）。
+- **用户请求不打网关**：`GET /orders/:code` 只读我们自己的库。否则 100 个人同时刷新
+  就等于 100 次/5 秒的查单风暴。
+- `orders.next_poll_at` / `poll_attempts` 落库：改曲线不影响存量单，后台也能看到
+  "这单我们确认过几次"。
+
 待做：
 
 1. 真实网关的 ¥1 测试支付（`draft → live` 闸门：先真收到钱再允许发布）
-2. cron 兜底扫 `pending`（`expires_at` 过期 + `hasQuery` 的网关才查单）
-3. `stripe` / `paypal` 薄 driver
-4. AI 生成映射草稿
-5. 退款走网关（`refunds.channel_refund_id`）
+2. `stripe` / `paypal` 薄 driver
+3. AI 生成映射草稿
+4. 退款走网关（`refunds.channel_refund_id`）
 
 ## 9. 参考
 

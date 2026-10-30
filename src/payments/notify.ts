@@ -35,7 +35,13 @@ import type { GatewayRow } from "./gateways";
 import type { Plan } from "../plans/model";
 import type { Subscription } from "../plans/subscription";
 
-interface OrderRow {
+/**
+ * 一条"待收款订单"的行（回调与查单**共用同一份字段**）。
+ *
+ * 导出是因为 `payments/poll.ts` 要用它：两边必须看到同一份快照，
+ * 否则会出现"回调能发、查单不能发"的分裂。
+ */
+export interface PayableOrder {
   id: number;
   code: string;
   customer_id: number;
@@ -50,10 +56,50 @@ interface OrderRow {
   payment_method: string;
   gateway_id: number | null;
   status: string;
+  provider_order_no: string | null;
+  created_at: string;
+  updated_at: string;
+  /** 支付截止时间（TTL）；过期后不再自动查单，只等回调或人工 */
+  expires_at: string | null;
 }
+
+/** `SELECT ${PAYABLE_COLUMNS}` —— 与 `PayableOrder` 一一对应 */
+export const PAYABLE_COLUMNS = `id, code, customer_id, plan_id, plan_snapshot, amount_minor,
+  discount_minor, promotion_id, code_id, currency, payment_method, gateway_id, status,
+  provider_order_no, created_at, updated_at, expires_at`;
+
+type OrderRow = Omit<PayableOrder, "provider_order_no" | "created_at" | "updated_at" | "expires_at"> & {
+  provider_order_no?: string | null;
+};
 
 function text(body: string, status = 200): Response {
   return new Response(body, { status, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+}
+
+/**
+ * 记一次网关交互的结果（成功时清掉错误、留下 `last_ok_at`）。
+ *
+ * `at = null` 表示失败：写 `last_error`；`at` 有值表示成功：写 `last_ok_at` 并清错。
+ * 后台「网关」页直接显示这两列 —— 客服排查"为什么收不到钱"第一眼看它。
+ */
+export async function markGatewayResult(
+  env: Env,
+  gatewayId: number,
+  at: Date | null,
+  message: string | null,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  if (at) {
+    await env.DB.prepare(
+      `UPDATE payment_gateways SET last_ok_at = ?, last_error = NULL, updated_at = ? WHERE id = ?`,
+    )
+      .bind(at.toISOString(), nowIso, gatewayId)
+      .run();
+    return;
+  }
+  await env.DB.prepare(`UPDATE payment_gateways SET last_error = ?, updated_at = ? WHERE id = ?`)
+    .bind((message ?? "未知错误").slice(0, 500), nowIso, gatewayId)
+    .run();
 }
 
 async function markGatewayError(env: Env, gatewayId: number, message: string): Promise<void> {
@@ -64,9 +110,20 @@ async function markGatewayError(env: Env, gatewayId: number, message: string): P
     .run();
 }
 
-/** 发放权益（**幂等靠订单状态**，不是靠调用方） */
-async function grant(env: Env, order: OrderRow, tradeNo: string | null, raw: string): Promise<void> {
-  const now = new Date();
+/**
+ * **钱到账的唯一落账入口**（回调与主动查单都走它）。
+ *
+ * 幂等靠**订单状态**而不是调用方：`WHERE status IN ('pending','expired')`，
+ * 第二次进来 0 行影响，后面的发放就不会重复。
+ * `expired` 也接受 —— 钱晚到了也必须记账（`docs/payments.md` 铁律 2）。
+ */
+export async function settlePaidOrder(
+  env: Env,
+  order: PayableOrder | OrderRow,
+  tradeNo: string | null,
+  raw: string,
+  now: Date = new Date(),
+): Promise<void> {
   const plan = JSON.parse(order.plan_snapshot) as Plan;
 
   // 先标 paid：即使下面发放失败，也不会重复收钱/重复发
@@ -275,7 +332,7 @@ export async function handlePayNotify(
     }
   }
 
-  await grant(env, order, parsed.tradeNo, parsed.raw);
+  await settlePaidOrder(env, order, parsed.tradeNo, parsed.raw);
   await env.DB.prepare(`UPDATE payment_gateways SET last_ok_at = ?, last_error = NULL WHERE id = ?`)
     .bind(new Date().toISOString(), gateway.id)
     .run();

@@ -124,6 +124,8 @@ CREATE TABLE `orders` (
 	`raw_create` text,
 	`raw_notify` text,
 	`expires_at` text,
+	`next_poll_at` text,
+	`poll_attempts` integer DEFAULT 0 NOT NULL,
 	`status` text DEFAULT 'pending' NOT NULL,
 	`subscription_id` integer,
 	`refunded_minor` integer DEFAULT 0 NOT NULL,
@@ -143,6 +145,7 @@ CREATE TABLE `orders` (
 CREATE UNIQUE INDEX `orders_code_unique` ON `orders` (`code`);--> statement-breakpoint
 CREATE UNIQUE INDEX `orders_provider_order_no_unique` ON `orders` (`provider_order_no`);--> statement-breakpoint
 CREATE INDEX `idx_orders_customer` ON `orders` (`customer_id`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_orders_poll` ON `orders` (`status`,`next_poll_at`);--> statement-breakpoint
 CREATE INDEX `idx_orders_status` ON `orders` (`status`,`created_at`);--> statement-breakpoint
 CREATE INDEX `idx_orders_gateway` ON `orders` (`gateway_id`,`status`);--> statement-breakpoint
 CREATE TABLE `payment_gateways` (
