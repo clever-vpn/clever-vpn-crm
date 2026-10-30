@@ -90,6 +90,8 @@ export interface Promotion {
   delivery: GiftDelivery;
   /** delivery=claim 时必填：待领取的有效期（天，1–90） */
   claim_valid_days: number | null;
+  /** 是否给用户发通知邮件（默认 true；关掉 = 静默发放，用户不会有任何感知） */
+  notify: boolean;
   /** 人群（取代旧的 first_purchase_only） */
   audience: Audience;
   /** audience=expiring 时必填 */
@@ -125,6 +127,7 @@ export interface PromotionRow {
   rewards_json: string;
   delivery: string;
   claim_valid_days: number | null;
+  notify: number;
   audience: string;
   audience_days: number | null;
   cooldown_hours: number | null;
@@ -142,7 +145,7 @@ export interface PromotionRow {
 }
 
 export const PROMOTION_COLUMNS = `id, auto_apply, name, kind, benefit_type, benefit_value, rewards_json,
-  delivery, claim_valid_days,
+  delivery, claim_valid_days, notify,
   min_subtotal_minor, limit_plan_kinds, limit_plan_ids, audience, audience_days,
   cooldown_hours, plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
   badge_label, visible, referrer_reward_type, referrer_reward_value, status`;
@@ -188,6 +191,7 @@ export function rowToPromotion(row: PromotionRow): Promotion {
     rewards: parseRewards(row.rewards_json),
     delivery: row.delivery === "claim" ? "claim" : "auto",
     claim_valid_days: row.claim_valid_days,
+    notify: row.notify !== 0,
     audience: (AUDIENCES as readonly string[]).includes(row.audience)
       ? (row.audience as Audience)
       : "all",

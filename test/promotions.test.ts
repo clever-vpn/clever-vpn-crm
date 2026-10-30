@@ -34,6 +34,7 @@ function promo(over: Partial<Promotion> = {}): Promotion {
     rewards: { days: 0, gb: 0 },
     delivery: "auto",
     claim_valid_days: null,
+    notify: true,
     audience: "all",
     audience_days: null,
     cooldown_hours: null,

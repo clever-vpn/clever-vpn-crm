@@ -101,6 +101,8 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
     if (!(raw >= 1 && raw <= 90)) errors.push("待领取有效期必须是 1–90 天");
     else claimValidDays = Math.round(raw);
   }
+  // 通知邮件默认开：不发的话"待领取"没人知道、"已到账"没人感知
+  const notify = input.notify !== false;
 
   const audience = str(input.audience) || "all";
   if (!(AUDIENCES as readonly string[]).includes(audience)) {
@@ -186,6 +188,7 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
       rewards,
       delivery,
       claim_valid_days: claimValidDays,
+      notify,
       audience: audience as Promotion["audience"],
       audience_days: audience === "expiring" ? Math.round(audienceDays ?? 7) : null,
       cooldown_hours: cooldownHours === null ? null : Math.round(cooldownHours),
@@ -215,6 +218,7 @@ interface PromotionInput {
   rewards: GiftRewards;
   delivery: GiftDelivery;
   claim_valid_days: number | null;
+  notify: boolean;
   audience: Promotion["audience"];
   audience_days: number | null;
   cooldown_hours: number | null;
@@ -234,17 +238,17 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
   const now = new Date().toISOString();
   const res = await env.DB.prepare(
     `INSERT INTO promotions (auto_apply, name, kind, benefit_type, benefit_value, min_subtotal_minor,
-       limit_plan_kinds, limit_plan_ids, rewards_json, delivery, claim_valid_days,
+       limit_plan_kinds, limit_plan_ids, rewards_json, delivery, claim_valid_days, notify,
        audience, audience_days, cooldown_hours,
        plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
        referrer_reward_type, referrer_reward_value, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
-      input.delivery, input.claim_valid_days,
+      input.delivery, input.claim_valid_days, input.notify ? 1 : 0,
       input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
@@ -258,7 +262,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
   await env.DB.prepare(
     `UPDATE promotions SET auto_apply = ?, name = ?, kind = ?, benefit_type = ?, benefit_value = ?,
        min_subtotal_minor = ?, limit_plan_kinds = ?, limit_plan_ids = ?, rewards_json = ?,
-       delivery = ?, claim_valid_days = ?,
+       delivery = ?, claim_valid_days = ?, notify = ?,
        audience = ?, audience_days = ?, cooldown_hours = ?, plan_id = ?,
        new_user_within_days = ?, starts_at = ?, ends_at = ?, max_uses = ?, max_uses_per_customer = ?,
        badge_label = ?, visible = ?, referrer_reward_type = ?, referrer_reward_value = ?, updated_at = ?
@@ -268,7 +272,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
       input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
-      input.delivery, input.claim_valid_days,
+      input.delivery, input.claim_valid_days, input.notify ? 1 : 0,
       input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
@@ -298,6 +302,7 @@ function view(
     rewards: promo.rewards,
     delivery: promo.delivery,
     claim_valid_days: promo.claim_valid_days,
+    notify: promo.notify,
     audience: promo.audience,
     audience_days: promo.audience_days,
     cooldown_hours: promo.cooldown_hours,

@@ -31,6 +31,21 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T;
 }
 
+/**
+ * 运行期设置。**邮件配额是软上限**：`quota × ratio`（默认 90%），
+ * 剩下的留给验证码 —— App 是无密码登录，礼包邮件吃干净配额 = 登录挂掉。
+ */
+export interface AdminSettings {
+  mail: {
+    daily_quota: number;
+    soft_ratio: number;
+    sent_today: number;
+    quota_left: number;
+    ready: boolean;
+    defaults: { daily_quota: number; soft_ratio: number };
+  };
+}
+
 export interface Me {
   email: string;
   totp_enabled: boolean;
@@ -170,6 +185,10 @@ export const api = {
     call<{ ok: true }>("POST", "/password", { code, next }),
   /** 发一封测试邮件：验证「配了」≠「能发」 */
   testMail: () => call<{ ok: true; dev: boolean }>("POST", "/mail/test"),
+  /** 运行期设置（目前只有发信配额） */
+  settings: () => call<AdminSettings>("GET", "/settings"),
+  saveMailSettings: (input: { daily_quota?: number; soft_ratio?: number }) =>
+    call<AdminSettings>("PUT", "/settings/mail", input),
   sessions: () => call<{ sessions: SessionInfo[] }>("GET", "/sessions"),
   revokeSession: (sid: string) => call<{ ok: true }>("DELETE", `/sessions/${sid}`),
   enrollTotp: () => call<{ secret: string; uri: string }>("POST", "/2fa/enroll"),
@@ -350,6 +369,8 @@ export interface PromotionView {
   delivery: GiftDelivery;
   /** delivery=claim 时的领取有效期（天） */
   claim_valid_days: number | null;
+  /** 是否给用户发通知邮件（默认 true；关掉 = 静默发放，用户不会有任何感知） */
+  notify: boolean;
   audience: Audience;
   /** audience=expiring 时必填（N 天内到期） */
   audience_days: number | null;

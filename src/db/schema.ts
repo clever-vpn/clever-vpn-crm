@@ -81,6 +81,11 @@ export const customers = sqliteTable(
      * NULL = 还没生成过。它是"关系层"的唯一入口，与促销折扣无关。
      */
     referral_code: text("referral_code"),
+    /**
+     * 退订营销类通知（礼包 / 活动）。**验证码与订单结果不受影响** ——
+     * 那是交易必需的信，退订等于关掉账号。见 `notices/store.ts`。
+     */
+    marketing_opt_out: integer("marketing_opt_out").notNull().default(0),
     created_at: text("created_at").notNull(),
   },
   (t) => [
@@ -304,6 +309,69 @@ export const platformSubscriptions = sqliteTable(
     index("idx_subs_order").on(t.order_id),
   ],
 );
+
+/**
+ * 通知 = **需要用户注意或行动的事**（不是"事实账"）
+ *
+ * 与 `subscription_changes` 分工：那张表记"已经发生了什么"（用户主动去看）；
+ * 这张表记"要告诉他 / 要他做点什么"（我们要推出去）。
+ *
+ * 为什么落表而不是当场发信：
+ *   1. **解耦** —— 信发不出去不能让券/权益失败；
+ *   2. **可控节奏** —— 账号有每日发信配额（默认 5000），发不完就顺延到明天；
+ *   3. **幂等** —— `(kind, customer_id, ref_id)` 唯一，重跑 cron 不会发第二封。
+ *
+ * 同一行也供 App 的「消息」tab 读（`channel` 不落库：一行 = 一件事，
+ * 邮件与站内是两种呈现）。
+ */
+export const notices = sqliteTable(
+  "notices",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    customer_id: integer("customer_id").notNull(),
+    /** gift_claim（有券待领）| gift_auto（权益已到账） */
+    kind: text("kind").notNull(),
+    /**
+     * 幂等锚点：同一次发放只通知一次。
+     * `gift_claim` → `promotion_claims.id`；`gift_auto` → 0 元订单 id。
+     */
+    ref_id: text("ref_id").notNull(),
+    /** 文案在**创建时**定稿（邮件与站内同一份，不依赖后来的模板改动） */
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    /** 绝对链接；没配 `SITE_URL` 时为 NULL（邮件里就只写"打开 App / 官网"） */
+    action_url: text("action_url"),
+    action_text: text("action_text"),
+    /** pending | sent | failed | suppressed | skipped（用户退订 / 无需通知） */
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    /** 下次尝试时间（退避）；pending 的才能被泵取走 */
+    next_attempt_at: text("next_attempt_at").notNull(),
+    sent_at: text("sent_at"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_notices").on(t.kind, t.customer_id, t.ref_id),
+    // 泵的取数索引：`status='pending' AND next_attempt_at <= now`
+    index("idx_notices_pending").on(t.status, t.next_attempt_at),
+    index("idx_notices_customer").on(t.customer_id, t.id),
+  ],
+);
+
+/**
+ * 运行期配置（键值对）。
+ *
+ * 只放**运营参数**，不放代码里的常量（阈值/批次这类属于实现，改了要发版）。
+ * 目前只有发信配额：`mail_daily_quota` / `mail_soft_ratio`。
+ *
+ * 为什么配额不写死：Cloudflare Email Service 的日配额按账号不同（示例 5000/天），
+ * 租户换账号后不该重新发版。
+ */
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updated_at: text("updated_at").notNull(),
+});
 
 /** 权益变更台账：每一笔变化都留痕，客服对账与退款回滚只查这张表 */
 export const subscriptionChanges = sqliteTable(
@@ -569,6 +637,13 @@ export const promotions = sqliteTable(
     delivery: text("delivery").notNull().default("auto"),
     /** delivery=claim 时必填：待领取的有效期（天，1–90）。过期即作废，重新触发会再发一张 */
     claim_valid_days: integer("claim_valid_days"),
+    /**
+     * 是否给用户发**通知邮件**（礼包：1 = 发，0 = 静默）。
+     *
+     * 默认发：不发的话"待领取"的券没人知道、"自动到账"的权益没人感知 ——
+     * 那这件事就白做了。留一个开关是因为有些租户不想打扰用户（或不想消耗配额）。
+     */
+    notify: integer("notify").notNull().default(1),
     /** 角标文案，如"限时 8 折"；NULL = 列表页不展示 */
     badge_label: text("badge_label"),
     /** 是否公开展示（0 = 定向活动，只能靠码命中） */
@@ -830,6 +905,7 @@ export type PlanRow = typeof plans.$inferSelect;
 export type Customer = typeof customers.$inferSelect;
 export type PromotionRow = typeof promotions.$inferSelect;
 export type PromotionClaimRow = typeof promotionClaims.$inferSelect;
+export type NoticeRow = typeof notices.$inferSelect;
 export type ReferralRow = typeof referrals.$inferSelect;
 export type RedemptionRow = typeof redemptions.$inferSelect;
 export type PromotionTargetRow = typeof promotionTargets.$inferSelect;

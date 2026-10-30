@@ -67,7 +67,7 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 | `admin_users` | 管理员（单账号） | `email` unique、`password_hash`、`totp_*`、`failed_attempts`/`locked_until` |
 | `admin_sessions` | 后台会话（cookie） | `id` = sha256(token)、`pending`（2FA 挑战票） |
 | `audit_log` | 审计 | `at`、`actor`、`action`、`target`、`detail` |
-| `customers` | **客户身份**（不含权益） | `email` unique、`referral_code`；与 cf-api 的关联在 `platform_subscriptions.platform_customer_id` |
+| `customers` | **客户身份**（不含权益） | `email` unique、`referral_code`、`marketing_opt_out`（退订营销通知；验证码不受影响）；与 cf-api 的关联在 `platform_subscriptions.platform_customer_id` |
 | `email_codes` | 邮箱验证码（只存哈希） | `email` PK、`purpose`、`expires_at`、`attempts` |
 | `app_sessions` | App 会话（Bearer） | `id` = sha256(token)、`revoked_at` |
 
@@ -79,6 +79,8 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 | `plans` | 可售商品定义（**可变目录**，历史靠快照） | `kind`(period/traffic/addon)、`price_minor`、`visibility`(public/hidden)、`status`(draft/active/retired)、`trial`（免费试用，全库最多一个）、`retired_at` |
 | `platform_subscriptions` | **订阅**（当前权益，**一个客户一行**：`uq_subs_customer`） | `kind`、`order_id`、`period_quota_gb`/`period_extra_gb`/`period_anchor_day`/`period_settled_at`（period 专有）、`traffic_total_gb`/`traffic_remaining_gb`/`traffic_synced_at`/`traffic_validity_days`（traffic 专有）、`expires_at`、`hold`/`hold_reason`（手工控制位）、`activation_code`、`trial`（快照：这份权益是不是试用） |
 | `redemptions` | **核销台账**（谁在什么订单上用了什么；`(promotion_id, customer_id)` 唯一 = 每人每活动 1 次） | `order_id`（**NULL = 占位中**：已占下这次核销，还没发完；超 5 分钟可被接管）、`code_id`、`discount_minor`、`granted_json` |
+| `notices` | **通知队列**（= 邮件队列 = 站内消息）：`(kind, customer_id, ref_id)` 唯一 = 同一次发放只通知一次 | `kind`(gift_claim/gift_auto)、`title`/`body`（创建时定稿）、`action_url`、`status`(pending/sent/failed/suppressed/skipped)、`attempts`、`next_attempt_at` |
+| `settings` | 运行期配置（键值对）：`mail_daily_quota` / `mail_soft_ratio` | `key` PK、`value`、`updated_at` |
 | `promotion_claims` | **待领取的礼包**（`promotions.delivery='claim'`）：券，不是权益 | `promotion_id`+`customer_id` unique、`status`(pending/claiming/claimed)、`source`(signup/expiring/manual)、`expires_at`（过期是算出来的，不是状态）、`order_id`/`granted_json`（领取时才有） |
 | `subscription_changes` | 权益变更台账（**单行模型的历史全在这里**） | `action`(new/renewal/upgrade/addon/settle/hold/gift)、`paid_minor`、`residual_minor`、`payable_minor`、`kind_before`/`kind_after`、`plan_before`/`plan_after`、`expires_before`/`expires_after`、`period_extra_before`/`period_extra_after` |
 

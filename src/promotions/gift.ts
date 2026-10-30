@@ -17,8 +17,10 @@
  *      + `cooldown_hours` 在发放前判定）：否则财务侧永远解释不了"这个人为什么多了 7 天"。
  */
 import { EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, normalizeRewards, rowToPromotion } from "./model";
-import { CLAIM_LOCK_MS, claimDeadline, claimView } from "./claim";
+import { CLAIM_LOCK_MS, claimDeadline, claimValidDays, claimView } from "./claim";
 import { releaseRedemption, reserveRedemption, settleRedemption } from "./redemption";
+import { createNotice } from "../notices/store";
+import { claimNotice, grantedNotice } from "../notices/model";
 import { checkForCustomer } from "./service";
 import { provisionSubscription } from "../platform/provision";
 import {
@@ -133,7 +135,7 @@ async function applyGift(
     /** 已落账时的平台真实剩余（GB）；未落账传 undefined */
     platformRemainingGb?: number | null;
   },
-): Promise<{ subscriptionId: number; applied: GiftRewards }> {
+): Promise<{ subscriptionId: number; applied: GiftRewards; after: Subscription }> {
   const before = opts.before;
   const customerId = before.customer_id;
 
@@ -168,7 +170,7 @@ async function applyGift(
     );
   }
 
-  return { subscriptionId: id, applied: opts.applied };
+  return { subscriptionId: id, applied: opts.applied, after };
 }
 
 /**
@@ -218,7 +220,7 @@ async function openFromCarrierPlan(
     orderId: number;
     source: GiftSource;
   },
-): Promise<{ subscriptionId: number; applied: GiftRewards }> {
+): Promise<{ subscriptionId: number; applied: GiftRewards; after: Subscription }> {
   const { base, applied } = opts;
   const customerId = base.customer_id;
 
@@ -254,7 +256,7 @@ async function openFromCarrierPlan(
     );
   }
 
-  return { subscriptionId: id, applied: opts.applied };
+  return { subscriptionId: id, applied: opts.applied, after };
 }
 
 /**
@@ -357,7 +359,7 @@ export async function grantGift(
   try {
     orderId = await createGiftOrder(env, promo, opts.customerId, now);
 
-    let result: { subscriptionId: number; applied: GiftRewards };
+    let result: { subscriptionId: number; applied: GiftRewards; after: Subscription };
     let opened = false;
     if (before) {
       result = await applyGift(env, {
@@ -384,6 +386,16 @@ export async function grantGift(
     // 回填订单号与**实际生效**的权益（不是配置值：不限量/无限期时可能少一项）
     await settleRedemption(env, reservation.id, orderId, applied.applied);
 
+    // 通知：**收据**（已到账多少 / 新到期日）。发信失败不影响发放结论
+    await notifyGranted(env, {
+      promo,
+      customerId: opts.customerId,
+      orderId,
+      applied: applied.applied,
+      expiresAt: applied.after.expires_at,
+      now,
+    });
+
     return {
       promotion_id: promo.id,
       customer_id: opts.customerId,
@@ -397,6 +409,84 @@ export async function grantGift(
     // 发放没走完 ⇒ 把占位还回去（不删的话这个人永远领不到：唯一索引挡着）
     await releaseRedemption(env, reservation.id);
     throw e;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 通知（邮件 / 站内消息）—— **只写行，不发信**
+//
+// 为什么不在发放里直接调 `sendMail`：
+//   1. 发信失败不能让发放失败（券已经发了、权益已经到账，信没发出去只是少一份告知）；
+//   2. 账号有每日发信配额，上万封要分几天发完 —— 行留在 `notices` 里，泵慢慢送；
+//   3. 幂等：同一次发放只通知一次（`(kind, customer_id, ref_id)` 唯一）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 「已到账」收据：必须写清加了多少、新的到期日是哪天 */
+async function notifyGranted(
+  env: Env,
+  opts: {
+    promo: Promotion;
+    customerId: number;
+    orderId: number;
+    applied: GiftRewards;
+    /** 新的订阅到期时间（null = 无限期） */
+    expiresAt: string | null;
+    now: Date;
+  },
+): Promise<void> {
+  if (!opts.promo.notify || !hasRewards(opts.applied)) return;
+  try {
+    await createNotice(
+      env,
+      grantedNotice({
+        customerId: opts.customerId,
+        refId: opts.orderId,
+        badgeLabel: opts.promo.badge_label,
+        rewards: opts.applied,
+        expiresAt: opts.expiresAt,
+        siteUrl: env.SITE_URL ?? "",
+      }),
+      opts.now,
+    );
+  } catch (e) {
+    console.error(
+      `[notice] 到账通知写入失败 customer=${opts.customerId} order=${opts.orderId}: ${e instanceof Error ? e.message : e}`,
+    );
+  }
+}
+
+/** 「待领取」催领：送什么 + 还剩几天作废 + 去领取 */
+async function notifyClaim(
+  env: Env,
+  opts: {
+    promo: Promotion;
+    customerId: number;
+    claimId: number;
+    expiresAt: string;
+    rewards: GiftRewards;
+    now: Date;
+  },
+): Promise<void> {
+  if (!opts.promo.notify || !hasRewards(opts.rewards)) return;
+  try {
+    await createNotice(
+      env,
+      claimNotice({
+        customerId: opts.customerId,
+        // 截止时间进 refId：券过期后**重新发一张**是一次新的提醒，不该被旧的唯一键吞掉
+        refId: `${opts.claimId}:${opts.expiresAt}`,
+        badgeLabel: opts.promo.badge_label,
+        rewards: opts.rewards,
+        expiresAt: opts.expiresAt,
+        daysLeft: claimValidDays(opts.promo),
+        siteUrl: env.SITE_URL ?? "",
+      }),
+      opts.now,
+    );
+  } catch (e) {
+    console.error(
+      `[notice] 催领通知写入失败 customer=${opts.customerId} claim=${opts.claimId}: ${e instanceof Error ? e.message : e}`,
+    );
   }
 }
 
@@ -519,6 +609,16 @@ async function offerGift(
     .first<ClaimRecord>();
   if (!claim) return skip("待领取凭证写入失败，请稍后再试");
   if (claim.status === "claimed") return skip("这个礼包已经领过了，权益已到账");
+
+  // 催领通知：**这张券不发信等于没发** —— 用户不会自己去翻「我的礼包」
+  await notifyClaim(env, {
+    promo,
+    customerId,
+    claimId: claim.id,
+    expiresAt: claim.expires_at,
+    rewards: willApply,
+    now,
+  });
 
   return {
     promotion_id: promo.id,

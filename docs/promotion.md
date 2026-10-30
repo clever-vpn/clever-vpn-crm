@@ -139,6 +139,7 @@ promotions                     一个活动 / 一批码
   rewards_json                 权益维度：{days, gb}（kind=gift）
   delivery                     auto | claim：礼包触发后直接到账，还是只发一张券（§3.1）
   claim_valid_days             delivery=claim 时的领取有效期（天，1–90）
+  notify                       是否给用户发通知邮件（默认 1；关掉 = 静默发放）
   referrer_reward_type/value   kind=referral：给推荐人什么（默认给权益，不给现金）
   min_subtotal_minor           ⚠️ 两家面板都没有，我们必须有
   limit_plan_kinds / limit_plan_ids
@@ -153,6 +154,12 @@ promotions                     一个活动 / 一批码
 
 promotion_targets               audience=specific 的点名名单
   promotion_id, customer_id     唯一约束：(promotion_id, customer_id)
+
+notices                         通知队列（= 邮件队列 = 站内消息）：礼包两种送达各一种文体
+  kind                          gift_claim（催领）| gift_auto（收据）
+  ref_id                        gift_claim → "{券id}:{截止时间}"；gift_auto → 0 元订单 id
+  status                        pending | sent | failed | suppressed | skipped
+  唯一约束：(kind, customer_id, ref_id) —— 同一次发放只通知一次
 
 promotion_claims                待领取的礼包（delivery=claim）：券，不是权益
   promotion_id, customer_id, source(signup|expiring|manual)
