@@ -45,12 +45,13 @@ export interface SubscriptionRow {
   period_settled_at: string | null;
   platform_customer_id: number | null;
   activation_code: string | null;
+  trial: number;
 }
 
 const COLUMNS = `id, customer_id, order_id, plan_id, kind, hold, hold_reason, hold_at, paid_minor, currency,
   licence_limit, period_term_days, period_quota_gb, traffic_total_gb, traffic_validity_days,
   traffic_remaining_gb, traffic_synced_at, line_ids, started_at, expires_at,
-  period_anchor_day, period_extra_gb, period_settled_at, platform_customer_id, activation_code`;
+  period_anchor_day, period_extra_gb, period_settled_at, platform_customer_id, activation_code, trial`;
 
 export function rowToSubscription(row: SubscriptionRow): Subscription {
   let lineIds: number[] = [];
@@ -85,6 +86,7 @@ export function rowToSubscription(row: SubscriptionRow): Subscription {
     period_settled_at: row.period_settled_at,
     platform_customer_id: row.platform_customer_id,
     activation_code: row.activation_code,
+    trial: row.trial === 1,
   };
 }
 
@@ -93,8 +95,8 @@ const UPSERT_SQL = `INSERT INTO platform_subscriptions
      licence_limit, period_term_days, period_quota_gb, traffic_total_gb, traffic_validity_days,
      traffic_remaining_gb, traffic_synced_at, line_ids, started_at, expires_at,
      period_anchor_day, period_extra_gb, period_settled_at, platform_customer_id, activation_code,
-     created_at, updated_at)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     trial, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
    ON CONFLICT(customer_id) DO UPDATE SET
      plan_id = excluded.plan_id, kind = excluded.kind, hold = excluded.hold,
      hold_reason = excluded.hold_reason, hold_at = excluded.hold_at,
@@ -110,6 +112,7 @@ const UPSERT_SQL = `INSERT INTO platform_subscriptions
      expires_at = excluded.expires_at, period_anchor_day = excluded.period_anchor_day,
      period_extra_gb = excluded.period_extra_gb,
      period_settled_at = excluded.period_settled_at, updated_at = excluded.updated_at,
+     trial = excluded.trial,
      -- 只有“新开”带着非空 order_id 来；续费/加量/升级为 null，不能把来源抹掉
      order_id = COALESCE(excluded.order_id, platform_subscriptions.order_id),
      -- 设备数变了就必须删旧建新（crm-api.md §3.4），旧码立即失效 ⇒ 先置空等重新落账
@@ -135,6 +138,7 @@ export async function upsertSubscription(env: Env, sub: Subscription): Promise<n
       JSON.stringify(sub.line_ids), sub.started_at, sub.expires_at,
       sub.period_anchor_day, sub.period_extra_gb, sub.period_settled_at,
       sub.platform_customer_id, sub.activation_code,
+      sub.trial ? 1 : 0,
       now, now,
     )
     .run();
@@ -374,7 +378,7 @@ async function loadPlanSnapshot(env: Env, planId: string) {
   const row = await env.DB.prepare(
     `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
        traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
-       store_product_id, sort_order, status, retired_at
+       store_product_id, sort_order, status, retired_at, trial
      FROM plans WHERE id = ?`,
   ).bind(planId).first<PlanRow>();
   return row ? rowToPlan(row) : null;

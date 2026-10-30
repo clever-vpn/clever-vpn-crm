@@ -38,6 +38,7 @@ function sub(over: Partial<Subscription> = {}): Subscription {
     period_settled_at: null,
     platform_customer_id: null,
     activation_code: null,
+    trial: false,
   };
   return { ...base, ...over } as Subscription;
 }

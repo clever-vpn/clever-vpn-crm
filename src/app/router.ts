@@ -35,6 +35,7 @@ import { bindReferral, referralPanel } from "../promotions/referral";
 import { redeemGiftCode } from "../promotions/redeem";
 import { planPromos, resolveForPlans, resolvePromotion } from "../promotions/service";
 import { customerSubscription, ensureTrafficFresh } from "../subscriptions/store";
+import { startTrial, trialInfo } from "../subscriptions/trial";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
 import type { Env } from "../env";
@@ -194,8 +195,8 @@ async function loadActivePlans(env: Env): Promise<Plan[]> {
   const rows = await env.DB.prepare(
     `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
        traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
-       store_product_id, sort_order, status, retired_at
-     -- 只卖"公开"的套餐：hidden（礼品包之类，0 元）只能由后台赠送，
+       store_product_id, sort_order, status, retired_at, trial
+     -- 只卖"公开"的套餐：hidden（礼品包 / 试用套餐）只能由后台发放或系统开通，
      -- 绝不能出现在 App 列表里，也不能被 POST /orders 直接点出来。
      FROM plans WHERE status = 'active' AND visibility = 'public'
      ORDER BY sort_order, created_at`,
@@ -393,6 +394,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
     // 失败也只是少一条归因，绝不能把注册挡下来。
     if (!existing) {
       await bindReferral(env, { customerId, code: body.referral_code }).catch(() => false);
+
+      // 免费试用：建号即开通（套餐 → 订阅 → cf-api 客户，不走网关）。
+      // 同样**绝不能把注册打挂** —— 没开上就是没开上，用户还可以自己买。
+      await startTrial(env, customerId).catch((e) => {
+        console.error(`[trial] 注册试用失败 customer=${customerId}: ${e instanceof Error ? e.message : e}`);
+      });
     }
 
     const token = randomToken();
@@ -451,6 +458,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
   }
 
   // ── 套餐列表（免登录：商品与标价公开，动作与金额属于某个人）──
+  // ── 免费试用：注册页拿它决定是否显示"注册即送 N 天"（免登录）──
+  //    只回展示材料，**不含任何业务判断** —— 试用怎么开、开什么，全由 CRM 决定。
+  if (method === "GET" && path === "/trial") {
+    return json(await trialInfo(env));
+  }
+
   if (method === "GET" && path === "/plans") {
     const viewer = await resolveSession(env, request);
     const plans = await loadActivePlans(env);
@@ -712,6 +725,15 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const planId = typeof body.plan_id === "string" ? body.plan_id.trim() : "";
     const paymentMethod = typeof body.payment_method === "string" ? body.payment_method.trim() : "";
     if (!planId || !paymentMethod) return err(400, "invalid_request", "plan_id 与 payment_method 必填");
+
+    // 试用套餐是**赠送**，永远不能下单（即使有人把它误设为 public）——
+    // 否则"注册即送"就成了绕开注册的 0 元购买入口，还能反复买。
+    const trialFlag = await env.DB.prepare(`SELECT trial FROM plans WHERE id = ?`)
+      .bind(planId)
+      .first<{ trial: number }>();
+    if (trialFlag?.trial === 1) {
+      return err(403, "trial_plan_not_for_sale", "免费试用由系统自动开通，不能直接购买");
+    }
 
     const plan = (await loadActivePlans(env)).find((p) => p.id === planId);
     if (!plan) return err(404, "not_found", "套餐不存在或已下架");

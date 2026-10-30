@@ -43,6 +43,7 @@ function makePlan(over: Partial<Plan> = {}): Plan {
     sort_order: 0,
     status: "active",
     visibility: "public",
+    trial: false,
     retired_at: null,
     ...over,
   };
@@ -77,6 +78,28 @@ describe("validatePlan", () => {
     monthly_quota_gb: 100,
     sales_channels: [{ channel: "web_checkout", methods: ["alipay", "wechat"] }],
   };
+
+  it("试用套餐：强制 0 元 + hidden，且不要求售卖渠道", () => {
+    const r = validatePlan({ ...base, trial: true, price_minor: 999, sales_channels: [] });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.plan.trial).toBe(true);
+      expect(r.plan.price_minor).toBe(0); // 赠送而不是商品，价格由系统强制
+      expect(r.plan.visibility).toBe("hidden");
+    }
+  });
+
+  it("试用套餐必须是 period（免费试用得有天数）", () => {
+    const r = validatePlan({
+      ...base,
+      kind: "traffic",
+      term_days: null,
+      monthly_quota_gb: null,
+      traffic_gb: 10,
+      trial: true,
+    });
+    expect(r.ok).toBe(false);
+  });
 
   it("合法周期套餐 → 归一化币种大写", () => {
     const r = validatePlan(base);
@@ -371,7 +394,7 @@ describe("rowToPlan", () => {
       term_days: 30, monthly_quota_gb: 10, traffic_gb: null, validity_days: null,
       line_ids: "[1,2]", up_mbps: null, down_mbps: null,
       sales_channels: "not-json", store_product_id: "{}", sort_order: 0, status: "active",
-      visibility: "public", retired_at: null,
+      visibility: "public", trial: 0, retired_at: null,
     };
     const plan = rowToPlan(row);
     expect(plan.line_ids).toEqual([1, 2]);

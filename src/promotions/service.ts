@@ -111,10 +111,12 @@ async function customerFacts(env: Env, customerId: number | null, now: Date): Pr
     ? Math.max(0, Math.floor((now.getTime() - Date.parse(row.created_at)) / 86_400_000))
     : null;
 
-  // "付过钱"的口径：只要产生过一笔成功的收款，就不再是新客
+  // "付过钱"的口径：**真的收过钱**才算。0 元单（赠单 / 注册试用）不算 ——
+  // 否则用户一领试用就失去所有新人优惠，而那正是最需要优惠的转化时刻（I5 也规定赠单不计收入）。
   const paid = await env.DB.prepare(
     `SELECT 1 AS x FROM orders
-      WHERE customer_id = ? AND status IN ('paid', 'provisioning', 'active', 'refunded') LIMIT 1`,
+      WHERE customer_id = ? AND amount_minor > 0
+        AND status IN ('paid', 'provisioning', 'active', 'refunded') LIMIT 1`,
   )
     .bind(customerId)
     .first<{ x: number }>();

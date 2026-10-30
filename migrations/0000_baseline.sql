@@ -165,12 +165,14 @@ CREATE TABLE `plans` (
 	`sort_order` integer DEFAULT 0 NOT NULL,
 	`status` text DEFAULT 'draft' NOT NULL,
 	`visibility` text DEFAULT 'public' NOT NULL,
+	`trial` integer DEFAULT 0 NOT NULL,
 	`retired_at` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );
 --> statement-breakpoint
 CREATE INDEX `idx_plans_status` ON `plans` (`status`,`sort_order`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_plans_trial` ON `plans` (`trial`) WHERE "plans"."trial" = 1;--> statement-breakpoint
 CREATE TABLE `platform_subscriptions` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`customer_id` integer NOT NULL,
@@ -197,6 +199,7 @@ CREATE TABLE `platform_subscriptions` (
 	`expires_at` text,
 	`platform_customer_id` integer,
 	`activation_code` text,
+	`trial` integer DEFAULT 0 NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );

@@ -241,7 +241,7 @@ async function loadCarrierPlan(env: Env, planId: string): Promise<Plan | null> {
   const row = await env.DB.prepare(
     `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
        traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
-       store_product_id, sort_order, status, retired_at, visibility
+       store_product_id, sort_order, status, retired_at, trial, visibility
      FROM plans WHERE id = ?`,
   )
     .bind(planId)

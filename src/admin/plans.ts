@@ -50,7 +50,7 @@ async function audit(env: Env, actor: string, action: string, target: string, de
 
 const PLAN_COLUMNS = `id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
   traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels, store_product_id,
-  sort_order, status, visibility, retired_at, created_at, updated_at`;
+  sort_order, status, visibility, retired_at, trial, created_at, updated_at`;
 
 /** 后台视图 = App 视图 + 后台才需要的状态字段 */
 function view(plan: Plan): Record<string, unknown> {
@@ -59,6 +59,7 @@ function view(plan: Plan): Record<string, unknown> {
     status: plan.status,
     visibility: plan.visibility,
     sort_order: plan.sort_order,
+    trial: plan.trial,
     retired_at: plan.retired_at,
   };
 }
@@ -67,20 +68,33 @@ async function loadPlan(env: Env, id: string): Promise<PlanRow | null> {
   return env.DB.prepare(`SELECT ${PLAN_COLUMNS} FROM plans WHERE id = ?`).bind(id).first<PlanRow>();
 }
 
+/**
+ * 试用套餐全库只能一个（`uq_plans_trial` 部分唯一索引）。
+ *
+ * 这里先查一次是为了给出**能看懂的错**，而不是把 SQLite 的 UNIQUE 报错丢给后台。
+ */
+async function trialConflict(env: Env, plan: Plan): Promise<string | null> {
+  if (!plan.trial) return null;
+  const row = await env.DB.prepare(`SELECT id, name FROM plans WHERE trial = 1 AND id <> ? LIMIT 1`)
+    .bind(plan.id)
+    .first<{ id: string; name: string }>();
+  return row ? `已经有免费试用套餐「${row.name}」（${row.id}）；全库只能有一个，请先取消它的试用标记` : null;
+}
+
 async function insertPlan(env: Env, plan: Plan): Promise<void> {
   const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
        traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels, store_product_id,
-       sort_order, status, visibility, retired_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       sort_order, status, visibility, trial, retired_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       plan.id, plan.name, plan.kind, plan.price_minor, plan.currency, plan.licence_limit,
       plan.term_days, plan.monthly_quota_gb, plan.traffic_gb, plan.validity_days,
       JSON.stringify(plan.line_ids), plan.up_mbps, plan.down_mbps,
       JSON.stringify(plan.sales_channels), JSON.stringify(plan.store_product_id),
-      plan.sort_order, plan.status, plan.visibility, plan.retired_at, now, now,
+      plan.sort_order, plan.status, plan.visibility, plan.trial ? 1 : 0, plan.retired_at, now, now,
     )
     .run();
 }
@@ -90,7 +104,7 @@ async function updatePlan(env: Env, plan: Plan): Promise<void> {
     `UPDATE plans SET name = ?, kind = ?, price_minor = ?, currency = ?, licence_limit = ?,
        term_days = ?, monthly_quota_gb = ?, traffic_gb = ?, validity_days = ?,
        line_ids = ?, up_mbps = ?, down_mbps = ?, sales_channels = ?, store_product_id = ?,
-       sort_order = ?, status = ?, visibility = ?, retired_at = ?, updated_at = ?
+       sort_order = ?, status = ?, visibility = ?, trial = ?, retired_at = ?, updated_at = ?
      WHERE id = ?`,
   )
     .bind(
@@ -98,7 +112,7 @@ async function updatePlan(env: Env, plan: Plan): Promise<void> {
       plan.term_days, plan.monthly_quota_gb, plan.traffic_gb, plan.validity_days,
       JSON.stringify(plan.line_ids), plan.up_mbps, plan.down_mbps,
       JSON.stringify(plan.sales_channels), JSON.stringify(plan.store_product_id),
-      plan.sort_order, plan.status, plan.visibility, plan.retired_at,
+      plan.sort_order, plan.status, plan.visibility, plan.trial ? 1 : 0, plan.retired_at,
       new Date().toISOString(), plan.id,
     )
     .run();
@@ -152,6 +166,8 @@ export async function handleAdminPlans(
     const result = validatePlan(body);
     if (!result.ok) return json({ error: "invalid_plan", errors: result.errors }, 400);
     if (await loadPlan(env, result.plan.id)) return fail(409, "plan_exists");
+    const conflict = await trialConflict(env, result.plan);
+    if (conflict) return fail(409, "trial_exists", conflict);
     const plan = { ...result.plan, status: "draft" as const };
     await insertPlan(env, plan);
     await audit(env, actor, "plan_created", plan.id, { kind: plan.kind, price_minor: plan.price_minor });
@@ -167,6 +183,8 @@ export async function handleAdminPlans(
     if (!row) return fail(404, "plan_not_found");
     const result = applyPlanPatch(rowToPlan(row), await readBody(request));
     if (!result.ok) return json({ error: "invalid_plan", errors: result.errors }, 400);
+    const conflict = await trialConflict(env, result.plan);
+    if (conflict) return fail(409, "trial_exists", conflict);
     await updatePlan(env, result.plan);
     await audit(env, actor, "plan_updated", row.id, { status: row.status });
     return json({ plan: view(result.plan) });

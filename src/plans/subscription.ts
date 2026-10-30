@@ -100,6 +100,11 @@ export interface Subscription {
    * `null` = 还没落账成功（付款后停在 `provisioning`），或换档后旧码已失效。
    */
   activation_code: string | null;
+  /**
+   * 快照：这份权益是不是**免费试用**（来自 `plans.trial`）。
+   * 只用于给用户看的文案（`statusOf`）；买了正式套餐后自动变 false。
+   */
+  trial: boolean;
 }
 
 // ---- 从套餐创建订阅 ----
@@ -154,6 +159,7 @@ export function subscriptionFromPlan(
     platform_customer_id: null,
     // 落账成功后才由 provisionOrder 写入；命中该字段前订阅停在 provisioning
     activation_code: null,
+    trial: plan.trial,
   };
 }
 
@@ -164,11 +170,20 @@ export function subscriptionFromPlan(
  * 冻结/作废 → 到期 → 用完 → 可用。
  *
  * 注意：这里只用于**展示与报价**。“能不能连”的权威判定在 cf-api（心跳读自己的余额）。
+ *
+ * `trial` 只影响**文案**（试用到期时说"试用已结束 · 升级后可继续使用"，
+ * 而不是含糊的"已到期"）。App 不做这个判断 —— 它只显示 `status_text`。
  */
 export function statusOf(
   sub: Pick<
     Subscription,
-    "hold" | "hold_reason" | "expires_at" | "traffic_remaining_gb" | "kind" | "period_anchor_day"
+    | "hold"
+    | "hold_reason"
+    | "expires_at"
+    | "traffic_remaining_gb"
+    | "kind"
+    | "period_anchor_day"
+    | "trial"
   >,
   now: Date = new Date(),
 ): SubscriptionState {
@@ -180,15 +195,41 @@ export function statusOf(
     };
   }
   if (sub.expires_at && Date.parse(sub.expires_at) <= now.getTime()) {
-    return { status: "inactive", reason: "expired", status_text: `已于 ${sub.expires_at.slice(0, 10)} 到期` };
+    const day = sub.expires_at.slice(0, 10);
+    return {
+      status: "inactive",
+      reason: "expired",
+      status_text: sub.trial ? `试用已于 ${day} 结束 · 升级后可继续使用` : `已于 ${day} 到期`,
+    };
   }
   // `traffic_remaining_gb === null` 是“未同步”，不是 0 —— 不能当成已用完
   if (sub.traffic_remaining_gb !== null && sub.traffic_remaining_gb <= 0) {
+    if (sub.trial) {
+      return {
+        status: "inactive",
+        reason: "exhausted",
+        status_text: "试用流量已用完 · 升级后可继续使用",
+      };
+    }
     const reset =
       sub.kind === "period" && sub.period_anchor_day ? `，每月 ${sub.period_anchor_day} 日重置` : "";
     return { status: "inactive", reason: "exhausted", status_text: `本月流量已用完${reset}` };
   }
-  return { status: "active", reason: null, status_text: "生效中" };
+  return {
+    status: "active",
+    reason: null,
+    status_text: sub.trial ? trialRemainingText(sub.expires_at, now) : "生效中",
+  };
+}
+
+/** 试用剩余时长的整句（CRM 组织，App 直接显示） */
+function trialRemainingText(expiresAt: string | null, now: Date): string {
+  if (!expiresAt) return "免费试用中";
+  const ms = Date.parse(expiresAt) - now.getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return "免费试用已结束";
+  const days = Math.ceil(ms / 86_400_000);
+  if (days >= 1) return `免费试用 · 还剩 ${days} 天`;
+  return `免费试用 · 还剩 ${Math.max(1, Math.ceil(ms / 3_600_000))} 小时`;
 }
 
 // ---- 两种后续动作（纯函数：算新快照，不碰库） ----

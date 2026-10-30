@@ -62,7 +62,7 @@ export async function handleAdminSubscriptions(
       `SELECT c.id, c.email, c.display_name, c.status, c.created_at,
               s.plan_id, s.kind AS sub_kind, s.expires_at, s.hold, s.hold_reason,
               s.period_anchor_day, s.traffic_remaining_gb, s.period_quota_gb,
-              s.traffic_total_gb, s.period_extra_gb, s.licence_limit, s.paid_minor
+              s.traffic_total_gb, s.period_extra_gb, s.licence_limit, s.paid_minor, s.trial
          FROM customers c
          LEFT JOIN platform_subscriptions s ON s.customer_id = c.id
         ORDER BY c.id DESC LIMIT 200`,
@@ -84,6 +84,7 @@ export async function handleAdminSubscriptions(
       period_extra_gb: number | null;
       licence_limit: number | null;
       paid_minor: number | null;
+      trial: number | null;
     }>();
 
     const customers = (rows.results ?? []).map((r) => {
@@ -98,6 +99,7 @@ export async function handleAdminSubscriptions(
           traffic_remaining_gb: r.traffic_remaining_gb,
           kind: (r.sub_kind ?? "period") as "period" | "traffic" | "addon",
           period_anchor_day: r.period_anchor_day,
+          trial: r.trial === 1,
         },
         new Date(),
       );
@@ -116,6 +118,7 @@ export async function handleAdminSubscriptions(
           traffic_remaining_gb: r.traffic_remaining_gb,
           period_extra_gb: r.period_extra_gb,
           paid_minor: r.paid_minor,
+          trial: r.trial === 1,
           status: state.status,
           // 后台看到的是机器原因 + 用户文案两个字段
           status_reason: state.reason,

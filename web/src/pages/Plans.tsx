@@ -35,6 +35,7 @@ const emptyDraft = (): PlanDraft => ({
   down_mbps: null,
   sales_channels: [{ channel: "web_checkout", methods: ["alipay"] }],
   store_product_id: {},
+  trial: false,
   sort_order: 0,
 });
 
@@ -120,6 +121,7 @@ export default function Plans() {
       sales_channels: plan.sales_channels,
       store_product_id: plan.store_product_id,
       visibility: plan.visibility ?? "public",
+      trial: plan.trial,
       sort_order: plan.sort_order,
     });
   }
@@ -176,6 +178,11 @@ export default function Plans() {
                   <td>{plan.licence_limit}</td>
                   <td>
                     <span className={`tag tag-${plan.status}`}>{plan.status}</span>
+                    {plan.trial && (
+                      <div className="mono" style={{ marginTop: 4, color: "var(--warn, #b45309)" }}>
+                        免费试用（注册自动开通）
+                      </div>
+                    )}
                     {plan.visibility === "hidden" && (
                       <div className="mono" style={{ marginTop: 4 }}>隐藏（仅后台）</div>
                     )}
@@ -285,6 +292,7 @@ function PlanForm({
               onChange({
                 ...draft,
                 kind,
+                trial: draft.trial,
                 term_days: kind === "period" ? draft.term_days ?? 30 : null,
                 monthly_quota_gb: kind === "period" ? draft.monthly_quota_gb ?? 100 : null,
                 traffic_gb: kind === "period" ? null : draft.traffic_gb ?? 100,
@@ -429,6 +437,19 @@ function PlanForm({
           </select>
           <small className="hint">
             隐藏套餐不会出现在任何售卖列表里；礼包用它给没有订阅的客户 0 元开户
+          </small>
+        </label>
+
+        <label>
+          <input
+            type="checkbox"
+            checked={draft.trial}
+            onChange={(e) => set("trial", e.target.checked)}
+          />{" "}
+          设为免费试用套餐
+          <small className="hint">
+            全库只能有一个。勾选后服务端会强制 0 元 + 隐藏 + 周期套餐；客户注册时自动开通，
+            不出现在 App 的套餐列表，也不能被下单购买（那是白嫖入口）。
           </small>
         </label>
 
