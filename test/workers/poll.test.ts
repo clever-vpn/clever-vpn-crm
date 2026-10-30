@@ -114,6 +114,9 @@ const fakeFetch = (payload: unknown) =>
     })) as unknown as typeof fetch;
 
 beforeAll(async () => {
+  // 网关密钥要能加解密（`PAYMENT_SECRET_KEY`）—— 本地靠 `.dev.vars`，
+  // CI 没有那个文件，必须显式给一份，否则 `gatewaySecret` 返回 null、查单直接报错
+  (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "master-key-for-tests";
   const cfApi = installFakeCfApi();
   (env as unknown as Record<string, unknown>).CF_API_BASE = cfApi.base;
   (env as unknown as Record<string, unknown>).CF_API_TOKEN = cfApi.token;
