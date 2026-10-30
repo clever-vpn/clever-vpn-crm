@@ -171,9 +171,11 @@ referrals                      谁邀请了谁（只存关系，不存钱）
 referral_rewards               推荐奖励卡 = **每成功邀请一人一张**（推荐人自己来领）
   referral_id                  唯一：一次邀请只生成一张（回调重放不会多给）
   referrer_id                  一个推荐人可多行 ⇒ **多拉多得**
-  promotion_id                 引用一个**礼包**模板（奖励内容与规则都在那里）
-  status                       pending | claimed（**没有 void**：送出去的、退款也不收回）
-  claimed_at / granted_json / promotion_snapshot    领取时回填
+  promotion_id                 来源礼包模板（只做溯源；**领取时不读它**，见 §3.6）
+  rewards_json                 生成时抄下的**快照**：改模板不影响已经赚到的
+  status                       pending | claiming | claimed（**没有 void**：送出去不收回）
+  claiming_at                  占位时间（超 5 分钟视为上次崩了，可接管）
+  claimed_at / granted_json / promotion_snapshot    完成时回填
 
 redemptions                    台账：谁在哪个活动上用掉了一次名额
   promotion_id, customer_id, code_id
@@ -376,26 +378,69 @@ UPDATE redemptions SET settled_at = ?, granted_json = ?, promotion_snapshot = ?
 为什么这样切：**券是减钱，必须在付款时生效；礼包是加权益，可以让用户自己拉。**
 两条都不需要第三套发放实现。
 
-#### 奖励卡（`referral_rewards`）
+#### 两个 id，别混
 
-礼包的唯一约束是「每人每活动 1 次」，表达不了"拉 5 个人得 5 份"。所以推荐奖励要
-**实例化**：一次成功邀请 = 一行。
+| | 是什么 | 谁用它 |
+|---|---|---|
+| **礼包模板** = `promotions.id`（`kind='gift'`） | 只描述"送什么 + 规则" | 后台配置、文案、溯源 |
+| **奖励卡** = `referral_rewards.id` | **一次成功邀请 = 一张卡** = 发放实体 | `POST /me/rewards/{id}/claim` |
 
-| 列 | 作用 |
-|---|---|
-| `referral_id`（唯一） | 一次邀请只生成一张 ⇒ 支付回调重放不会多给 |
-| `referrer_id` | 一个推荐人可多行 ⇒ **多拉多得**（"每人每活动 1 次"不适用于它） |
-| `promotion_id` | 引用礼包模板：内容（天数 / 流量）与规则（限套餐、过期复活…）都在模板里 |
-| `status` | `pending` → `claimed`。**没有 `void`**：送出去的不收回，好友退款也不收回 |
-| `claimed_at` / `granted_json` / `promotion_snapshot` | 领取时回填（实际生效的权益 + 当时的活动快照） |
+#### 为什么原来只能领一次，现在可以多次
 
-规则：
+`redemptions` 上同时有 `UNIQUE(promotion_id, customer_id)` 和
+`max_uses_per_customer = 1`，所以同一个人对同一份礼包，第二次必然抢不到。
+
+多次**不是**靠"放开礼包的唯一约束"，而是**换发放实体的身份**：
+
+```
+redemptions       身份 = (promotion_id, customer_id)   一人一次（货架自取）
+referral_rewards  身份 = (referral_id)                 一次邀请一张，一人可 N 张
+```
+
+`referrals.customer_id`（被邀请人）本来就唯一 ⇒ 拉 5 个人 = 5 条关系 = 5 张卡；
+同一次邀请的回调重放 ⇒ `referral_id` 撞唯一键 ⇒ 还是 1 张。
+**礼包模板那一行不动**，「每人每活动 1 次」继续管货架自取。
+
+#### 领取的三态（"崩在中间"必须能自愈）
+
+```
+pending ──claim──▶ claiming ──成功──▶ claimed
+                     │
+                     └──失败 / 自检不过 / 占位超 5 分钟──▶ pending
+```
+
+- 不能一步 `pending → claimed`：崩在"改状态"之后、"加权益"之前，卡片会永久卡死。
+- 占位是一条带条件 `UPDATE`（`status='pending'`，或 `claiming` 已超 5 分钟），
+  `changes=1` 才算我的 —— 双击 / 重放 / 崩溃接管都靠它。
+- 发放走与礼包**完全相同**的一串：`applicableRewards` → `applyAdditive` → 推平台 → §3.3 自检；
+  不过自检就退回 `pending`（卡片还在），与"没效果就等于没发"一致。
+
+#### 领的是快照，不是模板的现值
+
+生成卡片时就把 `rewards_json` 与名称 / 角标**抄到卡上**，领取时**只读快照**：
+
+- 模板后来被改 / 被结束 ⇒ **已经赚到的奖励不缩水**；
+- 与核销行存 `promotion_snapshot` 是同一个原则：凭证不跟着活动改名而变。
+
+#### 推荐奖励**不**占模板的名额与人群
+
+`max_uses` / `audience` / 时间窗都是"货架自取"的规则；推荐奖励的触发是"好友付了款"。
+套用模板名额会出现"拉了 200 人、模板名额只有 100 ⇒ 后 100 人白拉"—— 租户没配错却被规则坑。
+
+所以它只看快照里的 `rewards`，外加三条适用性：**无限期不收天数、不限量不收 GB、过期按 §3.2 复活**。
+
+#### 报表口径
+
+推荐奖励**不写** `redemptions`（会撞唯一键），所以"这个礼包一共兑现了多少"要两张表合并：
+
+```
+redemptions（活动核销）  ∪  referral_rewards（status='claimed'）
+        按 promotion_id 汇总
+```
+
+其余规则：
 
 - **触发**：被推荐人**首单支付成功**（现有 `settlePaidOrder` 里那一步）。
-- **领取**：`UPDATE ... SET status='claimed' WHERE id=? AND status='pending'`，
-  抢到 `changes=1` 才算 —— 这就是占位，双击 / 重放都只发一次。
-- **加的规则与礼包完全一致**：`applicableRewards` → `applyAdditive` → 推平台 → §3.3 自检。
-  不过自检就把状态改回 `pending`（卡片还在，不是"发了但没用"）。
 - **资格**：推荐人同样要「买过的人」。没买过 ⇒ 卡片**照样显示**但点不动
   （"需要先订阅"）；已过期 ⇒ 按 §3.2 复活。**不静默吞掉** —— 他邀请过的人是真的。
 - **通知**：卡片生成时发一封「好友已付款，去领取」；属营销类，可退订；发不出去不影响卡片。
