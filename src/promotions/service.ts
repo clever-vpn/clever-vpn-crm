@@ -42,9 +42,12 @@ export async function usageOf(
   if (!promotionIds.length) return out;
   const marks = promotionIds.map(() => "?").join(",");
 
+  // **只数已完成的核销**（`order_id IS NOT NULL`）：占位行代表"正在发"，
+  // 它不是核销 —— 数进去会让同一份礼包在发放途中被认为是"已经领过"，
+  // 也会让名额在发放失败前被白占。
   const totals = await env.DB.prepare(
     `SELECT promotion_id, COUNT(*) AS n FROM redemptions
-      WHERE promotion_id IN (${marks}) GROUP BY promotion_id`,
+      WHERE promotion_id IN (${marks}) AND order_id IS NOT NULL GROUP BY promotion_id`,
   )
     .bind(...promotionIds)
     .all<{ promotion_id: number; n: number }>();
@@ -55,7 +58,8 @@ export async function usageOf(
   if (customerId !== null) {
     const mine = await env.DB.prepare(
       `SELECT promotion_id, COUNT(*) AS n, MAX(created_at) AS last_at FROM redemptions
-        WHERE promotion_id IN (${marks}) AND customer_id = ? GROUP BY promotion_id`,
+        WHERE promotion_id IN (${marks}) AND customer_id = ? AND order_id IS NOT NULL
+        GROUP BY promotion_id`,
     )
       .bind(...promotionIds, customerId)
       .all<{ promotion_id: number; n: number; last_at: string | null }>();

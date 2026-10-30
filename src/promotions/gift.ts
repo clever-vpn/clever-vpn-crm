@@ -18,6 +18,7 @@
  */
 import { EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, normalizeRewards, rowToPromotion } from "./model";
 import { CLAIM_LOCK_MS, claimDeadline, claimView } from "./claim";
+import { releaseRedemption, reserveRedemption, settleRedemption } from "./redemption";
 import { checkForCustomer } from "./service";
 import { provisionSubscription } from "../platform/provision";
 import {
@@ -340,57 +341,63 @@ export async function grantGift(
     platformRemainingGb = fresh.traffic_remaining_gb;
   }
 
-  const orderId = await createGiftOrder(env, promo, opts.customerId, now);
+  // ── 先占位、再发放 ──
+  // 校验都做完了（上面全是只读判断），从这里开始才动钱。占位这一行本身就是
+  // "这次核销"的唯一凭证：`(promotion_id, customer_id)` 唯一 ⇒ 崩溃后重跑、
+  // 并发双击、批量任务重入，都只会有一份额度（见 `redemption.ts`）。
+  const reservation = await reserveRedemption(env, {
+    promotionId: promo.id,
+    customerId: opts.customerId,
+    codeId: opts.codeId ?? null,
+    now,
+  });
+  if (!reservation.ok) return skip(reservation.reason);
 
-  let result: { subscriptionId: number; applied: GiftRewards };
-  let opened = false;
-  if (before) {
-    result = await applyGift(env, {
-      before,
-      applied: appliedRewards,
-      promotionId: promo.id,
-      orderId,
-      source: opts.source,
-      platformRemainingGb,
-    });
-  } else {
-    result = await openFromCarrierPlan(env, {
-      planId: promo.plan_id as string,
-      base: target,
-      applied: appliedRewards,
-      promotionId: promo.id,
-      orderId,
-      source: opts.source,
-    });
-    opened = true;
+  let orderId = 0;
+  try {
+    orderId = await createGiftOrder(env, promo, opts.customerId, now);
+
+    let result: { subscriptionId: number; applied: GiftRewards };
+    let opened = false;
+    if (before) {
+      result = await applyGift(env, {
+        before,
+        applied: appliedRewards,
+        promotionId: promo.id,
+        orderId,
+        source: opts.source,
+        platformRemainingGb,
+      });
+    } else {
+      result = await openFromCarrierPlan(env, {
+        planId: promo.plan_id as string,
+        base: target,
+        applied: appliedRewards,
+        promotionId: promo.id,
+        orderId,
+        source: opts.source,
+      });
+      opened = true;
+    }
+    const applied = result;
+
+    // 回填订单号与**实际生效**的权益（不是配置值：不限量/无限期时可能少一项）
+    await settleRedemption(env, reservation.id, orderId, applied.applied);
+
+    return {
+      promotion_id: promo.id,
+      customer_id: opts.customerId,
+      granted: true,
+      opened,
+      skipped: null,
+      order_id: orderId,
+      applied: applied.applied,
+    };
+  } catch (e) {
+    // 发放没走完 ⇒ 把占位还回去（不删的话这个人永远领不到：唯一索引挡着）
+    await releaseRedemption(env, reservation.id);
+    throw e;
   }
-  const applied = result;
-
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO redemptions
-       (promotion_id, customer_id, order_id, code_id, discount_minor, granted_json, created_at)
-     VALUES (?, ?, ?, ?, 0, ?, ?)`,
-  )
-    .bind(
-      promo.id,
-      opts.customerId,
-      orderId,
-      opts.codeId ?? null,
-      // 记**实际生效**的维度，不是配置值（不间断量/无限期时可能少一项）
-      JSON.stringify(applied.applied),
-      now.toISOString(),
-    )
-    .run();
-
-  return {
-    promotion_id: promo.id,
-    customer_id: opts.customerId,
-    granted: true,
-    opened,
-    skipped: null,
-    order_id: orderId,
-    applied: applied.applied,
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

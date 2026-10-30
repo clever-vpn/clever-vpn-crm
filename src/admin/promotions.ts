@@ -411,7 +411,8 @@ export async function handleAdminPromotions(
       `SELECT ${PROMOTION_COLUMNS} FROM promotions ORDER BY status, id DESC`,
     ).all<PromotionRow>();
     const counts = await env.DB.prepare(
-      `SELECT promotion_id, COUNT(*) AS n FROM redemptions GROUP BY promotion_id`,
+      `SELECT promotion_id, COUNT(*) AS n FROM redemptions
+        WHERE order_id IS NOT NULL GROUP BY promotion_id`,
     ).all<{ promotion_id: number; n: number }>();
     const byId = new Map((counts.results ?? []).map((r) => [r.promotion_id, r.n]));
 
@@ -569,7 +570,8 @@ export async function handleAdminPromotions(
 
     const used = await env.DB.prepare(
       `SELECT (SELECT COUNT(*) FROM promotion_codes WHERE promotion_id = ?) AS codes,
-              (SELECT COUNT(*) FROM redemptions WHERE promotion_id = ?) AS redemptions`,
+              (SELECT COUNT(*) FROM redemptions
+                WHERE promotion_id = ? AND order_id IS NOT NULL) AS redemptions`,
     )
       .bind(id, id)
       .first<{ codes: number; redemptions: number }>();
