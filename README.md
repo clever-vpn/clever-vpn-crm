@@ -75,6 +75,7 @@ docs/payments.md      支付域（词表 / 状态机 / 网关与映射）
 docs/schema.md        表结构（Drizzle + D1，字段/索引/迁移）
 docs/plans.md         套餐模型与残值换购（销售策略的唯一出处）
 docs/promotion.md     促销（两层模型 + 必要性判断 + 不做什么）
+docs/marketing.md     **租户营销手册**（按场景查配置：用什么 / 怎么设 / 注意什么）
 docs/local-dev.md     本地联调环境（crm/app-web 域名 + 反代 + 验证码回显）
 docs/self-host.md     自托管部署指南
 ```
