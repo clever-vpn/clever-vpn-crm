@@ -22,6 +22,23 @@ Last updated: 2026-10-24
 不允许租户自由拼「时长 × 流量 × 设备 × 速率 × 叠加」——组合维度一多，
 「这单到底怎么算」就会变成客服问题，App 也没法稳定渲染。要卖 3 个月就建一个 `term_days=90` 的套餐。
 
+### 1.1 免费试用套餐（`trial`）
+
+除了「卖什么」，还有一件"不卖但要开通"的东西：**免费试用**。
+
+| 规则 | 实现 |
+|---|---|
+| 全库只能一个 | `plans.trial = 1` + 部分唯一索引 `uq_plans_trial` |
+| 0 元 + hidden | 后台勾「设为免费试用」后由 `validatePlan()` 强制，填错也没用 |
+| 必须是 `period` | 试用总得有天数；`term_days` 就是试用时长 |
+| 不能买 | `POST /orders` 命中 → `403 trial_plan_not_for_sale` |
+| 不进 `/plans` | hidden ⇒ 正式列表天然没有它 |
+| 怎么开 | 新客户注册成功时 `startTrial()` 自动开通（0 元 `source='signup'` 订单 → 订阅 → cf-api 客户） |
+| App 怎么知道 | `GET /trial`（免登录）：`{available, plan_name, days, quota_gb, unlimited, licence_limit, text}` |
+
+⚠️ `licence_limit` 必须与正式套餐一致：设备数变了，cf-api 会删旧建新并换激活码，
+用户要重新登录客户端。
+
 ### 为什么 `quota` 恒为 `NULL`
 
 平台的月度重置边界是**记账自然月**：10 号买的用户永远拿不到完整的 30 天额度，

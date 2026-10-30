@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d9075fdf-a5e8-47a1-83ca-0b3ca1415f78",
+  "id": "efc34190-896c-430c-9bf3-4dfca7147cb2",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "adjustments": {
@@ -1106,6 +1106,14 @@
           "autoincrement": false,
           "default": "'public'"
         },
+        "trial": {
+          "name": "trial",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
         "retired_at": {
           "name": "retired_at",
           "type": "text",
@@ -1136,6 +1144,14 @@
             "sort_order"
           ],
           "isUnique": false
+        },
+        "uq_plans_trial": {
+          "name": "uq_plans_trial",
+          "columns": [
+            "trial"
+          ],
+          "isUnique": true,
+          "where": "\"plans\".\"trial\" = 1"
         }
       },
       "foreignKeys": {},
@@ -1322,6 +1338,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "trial": {
+          "name": "trial",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         },
         "created_at": {
           "name": "created_at",

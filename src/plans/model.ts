@@ -61,6 +61,13 @@ export interface Plan {
    * 礼包的「载体套餐」（契约 §2.9.7）必须是 hidden，否则等于开了 0 元购买通道。
    */
   visibility: "public" | "hidden";
+  /**
+   * 免费试用套餐（**全库最多一个**）。
+   *
+   * 它是赠送而不是商品：必须 `price = 0` + `hidden`，不能被买；
+   * 客户注册后由 `startTrial()` 自动开通。App 靠 `GET /trial` 知道它存不存在。
+   */
+  trial: boolean;
   retired_at: string | null;
 }
 
@@ -128,6 +135,15 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
   const traffic_gb = num(input.traffic_gb);
   const validity_days = int(input.validity_days);
 
+  /**
+   * 免费试用套餐：不是商品，是"注册后自动开通的那一份"。
+   * 所以强制 0 元 + hidden，且必须是 period（试用总得有天数）。
+   */
+  const trial = input.trial === true || input.trial === 1;
+  if (trial && kind !== "period") {
+    errors.push("试用套餐必须是周期套餐（period）—— 免费试用得有天数");
+  }
+
   if (kind === "period") {
     if (term_days === null || term_days < 1 || term_days > 3650) errors.push("周期套餐必须填 1–3650 天");
     if (monthly_quota_gb !== null && monthly_quota_gb <= 0) errors.push("月度额度必须 > 0（不限量请留空）");
@@ -161,13 +177,14 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
       : undefined;
     normalizedChannels.push(ch === "web_checkout" ? { channel: ch, methods: methods ?? ["alipay"] } : { channel: ch });
   }
-  if (!normalizedChannels.length) errors.push("至少选一个售卖渠道");
+  if (!normalizedChannels.length && !trial) errors.push("至少选一个售卖渠道");
 
   const store = (input.store_product_id ?? {}) as Record<string, unknown>;
   const store_product_id: { apple?: string; google?: string } = {};
   if (typeof store.apple === "string" && store.apple.trim()) store_product_id.apple = store.apple.trim();
   if (typeof store.google === "string" && store.google.trim()) store_product_id.google = store.google.trim();
   for (const ch of normalizedChannels) {
+    if (trial) break; // 试用套餐不售卖，不需要商店商品 ID
     if (ch.channel === "apple_iap" && !store_product_id.apple) errors.push("选了 App Store，必须填 Apple 商品 ID");
     if (ch.channel === "google_play" && !store_product_id.google) errors.push("选了 Google Play，必须填商品 ID");
   }
@@ -180,7 +197,8 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
       id,
       name,
       kind,
-      price_minor: price_minor!,
+      // 试用套餐永远是 0 元（价格由系统强制，不给后台填错的机会）
+      price_minor: trial ? 0 : price_minor!,
       currency,
       licence_limit: licence_limit!,
       term_days,
@@ -194,7 +212,9 @@ export function validatePlan(input: Record<string, unknown>, opts?: { requireId?
       store_product_id,
       sort_order: int(input.sort_order) ?? 0,
       status: (input.status as PlanStatus) ?? "draft",
-      visibility: input.visibility === "hidden" ? "hidden" : "public",
+      // 试用期套餐是赠送：强制隐藏，绝不出现在 /plans、也不能被 POST /orders 买
+      visibility: trial || input.visibility === "hidden" ? "hidden" : "public",
+      trial,
       retired_at: null,
     },
   };
@@ -221,6 +241,7 @@ export function planToFields(plan: Plan): Record<string, unknown> {
     sort_order: plan.sort_order,
     status: plan.status,
     visibility: plan.visibility,
+    trial: plan.trial,
   };
 }
 
@@ -320,6 +341,7 @@ export interface PlanRow {
   sort_order: number;
   status: string;
   visibility: string;
+  trial: number;
   retired_at: string | null;
 }
 
@@ -331,6 +353,16 @@ function parseJson<T>(raw: string | null, fallback: T): T {
     return fallback;
   }
 }
+
+/**
+ * `plans` 的完整列清单 —— **所有 SELECT 都用它**。
+ *
+ * 手写 SQL 是类型系统盖不到的地方（`rowToPlan` 只在运行时读），漏一列的后果是
+ * 那个字段静默变成 `undefined`（例如漏了 `trial`，试用套餐就变成非试用）。
+ */
+export const PLAN_COLUMNS = `id, name, kind, price_minor, currency, licence_limit, term_days,
+  monthly_quota_gb, traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
+  store_product_id, sort_order, status, visibility, retired_at, trial, created_at, updated_at`;
 
 export function rowToPlan(row: PlanRow): Plan {
   return {
@@ -352,6 +384,7 @@ export function rowToPlan(row: PlanRow): Plan {
     sort_order: row.sort_order,
     status: row.status as PlanStatus,
     visibility: row.visibility === "hidden" ? "hidden" : "public",
+    trial: row.trial === 1,
     retired_at: row.retired_at,
   };
 }

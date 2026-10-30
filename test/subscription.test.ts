@@ -50,6 +50,7 @@ function makePlan(over: Partial<Plan> = {}): Plan {
     sort_order: 0,
     status: "active",
     visibility: "public",
+    trial: false,
     retired_at: null,
     ...over,
   };
@@ -82,6 +83,7 @@ function makeSub(over: Partial<Subscription> = {}): Subscription {
     period_settled_at: "2026-10-01T00:00:00Z",
     platform_customer_id: 42,
     activation_code: "7391048261558203",
+    trial: false,
     ...over,
   };
 }
@@ -270,6 +272,24 @@ describe("statusOf：状态算出来，原因单独给", () => {
     expect(state.status).toBe("inactive");
     expect(state.reason).toBe("exhausted");
     expect(state.status_text).toContain("23");
+  });
+
+  it("试用：文案由 CRM 组织（剩余天数 / 已结束 / 已用完）", () => {
+    const active = makeSub({ trial: true, expires_at: "2026-10-30T00:00:00Z" });
+    expect(statusOf(active, NOW).status_text).toBe("免费试用 · 还剩 7 天");
+    expect(statusOf(active, NOW).status).toBe("active");
+
+    const expired = makeSub({ trial: true, expires_at: "2026-10-01T00:00:00Z" });
+    expect(statusOf(expired, NOW).status_text).toBe("试用已于 2026-10-01 结束 · 升级后可继续使用");
+    expect(statusOf(expired, NOW).reason).toBe("expired");
+
+    const used = makeSub({ trial: true, traffic_remaining_gb: 0 });
+    expect(statusOf(used, NOW).status_text).toBe("试用流量已用完 · 升级后可继续使用");
+    expect(statusOf(used, NOW).reason).toBe("exhausted");
+  });
+
+  it("非试用订阅的文案不变", () => {
+    expect(statusOf(makeSub(), NOW).status_text).toBe("生效中");
   });
 
   it("不限量（remaining = null）永远不会 exhausted", () => {

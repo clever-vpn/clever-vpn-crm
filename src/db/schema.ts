@@ -14,6 +14,7 @@
  * 执行 `wrangler d1 migrations apply --remote`。**Worker 不做自迁移** —— 缺表时
  * `src/db.ts` 会直接报错并提示跑哪条命令。
  */
+import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // ─────────────────────────────────────────────────────────────
@@ -174,11 +175,24 @@ export const plans = sqliteTable(
     status: text("status").notNull().default("draft"),
     /** public | hidden */
     visibility: text("visibility").notNull().default("public"),
+    /**
+     * **免费试用套餐**（`1` / `0`）。
+     *
+     * 全库**最多一个**（`uq_plans_trial` 部分唯一索引）—— 它就是"注册后自动开通"的那份权益。
+     * 既然是赠送而不是商品，它必须 `price_minor = 0` 且 `visibility = 'hidden'`：
+     * 不会出现在 `/plans`，也不能被 `POST /orders` 直接买（那是白嫆入口）。
+     * App 需要知道"能不能免费试用"就问 `GET /trial`，不要从价格里猜。
+     */
+    trial: integer("trial").notNull().default(0),
     retired_at: text("retired_at"),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),
   },
-  (t) => [index("idx_plans_status").on(t.status, t.sort_order)],
+  (t) => [
+    index("idx_plans_status").on(t.status, t.sort_order),
+    // 只允许一个试用套餐（SQLite 部分唯一索引）
+    uniqueIndex("uq_plans_trial").on(t.trial).where(sql`${t.trial} = 1`),
+  ],
 );
 
 /**
@@ -249,8 +263,7 @@ export const platformSubscriptions = sqliteTable(
     /** period：上次月结时间（结算 cron 的幂等依据，也用于跳过漏跑的周期） */
     period_settled_at: text("period_settled_at"),
 
-    // ── traffic 专有 ──
-    /** traffic：流量套餐总量（残值按"剩余/总量"算比例） */
+    // ── traffic 专有 ──    /** traffic：流量套餐总量（残值按"剩余/总量"算比例） */
     traffic_total_gb: real("traffic_total_gb"),
     /**
      * traffic：剩余量 —— **缓存**，不是权威值。真实剩余在 cf-api，它随用户使用减少。
@@ -275,6 +288,12 @@ export const platformSubscriptions = sqliteTable(
     platform_customer_id: integer("platform_customer_id"),
     /** cf-api 侧的激活码；`licence_limit` 变化时置 null 等重新落账（旧码立即失效） */
     activation_code: text("activation_code"),
+    /**
+     * 快照：这份权益是不是**试用**（来自 `plans.trial`）。
+     * 不靠"去查套餐"判断 —— 套餐以后被改/被删都不该让历史变准。
+     * 它只影响给用户看的文案（`statusOf`），不影响能不能连（那是 cf-api 的事）。
+     */
+    trial: integer("trial").notNull().default(0),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),
   },

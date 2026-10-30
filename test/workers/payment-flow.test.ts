@@ -329,6 +329,7 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
     store_product_id: {},
     sort_order: 1,
     status: "active",
+    trial: false,
     retired_at: null,
   };
 

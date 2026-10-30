@@ -94,6 +94,8 @@ export interface PlanView {
   status: PlanStatus;
   /** public = 上架可见；hidden = 仅后台（体验包 / 礼品包，用于礼包载体） */
   visibility: "public" | "hidden";
+  /** 免费试用套餐（全库最多一个）：0 元 + hidden，注册后自动开通，不能被购买 */
+  trial: boolean;
   sort_order: number;
   retired_at: string | null;
 }
@@ -116,6 +118,8 @@ export interface PlanDraft {
   sales_channels: PlanChannel[];
   store_product_id: { apple?: string; google?: string };
   visibility: "public" | "hidden";
+  /** 免费试用套餐：服务端会强制 price=0 + hidden + period */
+  trial: boolean;
   sort_order: number;
 }
 
