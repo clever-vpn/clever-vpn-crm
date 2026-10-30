@@ -1016,8 +1016,8 @@ describe("兑换码", () => {
     expect(badBody.reason).toContain("兑换码");
   });
 
-  it("新客没有订阅：用载体套餐 0 元开户，有效期由礼包天数决定", async () => {
-    await insertHiddenPlan("trial_7d", 30); // 套餐写 30 天，礼包说 7 天 ⇒ 以礼包为准
+  it("新客没有订阅：用载体套餐 0 元开户，有效期 = 套餐期限 + 礼包天数", async () => {
+    await insertHiddenPlan("trial_7d", 30); // 套餐 30 天 + 礼包 7 天 = 37 天（累加，不是覆盖）
     await createPromotion({
       name: "新人 7 天体验",
       kind: "gift",
@@ -1047,7 +1047,7 @@ describe("兑换码", () => {
     expect(sub?.paid_minor).toBe(0); // 0 元开户，残值计算不受影响
     expect(sub?.licence_limit).toBe(1); // 设备数来自载体套餐
     const days = Math.round((Date.parse(sub!.expires_at) - Date.now()) / 86_400_000);
-    expect(days).toBe(7);
+    expect(days).toBe(37); // 30（载体套餐）+ 7（礼包）—— 送的是增量，不是替换
 
     // 隐藏套餐绝不能被买：/plans 里不应出现
     const plans = (await (await appCall("/api/app/v1/plans", token)).json()) as {

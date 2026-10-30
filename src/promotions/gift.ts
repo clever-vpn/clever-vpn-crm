@@ -7,7 +7,8 @@
  *
  * 四条硬规则：
  *   1. **必须有地方放**：有订阅 ⇒ 加到订阅上；没订阅 ⇒ 用礼包的「载体套餐」0 元开户。
- *   2. **两个维度互相独立**：送天数只改到期日，送 GB 只改流量，谁也不推谁。
+ *   2. **两个维度互相独立，而且都是「加」不是「替换」**：送天数是在**原到期日**上加、送 GB 是在
+ *      **原余额**上加，谁也不推谁、谁也不会把套餐自带的期限/流量拿掉。
  *      **不提供 "重置本月已用"** —— 那等于把已消费的流量变回额度，是改账不是送礼。
  *   3. **订阅没有这个权益就不改**：无限期（`expires_at = null`）不收天数、
  *      不限量（period 的 `period_quota_gb = null` / traffic 的 `traffic_total_gb = null`）
@@ -228,8 +229,8 @@ async function applyGift(
  * 读礼包的**载体套餐**（客户还没有订阅时用它 0 元开户）。
  *
  * 语义分工：**套餐管"是什么包"**（流量 / 线路 / 设备数），
- * **礼包管"多送多少"**（`rewards.days` / `rewards.gb`）—— 与 XBoard 的 `plan_id` +
- * `plan_validity_days` 同一个道理，避免两个地方都说天数。
+ * **礼包管"再多送多少"**（`rewards.days` / `rewards.gb`，都是在套餐基础上**累加**
+ * 而不是覆盖）—— 与 XBoard 的 `plan_id` + `plan_validity_days` 同一个道理。
  *
  * 只允许 `visibility='hidden'` 的套餐：公开套餐能被直接买到，
  * 拿它当载体等于开了个 0 元购买通道。
@@ -277,10 +278,11 @@ async function openFromCarrierPlan(
 
   const next: Subscription = { ...base, id: 0 };
 
-  // 天数：有效期由礼包决定（有天数就盖掉套餐自带的期限）；`base.expires_at === null`
-  // 说明套餐是永久的，`applied.days` 已经归 0，这里不会动
-  if (applied.days > 0) {
-    next.expires_at = new Date(Date.parse(base.started_at) + applied.days * DAY_MS).toISOString();
+  // 天数：在**套餐给的期限之上再加**（不是覆盖）—— 载体套餐自己有 30 天、
+  // 礼包再送 7 天，用户拿到的是 37 天。`base.expires_at === null`（永久）时
+  // `applied.days` 已经归 0，这里不会动。
+  if (applied.days > 0 && base.expires_at !== null) {
+    next.expires_at = new Date(Date.parse(base.expires_at) + applied.days * DAY_MS).toISOString();
   }
   if (applied.gb > 0) {
     if (base.kind === "traffic") {
