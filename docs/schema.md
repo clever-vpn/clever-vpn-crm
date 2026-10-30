@@ -75,7 +75,7 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `promotions` | 促销活动 / 礼包规则（`kind`=coupon/gift/referral） | `rewards_json`、`audience`、`plan_id`（载体套餐）、`notify`（领取后是否发收据，默认 0）、`visible`（是否在货架上公开） |
+| `promotions` | 促销活动 / 礼包规则（`kind`=coupon/gift/referral） | `rewards_json`、`audience`、`limit_plan_ids`（**礼包的"限套餐"必须精确一致**）、`notify`（领取后是否发收据，默认 0）、`visible`（是否在货架上公开）<br/>`plan_id`（载体套餐）：**待删**，礼包不再创建订阅 |
 | `plans` | 可售商品定义（**可变目录**，历史靠快照） | `kind`(period/traffic/addon)、`price_minor`、`visibility`(public/hidden)、`status`(draft/active/retired)、`trial`（免费试用，全库最多一个）、`retired_at` |
 | `platform_subscriptions` | **订阅**（当前权益，**一个客户一行**：`uq_subs_customer`） | `kind`、`order_id`、`period_quota_gb`/`period_extra_gb`/`period_anchor_day`/`period_settled_at`（period 专有）、`traffic_total_gb`/`traffic_remaining_gb`/`traffic_synced_at`/`traffic_validity_days`（traffic 专有）、`expires_at`、`hold`/`hold_reason`（手工控制位）、`activation_code`、`trial`（快照：这份权益是不是试用） |
 | `redemptions` | **核销台账**（谁在哪个活动上用掉了一次名额；`(promotion_id, customer_id)` 唯一 = 每人每活动 1 次） | `order_id`（有值 = 支付时核销的券；**NULL = 礼包**，本来就没有订单）、`settled_at`（**NULL = 占位中**：已占下这次核销，还没发完；超 5 分钟可被接管）、`code_id`、`granted_json`（实际生效）、`promotion_snapshot`（当时的名称/角标/配置） |
