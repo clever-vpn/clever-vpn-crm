@@ -473,7 +473,7 @@ export const adjustments = sqliteTable(
     customer_id: integer("customer_id").notNull(),
     subscription_id: integer("subscription_id"),
     at: text("at").notNull(),
-    /** traffic_balance | expire_date | licence_limit | line_ids */
+    /** 语义字段：`days` | `gb`（增量）｜ `licence_limit` | `line_ids`（绝对值） */
     field: text("field").notNull(),
     delta: text("delta"),
     before_value: text("before_value"),

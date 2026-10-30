@@ -25,6 +25,12 @@ const STATUS: Record<string, { color: string; text: string }> = {
   inactive: { color: "red", text: "不可用" },
 };
 
+/** 不限量：period 看月度额度是否为空，traffic 包看整包容量是否为空 */
+function unlimitedOf(s: AdminCustomer["subscription"] | null | undefined) {
+  if (!s) return false;
+  return s.kind === "period" ? s.period_quota_gb === null : s.traffic_total_gb === null;
+}
+
 /** `inactive` 时要看 reason 才知道是哪一种不可用 */
 function statusTag(s: AdminCustomer["subscription"]) {
   if (!s) return { color: "default", text: "无订阅" };
@@ -50,6 +56,12 @@ export default function Customers() {
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState<AdminCustomer | null>(null);
   const [form] = Form.useForm<{ plan_id: string; paid_minor: number }>();
+
+  // 特殊补偿通道（与上面的"开通/续订"是两件事，别混）
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustTarget, setAdjustTarget] = useState<AdminCustomer | null>(null);
+  const [adjustBusy, setAdjustBusy] = useState(false);
+  const [adjustForm] = Form.useForm<{ days?: number; gb?: number; reason: string }>();
 
   const load = useCallback(async () => {
     try {
@@ -108,6 +120,42 @@ export default function Customers() {
       message.error(e instanceof ApiError ? e.message || e.code : "开通失败");
     } finally {
       setBusy(false);
+    }
+  }
+
+  function openAdjust(customer: AdminCustomer) {
+    setAdjustTarget(customer);
+    adjustForm.resetFields();
+    setAdjustOpen(true);
+  }
+
+  async function submitAdjust() {
+    if (!adjustTarget) return;
+    const v = await adjustForm.validateFields();
+    const days = Number(v.days ?? 0);
+    const gb = Number(v.gb ?? 0);
+    if (days <= 0 && gb <= 0) {
+      message.warning("天数和流量至少填一个");
+      return;
+    }
+    setAdjustBusy(true);
+    try {
+      const r = await api.adjustSubscription({
+        customer_id: adjustTarget.id,
+        days,
+        gb,
+        reason: v.reason.trim(),
+      });
+      const parts: string[] = [];
+      if (r.applied.days) parts.push(`+${r.applied.days} 天`);
+      if (r.applied.gb) parts.push(`+${r.applied.gb} GB`);
+      message.success(`已调整：${parts.join(" / ")}${r.platform_synced ? "" : "（未同步平台）"}`);
+      setAdjustOpen(false);
+      await load();
+    } catch (e) {
+      message.error(e instanceof ApiError ? e.message || e.code : "调整失败");
+    } finally {
+      setAdjustBusy(false);
     }
   }
 
@@ -231,9 +279,16 @@ export default function Customers() {
               key: "actions",
               width: 160,
               render: (_, c) => (
-                <Button size="small" onClick={() => openGrant(c, c.subscription?.plan_id)}>
-                  {c.subscription ? "续订 / 升级" : "开通"}
-                </Button>
+                <Space size={4}>
+                  <Button size="small" onClick={() => openGrant(c, c.subscription?.plan_id)}>
+                    {c.subscription ? "续订 / 升级" : "开通"}
+                  </Button>
+                  {c.subscription && (
+                    <Button size="small" onClick={() => openAdjust(c)}>
+                      调整权益
+                    </Button>
+                  )}
+                </Space>
               ),
             },
           ]}
@@ -271,6 +326,45 @@ export default function Customers() {
           </Form.Item>
           <Form.Item label="备注（可选）">
             <Input value="运营补单" disabled />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* **特殊补偿通道**：不走营销活动、不产生 0 元订单、不进营销统计 */}
+      <Modal
+        title={adjustTarget ? `调整权益：${adjustTarget.email}` : "调整权益"}
+        open={adjustOpen}
+        onCancel={() => setAdjustOpen(false)}
+        onOk={() => void submitAdjust()}
+        confirmLoading={adjustBusy}
+        okText="写入"
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+          给这一个人补权益：天数是<strong>在原到期日上加</strong>，流量是<strong>在平台真实剩余上加</strong>。
+          这不是礼包 —— 不绑定活动、不进营销统计，但会留在台账与审计里（谁、何时、为什么）。
+        </Typography.Paragraph>
+        <Form form={adjustForm} layout="vertical">
+          <Form.Item
+            label="加流量（GB）"
+            name="gb"
+            extra={
+              unlimitedOf(adjustTarget?.subscription)
+                ? "该订阅不限量，填了也不会生效"
+                : "留空或不填 = 不加"
+            }
+          >
+            <InputNumber min={0} max={10000} style={{ width: 200 }} addonAfter="GB" />
+          </Form.Item>
+          <Form.Item label="加天数" name="days" extra="留空或不填 = 不加">
+            <InputNumber min={0} max={3650} style={{ width: 200 }} addonAfter="天" />
+          </Form.Item>
+          <Form.Item
+            label="原因（必填）"
+            name="reason"
+            rules={[{ required: true, message: "必须写清楚为什么补" }]}
+          >
+            <Input placeholder="例：11-03 线路故障补偿 / 投诉安抚" />
           </Form.Item>
         </Form>
       </Modal>

@@ -207,6 +207,18 @@ export const api = {
   /** 手工开通 / 覆盖订阅（本地联调、运营补单） */
   grantSubscription: (input: { customer_id: number; plan_id: string; paid_minor?: number }) =>
     call<{ subscription: { id: number } }>("POST", "/subscriptions", input),
+  /** **直接调整权益**（特殊补偿通道）：在现有订阅上加天数 / 加流量，必须写原因 */
+  adjustSubscription: (input: {
+    customer_id: number;
+    days?: number;
+    gb?: number;
+    reason: string;
+  }) =>
+    call<{
+      subscription: { expires_at: string | null; remaining_gb: number | null };
+      applied: { days: number; gb: number };
+      platform_synced: boolean;
+    }>("POST", "/subscriptions/adjust", input),
 
   // ── 支付网关 ──
   gateways: () => call<GatewaysResponse>("GET", "/gateways"),

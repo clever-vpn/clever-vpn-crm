@@ -197,7 +197,8 @@ export async function logChange(
   change: {
     customer_id: number;
     subscription_id: number;
-    action: "new" | "renewal" | "upgrade" | "addon" | "settle" | "hold" | "gift";
+    /** `adjust` = 管理员直接调整（特殊补偿，不是营销活动） */
+    action: "new" | "renewal" | "upgrade" | "addon" | "settle" | "hold" | "gift" | "adjust";
     before?: Subscription | null;
     after?: Subscription | null;
     paid_minor?: number | null;

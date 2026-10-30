@@ -192,6 +192,41 @@ balance_gb += 50                              // 记入结转，跨期不丢
 彻底解决需 cf-api 提供**原子增量接口**（`POST /customers/:id/traffic {delta}`），
 当前只有 `PATCH` 绝对值 —— 已记为 cf-api 侧待办，不阻塞 CRM。
 
+### 4.5 管理员直接调整权益（特殊补偿通道）
+
+**不是营销活动。** 故障补偿、投诉安抚是对**一个人**的兑付：不绑定礼包、不产生 0 元订单、
+不进营销统计，但**必须写原因**并留痕。
+
+```
+POST /api/admin/subscriptions/adjust
+{ "customer_id": 12, "days": 3, "gb": 50, "reason": "11-03 线路故障补偿" }
+```
+
+语义是**在现有订阅上加**，不是覆盖：
+
+| 输入 | 落在哪 | 不适用的情形 |
+|---|---|---|
+| `days` | `expires_at += days` | 永久订阅（`expires_at IS NULL`）-> 忽略 |
+| `gb` | `traffic_balance = 平台真实剩余 + gb`；`period_extra_gb += gb`（traffic 包 `traffic_total_gb += gb`） | 不限量（quota / 整包为空）-> 忽略 |
+
+- 写前**强制回源**平台余额（不用 `traffic_remaining_gb` 缓存），否则会把已用量还回去。
+- **先推平台、后落库**：平台写失败则整体不改，返回 `platform_unreadable`。
+- 留痕三处：`adjustments`（一行/项，含 before/Δ/after/原因/操作人）、
+  `subscription_changes.action='adjust'`（客户可见的台账）、`audit_log.subscription_adjusted`。
+- 校验：`reason` 必填；`days`/`gb` 至少一个 > 0；两项都被忽略时报 `not_applicable`
+  （不允许"什么都没改但显示成功"）；无订阅报 `no_subscription`。
+
+**与礼包的边界**
+
+| | 礼包（5） | 调整权益（4.5） |
+|---|---|---|
+| 性质 | 营销活动 | 兑付 / 补偿 |
+| 对象 | 人群、名额、活动周期 | 单个客户 |
+| 订单 | 产生 0 元订单 + `redemptions` | **不产生订单** |
+| 统计 | 计入「发放额度」 | **不计入** |
+| 原因 | 活动自带文案 | 每次必填 |
+| 入口 | 促销 -> 礼包 -> 发放 | 客户页 -> 「调整权益」 |
+
 ## 5. 礼品包（赠送）
 
 **"礼物"不是新实体，而是"价格为 0 的隐藏套餐 + `source = gift` 的订单"。**
