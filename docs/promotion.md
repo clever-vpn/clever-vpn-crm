@@ -128,18 +128,15 @@ Web 面板时代的产物——用户会登录网站、逛活动页、翻券包�
 
 三条都"是"才做。
 
-## 3. 数据模型（4 张业务表 + 占位说明见 §3.0）
+## 3. 数据模型
 
 ```
-promotions                     一个活动 / 一批码
-  code                         可空：null = 自动生效（全场活动）
+promotions                     一个活动
   kind                         coupon | gift | referral
   benefit_type                 金额维度：amount | percent（kind=gift 时不用）
   benefit_value
   rewards_json                 权益维度：{days, gb}（kind=gift）
-  delivery                     auto | claim：礼包触发后直接到账，还是只发一张券（§3.1）
-  claim_valid_days             delivery=claim 时的领取有效期（天，1–90）
-  notify                       是否给用户发通知邮件（默认 1；关掉 = 静默发放）
+  notify                       领取成功后是否发**收据**邮件（默认 0 = 不发）
   referrer_reward_type/value   kind=referral：给推荐人什么（默认给权益，不给现金）
   min_subtotal_minor           ⚠️ 两家面板都没有，我们必须有
   limit_plan_kinds / limit_plan_ids
@@ -150,129 +147,108 @@ promotions                     一个活动 / 一批码
   plan_id                      载体套餐（仅礼包）：无订阅时用它 0 元开户（必须 hidden）
   new_user_within_days         额外的"注册 N 天内"闸门（与 audience 正交）
   badge_label                  "限时 8 折"，直接给 UI 展示
-  visible                      是否公开展示
+  visible                      是否在用户的货架上公开出现
 
 promotion_targets               audience=specific 的点名名单
   promotion_id, customer_id     唯一约束：(promotion_id, customer_id)
 
-promotion_runs                  批量发放任务（"发给一万个人"）：分批跑 + id 游标
-  snapshot_max_id               建任务那一刻的 MAX(customers.id) —— **冻结范围**
-  cursor / total / processed    进度（id 游标，不是 OFFSET）
-  granted / pending / skipped / failed
-  status                        running | done | cancelled
+promotion_codes                 兑换码（一个活动可以有多个码）
+  code / max_uses / expires_at / status
+  用量口径：(SELECT COUNT(*) FROM redemptions WHERE code_id = ?)
 
-notices                         通知队列（= 邮件队列 = 站内消息）：礼包两种送达各一种文体
-  kind                          gift_claim（催领）| gift_auto（收据）
-  ref_id                        gift_claim → "{券id}:{截止时间}"；gift_auto → 0 元订单 id
+notices                         通知队列（= 邮件队列 = 站内消息）
+  kind                          gift_granted（收据）
+  ref_id                        核销行 id（一次领取一行，天然唯一）
   status                        pending | sent | failed | suppressed | skipped
-  唯一约束：(kind, customer_id, ref_id) —— 同一次发放只通知一次
-
-promotion_claims                待领取的礼包（delivery=claim）：券，不是权益
-  promotion_id, customer_id, source(signup|expiring|manual)
-  status                        pending | claiming（领取中的占位，防双击）| claimed
-  expires_at                    领取截止时间（过期是算出来的，不是状态）
-  order_id / granted_json       领取时产生的 0 元订单与实际生效的权益
-  唯一约束：(promotion_id, customer_id) —— 一个活动对一个人只留一张
+  唯一约束：(kind, customer_id, ref_id) —— 同一次领取只通知一次
 
 referrals                      谁邀请了谁（只存关系，不存钱）
   customer_id（被邀请人）, referrer_id, promotion_id, created_at
   唯一约束：customer_id（一个人只能被邀请一次）
 
-redemptions                    台账：谁在什么订单上用了什么
-  promotion_id, customer_id, order_id（**可空 = 占位中**）, code_id,
-  discount_minor, granted_json, created_at
+redemptions                    台账：谁在哪个活动上用掉了一次名额
+  promotion_id, customer_id, code_id
+  order_id                     有值 = 支付时核销的券；NULL = 没花钱领的礼包
+  settled_at                   有值 = 已完成；NULL = **占位中**（正在发）
+  granted_json                 **实际生效**的权益（可能是配置项的子集）
+  promotion_snapshot           当时的 {name, badge, rewards} —— 凭证不跟着改名而变
+  discount_minor, created_at
   唯一约束：(promotion_id, order_id)、(promotion_id, customer_id)、(code_id, customer_id)
 ```
 
 设计要点：
 
 - **`referrals` 只存关系**，钱与权益都走 `redemptions` 的 `granted_json`，便于对账。
-- **`redemptions.order_id` 是"支付成功才写"**，不是下单时写。
-- **`(promotion_id, customer_id)` 唯一** = "每人每活动 1 次"落到库上的形式，也是
-  批量发放「重跑不双发」的最后闸门。
+- **优惠券的 `redemptions.order_id` 是"支付成功才写"**，不是下单时写；礼包没有订单，
+  所以 `order_id` 为 NULL —— 判定"占了还是发了"要看 `settled_at`，不能看 `order_id`。
+- **`(promotion_id, customer_id)` 唯一** = "每人每活动 1 次"落到库上的形式，
+  也是并发抢购的最后一闸。
+- **礼包不写 `orders`**。`orders` 的语义是"走过购买流程的一次尝试"（含 0 元购），
+  礼包没有这个流程；凭证是 `redemptions` 那一行，历史是 `subscription_changes`。
 
-### 3.0 核销占位（`order_id IS NULL`）
+### 3.0 核销占位（`settled_at IS NULL`）
 
-发放是**三步**，不是两步：`先占位 → 发放 → 回填订单号`。
+发放是**三步**：`先占位 → 发放 → 回填`。
 
 ```
-INSERT OR IGNORE redemptions (... order_id = NULL ...)   -- 抢到 changes=1 才算我们的
-   ↓ 校验全过才走到这里
-建 0 元订单 → 改订阅 → 推平台
+INSERT ... SELECT ... WHERE 名额还有 AND 我还没领过   -- 一条语句原子完成
+   ↓ 抢到才继续（changes=1）
+改订阅 → 推平台 → 记 subscription_changes
    ↓
-UPDATE redemptions SET order_id = ?, granted_json = ?    -- 回填 = 这次核销完成
+UPDATE redemptions SET settled_at = ?, granted_json = ?, promotion_snapshot = ?
 ```
 
 为什么必须占位：**"改了订阅"和"写了台账"之间只要崩一次**，重跑时系统数不到那行
-台账，就会认为"他还没领过"→ 再发一份、再多一张 0 元订单。批量发放是"分页 + 重入"
-的（跑上万人），重跑是常态而非例外。
+完成记录，就会认为"他还没领过"→ 再发一份。而领取是用户**自己点的按钮**，
+连点两次、网络重试都是常态。
 
-三条配套规则：
+四条配套规则：
 
-- **占位行不算核销**：所有名额/用量统计都加 `order_id IS NOT NULL`
-  （`usageOf`、码用量、后台次数）。否则发放途中的几百毫秒里，这个人会被自己的
-  占位挡成"已经领过"。
-- **占位超过 5 分钟可被接管**（同 `promotion_claims.claiming`）：视为上次崩了，
-  后来者 `UPDATE created_at` 接着发，不新增行。
+- **名额口径包含占位**：`COUNT(*)` 数全部行（占位也算用掉），否则并发会超发；
+- **"我领过没"只算完成**：`settled_at IS NOT NULL`。混用这两套口径会自相矛盾
+  （把自己的占位当成"已领过"，接管逻辑永远走不到）；
+- **占位超过 5 分钟可被接管**：视为上次崩了，后来者刷 `created_at` 接着发，不新增行；
 - **发放失败必须删占位**：留着的话唯一索引会永久挡住这个人，他再也领不到。
-- `code` 允许为空，是"自动活动"与"优惠码"共用一张表的关键——**只有一个概念：活动**。
 
-### 3.1 礼包的两种到账方式（`delivery`）
+### 3.1 拉取模型：礼包是货架，不是推送
 
-**「已经发给你了」和「你已经拿到了」是两件事**，所以礼包有一列 `delivery`：
+**没有"发出去的行"** —— 没有批量任务、没有待领取的券表、没有自动推送。
+礼包就是一条生效中的活动，`GET /me/gifts` **每次现算**：
 
-| 值 | 触发之后 | 记账 |
+| 状态 | 判定 | 用户看到 |
 |---|---|---|
-| `auto`（默认） | 权益立刻写进订阅 | 0 元订单 + `redemptions` 一行，全在触发那一刻产生 |
-| `claim` | 只写一行 `promotion_claims`（待领取的券） | **什么都没产生**：没有订单、没有核销、名额不占 |
+| `available` | 符合人群 + 有名额 | 「可以领取（还剩 N 份）」+ 按钮 |
+| `sold_out` | 符合人群但名额用完 | 「来晚了一步，这份礼包已经被抢完了」 |
+| `claimed` | 我已有完成的核销 | 「已领取（2026-10-30）」 |
+| （不出现） | 不符合人群 / 订阅收不下 | — |
 
-为什么必须有 `claim`：**悄悄改账用户感知不到**。把到期日悄悄推后 10 天，用户只会在
-某天发现"居然还能用"，既不知道是谁给的、也不知道给了多少 —— 那是没人知道的善意，
-不是营销。有个"领取"动作，福利才变成看得见、记得住的事。
+`?promotion_id=` 是**深链**：那条一定出现，并说明为什么不能领
+（用户拿着链接来，什么都不显示等于页面坏了）。但它**不会**把 `visible=0`
+的定向活动变成人人可见 —— 只有那一条被补进来。
 
-实现约束：
+为什么这样比推送好：
 
-- 待领取**不是第二套发放逻辑**：领取时仍然调 `grantGift()`（`promotions/gift.ts`），
-  所以「无限期不收天数 / 不限量不收 GB / 送 GB 必须回源平台余额」这些规则一处生效。
-- 建券时就先判一次"这份订阅收不收得下"：收不下**连券都不发**，否则用户会拿到一张
-  永远领不掉的卡。
-- 领取时 `skipCheck`：**不重判人群**。券是按当时身份点名的，用户晚两天回来领，
-  不该因为期间付过费（`audience='new'` 不再成立）而作废。
-- 并发：`pending → claiming` 是一条带条件的 `UPDATE`，`changes=0` 就是别人抢到了；
-  领取失败（平台余额读不到等）把券**还回 `pending`**，不因为一次抖动就让券消失；
-  占位超过 5 分钟视为那次失败（进程被杀也能自愈）。
-- 过期**不靠定时任务**：`expires_at <= now` 就是过期。活动再次触发会刷新同一张券的
-  截止时间（`ON CONFLICT ... WHERE status != 'claimed'`），已领取的绝不回退。
+- **没有"发给谁"的问题**：人群条件写在活动上，判定在查询时做一次，
+  不会出现"任务建好了才发现人群写错"；
+- **没有"发漏/发重"**：名额与幂等由一条带条件的 `INSERT` 保证；
+- **诚实的坏消息**：抢完了就告诉他抢完了，而不是让他在三周后发现"这里什么都没有"。
 
-### 3.2 批量发放（`promotions/runs.ts`）
+发放逻辑只有一处：`claimGiftFor()`（`promotions/gift.ts`）。
+用户点领取、输兑换码（带 `codeId`）、后台手动发放，走的**都是它**。
 
-**上万人不能在一次请求里发完** —— 这是 Cloudflare 的硬约束，也是这里的编程边界：
+### 3.2 领取的并发边界（Cloudflare 硬限制）
 
 | 限制 | 值 |
 |---|---|
 | CPU / 次 invocation | 30 s |
-| 墙钟（cron） | 15 min |
 | subrequest（付费） | 1000 / 次 |
 | **同时在飞的连接** | **6** |
 
-一个人要 ~8 次 D1 + 1 次 cf-api HTTP ⇒ 一次最多几十到一百多人。所以：
+一次领取 = ~10 次 D1 + 1 次 cf-api HTTP，所以后台"手动发放"**一次最多 20 个客户**
+（`GRANT_BATCH_LIMIT`），要更多就分批调用。
 
-```
-后台「批量发放」 ──► 只建任务（冻结 MAX(customers.id) 与总数），立刻 202
-cron（每 2 分钟）──► 取一个 running 任务 → 处理 50 人（并发 6）→ 推进游标
-                     一批不满 / 游标到顶 ⇒ done
-```
-
-三个不变式：
-
-1. **每次只做有界的一小片**，撞线就停、下一轮接着来（总时长与总量解耦）；
-2. **进度只在表里**（内存丢了 = 从游标重来）；
-3. **重跑安全**：`redemptions (promotion_id, customer_id)` 唯一 ⇒ 同一个人不会拿两份
-   （这也是 PR 1「核销占位」存在的理由）。
-
-人群筛选**不做 SQL 预筛**：直接枚举客户，符不符合交给 `deliverGift`（内部即
-`checkForCustomer`）。多花一点查询，换来**只有一套判定逻辑** —— 批量与单人绝不会
-给出两个结论。不符合的人计入 `skipped`，不中断整轮。
+拉取模型顺带消灭了原来最难的那一段：不需要在 cron 里分页跑上万人 ——
+每个人只在自己的那次请求里花自己的 CPU。
 
 ## 4. 三条不变量（永久有效，实现时不得违反）
 
@@ -342,7 +318,7 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 
 | 关注点 | 位置 |
 |---|---|
-| 表 | `promotions`（规则层）、`referrals`（关系层）、`redemptions`（核销台账，`(promotion_id, customer_id)` / `(promotion_id, order_id)` 唯一）、`promotion_claims`（待领取的券） |
+| 表 | `promotions`（规则层）、`referrals`（关系层）、`redemptions`（核销台账 = 礼包的"领取事实"，`(promotion_id, customer_id)` / `(promotion_id, order_id)` 唯一） |
 | 纯逻辑 | `src/promotions/model.ts`：时间窗 / 套餐范围 / 门槛 / 次数 / 首单 → `checkPromotion`；`discountOf`；`bestPromotion` |
 | 取数 | `src/promotions/service.ts`：`resolvePromotion`（单套餐，含用户输入的码）、`resolveForPlans`（列表页，一次算完）、`planBadges`（公开角标） |
 | 关系 | `src/promotions/referral.ts`：`ensureReferralCode`（懒生成）、`bindReferral`（静默、幂等）、`referralPanel`、`rewardReferrer` |

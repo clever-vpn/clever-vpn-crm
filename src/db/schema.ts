@@ -640,23 +640,13 @@ export const promotions = sqliteTable(
      */
     plan_id: text("plan_id"),
     /**
-     * 礼包的送达方式：`auto`（触发即到账）| `claim`（触发只生成「待领取」，用户自己点一下）。
+     * 领取成功后**是否给用户发一封收据邮件**（1 = 发，0 = 不发，默认 0）。
      *
-     * 为什么有两种：给权益这件事**用户感知不到**就等于没做营销 —— 到期日悄悄延长 10 天，
-     * 用户只会在他 VPN 断了的那天才发现「咦还能用」。所以需要「必须亲自领取」的形态：
-     * 用户看见了一张券、点了领取，才知道自己拿到了什么。
-     * 优惠券 / 邀请不使用这一列（恒为 auto）。
+     * 默认不发：领取结果**同步返回**给客户端（弹窗里就有"已到账 +7 天"），
+     * 邮件只会晚到且重复，还吃发信配额（那个配额是验证码的命脉）。
+     * 需要留档的租户自己打开。
      */
-    delivery: text("delivery").notNull().default("auto"),
-    /** delivery=claim 时必填：待领取的有效期（天，1–90）。过期即作废，重新触发会再发一张 */
-    claim_valid_days: integer("claim_valid_days"),
-    /**
-     * 是否给用户发**通知邮件**（礼包：1 = 发，0 = 静默）。
-     *
-     * 默认发：不发的话"待领取"的券没人知道、"自动到账"的权益没人感知 ——
-     * 那这件事就白做了。留一个开关是因为有些租户不想打扰用户（或不想消耗配额）。
-     */
-    notify: integer("notify").notNull().default(1),
+    notify: integer("notify").notNull().default(0),
     /** 角标文案，如"限时 8 折"；NULL = 列表页不展示 */
     badge_label: text("badge_label"),
     /** 是否公开展示（0 = 定向活动，只能靠码命中） */
@@ -692,94 +682,6 @@ export const promotionTargets = sqliteTable(
 );
 
 /**
- * 待领取的礼包（`promotions.delivery = 'claim'`）。
- *
- * 「已经发给你了」和「你已经拿到了」是两件事：这张表记前者。真正的权益在**领取那一刻**
- * 才写进订阅（并照常留一张 0 元订单 + 一行 `redemptions`）—— 所以财务口径、名额统计
- * 全都只看 `redemptions`，这张表只是「送达凭证」。
- *
- * 状态只有两个：`pending` → `claimed`。**过期不是状态**，是 `expires_at <= now` 的推断 ——
- * 省掉一个每天跑的定时任务，也不会出现「状态没来得及改」的脏数据。
- * `claiming` 是领取过程中的短暂占位（防双击），超过 5 分钟视为失败、回到可领。
- */
-export const promotionClaims = sqliteTable(
-  "promotion_claims",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    promotion_id: integer("promotion_id").notNull(),
-    customer_id: integer("customer_id").notNull(),
-    /** pending | claiming | claimed */
-    status: text("status").notNull().default("pending"),
-    /** 谁给的：signup（注册即送）| expiring（到期前挽回）| manual（后台点名） */
-    source: text("source").notNull(),
-    created_at: text("created_at").notNull(),
-    /** 领取截止时间；过了这一天这张券就没了（可以让活动再次触发） */
-    expires_at: text("expires_at").notNull(),
-    claimed_at: text("claimed_at"),
-    /** 领取时生成的 0 元礼包订单 */
-    order_id: integer("order_id"),
-    /** 实际生效的权益（配置值可能因为无限期 / 不限量被裁掉一项） */
-    granted_json: text("granted_json").notNull().default("{}"),
-  },
-  (t) => [
-    // 同一活动对同一个人只留一张：重放 / 重复触发不该堆出一叠券
-    uniqueIndex("uq_promotion_claims").on(t.promotion_id, t.customer_id),
-    index("idx_promotion_claims_customer").on(t.customer_id, t.status),
-  ],
-);
-
-/**
- * 批量发放任务（"把这个礼包发给一万个人"）。
- *
- * 为什么需要一张表而不是一个 `for` 循环：**单次 invocation 有 CPU/墙钟/子请求上限**
- * （cron 30s CPU、15min 墙钟、付费版 1000 个子请求，同时在飞连接只有 6 个）。
- * 一次跑一万人必死，所以把"一群人"变成"**一个游标 + 每次只做一小片**"：
- *
- *   `snapshot_max_id`  建任务那一刻的 `MAX(customers.id)` —— **冻结范围**
- *   `cursor`           已经处理到的最大 customer_id（id 游标，不是 OFFSET）
- *   `status`           running | done | cancelled
- *
- * 用 id 游标而不是 `OFFSET`：`OFFSET 9000` 每页都要扫前面 9000 行，越翻越慢；
- * `WHERE id > cursor ORDER BY id LIMIT 50` 是索引 seek，永远一样快。
- *
- * 冻结上界是为了"能跑完"：不冻结的话，跑的过程中新注册的人会让任务永远追不上。
- * 重跑安全由 `redemptions` 的 `(promotion_id, customer_id)` 唯一索引兜底
- * （见 `promotions/redemption.ts`），所以中断后从游标重来不会双发。
- */
-export const promotionRuns = sqliteTable(
-  "promotion_runs",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    promotion_id: integer("promotion_id").notNull(),
-    /** 冻结的客户上界（建任务时的 `MAX(customers.id)`） */
-    snapshot_max_id: integer("snapshot_max_id").notNull(),
-    /** 已处理到的最大 customer_id */
-    cursor: integer("cursor").notNull().default(0),
-    /** 冻结范围内的客户总数（进度条分母） */
-    total: integer("total").notNull().default(0),
-    /** 已处理条数（含跳过） */
-    processed: integer("processed").notNull().default(0),
-    /** 权益已到账 */
-    granted: integer("granted").notNull().default(0),
-    /** 只发了一张券（delivery=claim） */
-    pending: integer("pending").notNull().default(0),
-    /** 不符合条件 / 已经领过 / 收不下 —— 跳过 */
-    skipped: integer("skipped").notNull().default(0),
-    /** 抛异常（平台抖动等），下一轮不会自动重试这一人，需要新开任务或人工补 */
-    failed: integer("failed").notNull().default(0),
-    /** running | done | cancelled */
-    status: text("status").notNull().default("running"),
-    created_at: text("created_at").notNull(),
-    updated_at: text("updated_at").notNull(),
-    finished_at: text("finished_at"),
-  },
-  (t) => [
-    index("idx_promotion_runs_promotion").on(t.promotion_id, t.id),
-    index("idx_promotion_runs_status").on(t.status, t.id),
-  ],
-);
-
-/**
  * 邀请关系 = **关系层**（唯一归因来源）。 *
  * 一人只能被邀请一次（`uq_referrals_customer`）。这里**不存钱**：
  * 奖励明细落 `redemptions`，本表只回答"谁拉了谁"。
@@ -809,11 +711,20 @@ export const referrals = sqliteTable(
 );
 
 /**
- * 核销台账：谁在**哪一笔已支付的订单**上用了什么活动。
+ * 核销台账 = **"谁在哪个活动上用掉了一次名额"**（礼包的"领取事实"就在这里）。
  *
- * 铁律：**支付成功才写**（promotion.md §7.3）。下单只校验不扣减，
- * 否则未付款的订单会把名额占光 —— 那正是 XBoard 的漏洞。
- * `(promotion_id, order_id)` 唯一 ⇒ 回调重放也不会重复核销或重复发奖励。
+ * 三种核销来源，靠 `order_id` 区分：
+ *   - 有 `order_id` ⇒ **支付时核销的优惠券/邀请奖励**（核销与购买是同一件事）
+ *   - `order_id` 为 NULL ⇒ **没花钱领的礼包**（本来就没有订单）
+ *
+ * 发放分三步：**占位（`settled_at IS NULL`）→ 发放 → 回填**。
+ * 为什么必须先占位："改了订阅但还没来得及记账"那一刻崩溃，重跑会把同一份额度
+ * 再发一遍。占位行同样占 `(promotion_id, customer_id)` 这个唯一位，所以同一个人
+ * 永远拿不到第二份。发不出去就删掉占位（否则他再也领不到）。
+ *
+ * 名额口径（两处不同，别混）：
+ *   - **还用掉多少名额** = 数全部行（**包含占位**，否则并发会超发）
+ *   - **我是不是已经领过** = 只数 `settled_at IS NOT NULL`
  */
 export const redemptions = sqliteTable(
   "redemptions",
@@ -821,15 +732,21 @@ export const redemptions = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     promotion_id: integer("promotion_id").notNull(),
     customer_id: integer("customer_id").notNull(),
-    /**
-     * 产生的订单；**NULL = 占位中**（已经占下这次核销，但东西还没发完）。
-     *
-     * 为什么允许空：发放是「先占位、后发放、再回填」三步（`promotions/gift.ts`），
-     * 否则“改了订阅但还没来得及记账”的那一刻崩溃，重跑会把同一份额度再发一遍、
-     * 再多建一张 0 元订单 —— 额度是真金白银，不能靠“大概不会崩”。
-     * 占位超过 5 分钟视为上次崩了，允许后来的接管（同 `promotion_claims`）。
-     */
+    /** 支付时核销的那笔订单；礼包（没走购买流程）为 NULL */
     order_id: integer("order_id"),
+    /**
+     * 发放完成时间；`NULL` = **占位中**（已经占下这次核销，东西还没发完）。
+     *
+     * 不能拿 `order_id IS NULL` 当"占位中"：礼包本来就没有订单，
+     * 那样会把每一条礼包核销都当成在飞。
+     */
+    settled_at: text("settled_at"),
+    /**
+     * 领取那一刻的活动快照（`{name,badge,rewards}`）。
+     *
+     * 凭证不能跟着活动改名/删库而变 —— 用户问"我领的是什么"，答案就在这一列。
+     */
+    promotion_snapshot: text("promotion_snapshot"),
     /** 用的是哪个批次码（`promotion_codes.id`）；用主码或系统发放时为 NULL */
     code_id: integer("code_id"),
     /** 这一单减免了多少（分）；纯赠送型记 0 */
@@ -968,9 +885,7 @@ export type SubscriptionRow = typeof platformSubscriptions.$inferSelect;
 export type PlanRow = typeof plans.$inferSelect;
 export type Customer = typeof customers.$inferSelect;
 export type PromotionRow = typeof promotions.$inferSelect;
-export type PromotionClaimRow = typeof promotionClaims.$inferSelect;
 export type NoticeRow = typeof notices.$inferSelect;
-export type PromotionRunRow = typeof promotionRuns.$inferSelect;
 export type ReferralRow = typeof referrals.$inferSelect;
 export type RedemptionRow = typeof redemptions.$inferSelect;
 export type PromotionTargetRow = typeof promotionTargets.$inferSelect;

@@ -19,8 +19,6 @@ import { handleAdminApi } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
-import { runExpiringGifts } from "./promotions/triggers";
-import { runNextBatch } from "./promotions/runs";
 import { handleUnsubscribe } from "./notices/unsubscribe";
 import { sendPendingNotices } from "./notices/store";
 import { pollPendingOrders } from "./payments/poll";
@@ -168,18 +166,9 @@ export default {
           })
           .catch((e: unknown) => console.error("[settle] 失败", e)),
       );
-      // 到期前挽回：把 `audience='expiring'` 的礼包发给快到期的人（幂等）
-      ctx.waitUntil(
-        runExpiringGifts(env)
-          .then((report) => {
-            if (report.granted || report.pending || report.skipped) {
-              console.log(
-                `[gift] expiring granted=${report.granted} pending=${report.pending} skipped=${report.skipped}`,
-              );
-            }
-          })
-          .catch((e: unknown) => console.error("[gift] 到期礼包失败", e)),
-      );
+      // 注意：**没有"到期礼包"这一步**了 —— 礼包是拉取模型，
+      // `audience='expiring'` 只是"谁能在货架上看到它"的条件，
+      // 由 `listGiftShelf` 在用户来取时现算，不需要提前发出去。
       return;
     }
 
@@ -197,18 +186,8 @@ export default {
         .catch((e: unknown) => console.error("[poll] 查单失败", e)),
     );
 
-    // ── 门 A：批量发放（每个 tick 处理一小批；没有任务就立刻返回）──
-    ctx.waitUntil(
-      runNextBatch(env)
-        .then((report) => {
-          if (report && report.processed) {
-            console.log(
-              `[run] #${report.runId} processed=${report.processed} granted=${report.granted} pending=${report.pending} skipped=${report.skipped} failed=${report.failed} has_more=${report.hasMore}`,
-            );
-          }
-        })
-        .catch((e: unknown) => console.error("[run] 批量发放失败", e)),
-    );
+    // 没有"批量发放"这一步：拉取模型下没有任何要提前发出去的行。
+    // 通知泵只负责**收据**（用户自己领了之后才可能写行）。
 
     // ── 门 A：通知泵（按日配额；用尽自动顺延次日）──
     ctx.waitUntil(

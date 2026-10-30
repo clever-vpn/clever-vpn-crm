@@ -260,25 +260,19 @@ export const api = {
   endPromotion: (id: number) => call<{ ok: true }>("POST", `/promotions/${id}/end`),
   /** 只有「草稿 + 无码 + 无核销」能删 */
   deletePromotion: (id: number) => call<{ ok: true }>("DELETE", `/promotions/${id}`),
-  /** 礼包手动发放：返回每个客户的结论（含为什么没发出去） */
+  /**
+   * 礼包手动发放 = **替这个客户点一下「领取」**（拉取模型下没有"批量推"）。
+   *
+   * 一次最多 20 个客户（后台按批调用）：每个都要改订阅 + 调 cf-api，
+   * Workers 单次调用只有 6 个在飞连接、30 秒 CPU。
+   */
   grantPromotion: (id: number, customerIds: number[]) =>
     call<{
-      /** 已到账人数（auto） */
+      /** 成功到账人数 */
       granted: number;
-      /** 已发券人数（claim） */
-      pending: number;
       total: number;
       results: GiftGrantResult[];
     }>("POST", `/promotions/${id}/grant`, { customer_ids: customerIds }),
-  /** 批量发放：**只建任务，立刻返回**；真正的发放由 cron 分页做 */
-  broadcastPromotion: (id: number) =>
-    call<{ run: PromotionRunView; already_running: boolean }>("POST", `/promotions/${id}/broadcast`),
-  /** 这个活动最近一次批量任务的进度（前端轮询；文案由 CRM 给） */
-  promotionRun: (id: number) =>
-    call<{ run: PromotionRunView | null }>("GET", `/promotions/${id}/run`),
-  /** 取消批量任务（已发出的不退） */
-  cancelPromotionRun: (runId: number) =>
-    call<{ ok: true }>("POST", `/promotions/runs/${runId}/cancel`),
   /** 用户侧兑换（官网账户页用；App 走同一个端点） */
   redeem: (code: string) =>
     call<{
@@ -339,14 +333,11 @@ export interface PromotionCodeView {
 export interface GiftGrantResult {
   promotion_id: number;
   customer_id: number;
-  /** 权益已经到账（delivery=auto） */
   granted: boolean;
-  /** 券已发出、等用户自己领（delivery=claim） */
-  pending?: boolean;
-  /** claim 模式：这张券的领取截止时间 */
-  claim_expires_at?: string | null;
-  skipped: string | null;
-  order_id: number | null;
+  /** granted / already_claimed / sold_out / not_eligible / not_applicable / busy */
+  state: string;
+  /** 没发出去的原因（给后台看的中文整句） */
+  reason: string | null;
   applied: GiftRewards;
 }
 export type PromotionStatus = "draft" | "active" | "ended";
@@ -357,24 +348,6 @@ export type RewardType = "days" | "gb" | "none";
  * 后台视图。`code` 为 null 表示**自动生效**（用户不需要输入任何码）。
  * 与 `src/admin/promotions.ts` 的 `view()` 一一对应。
  */
-/** 礼包的送达方式（与 `src/promotions/model.ts` 的 `GiftDelivery` 一一对应） */
-export type GiftDelivery = "auto" | "claim";
-
-/** 批量发放任务的进度视图（`progress_text` 由 CRM 组织，前端直接显示） */
-export interface PromotionRunView {
-  id: number;
-  promotion_id: number;
-  total: number;
-  processed: number;
-  granted: number;
-  pending: number;
-  skipped: number;
-  failed: number;
-  status: "running" | "done" | "cancelled";
-  progress_text: string;
-  finished_at: string | null;
-}
-
 export interface PromotionView {
   id: number;
   /** 优惠券是否「不用码就生效」（礼包 / 邀请恒为 false） */
@@ -389,11 +362,7 @@ export interface PromotionView {
   limit_plan_ids: string[];
   /** 礼包奖励项（kind=gift 才有意义） */
   rewards: GiftRewards;
-  /** 礼包送达方式：auto = 触发即到账；claim = 只发券，用户在有效期内自己领 */
-  delivery: GiftDelivery;
-  /** delivery=claim 时的领取有效期（天） */
-  claim_valid_days: number | null;
-  /** 是否给用户发通知邮件（默认 true；关掉 = 静默发放，用户不会有任何感知） */
+  /** 领取成功后是否发**收据**邮件（默认 false：结果已经同步显示在页面上） */
   notify: boolean;
   audience: Audience;
   /** audience=expiring 时必填（N 天内到期） */

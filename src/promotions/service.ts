@@ -42,12 +42,12 @@ export async function usageOf(
   if (!promotionIds.length) return out;
   const marks = promotionIds.map(() => "?").join(",");
 
-  // **只数已完成的核销**（`order_id IS NOT NULL`）：占位行代表"正在发"，
-  // 它不是核销 —— 数进去会让同一份礼包在发放途中被认为是"已经领过"，
+  // **只数已完成的核销**（`settled_at IS NOT NULL`）：占位行代表"正在发、还没发完"，
+  // 它不是核销 —— 数进去会让同一个人在发放途中被当成"已经领过"，
   // 也会让名额在发放失败前被白占。
   const totals = await env.DB.prepare(
     `SELECT promotion_id, COUNT(*) AS n FROM redemptions
-      WHERE promotion_id IN (${marks}) AND order_id IS NOT NULL GROUP BY promotion_id`,
+      WHERE promotion_id IN (${marks}) AND settled_at IS NOT NULL GROUP BY promotion_id`,
   )
     .bind(...promotionIds)
     .all<{ promotion_id: number; n: number }>();
@@ -58,7 +58,7 @@ export async function usageOf(
   if (customerId !== null) {
     const mine = await env.DB.prepare(
       `SELECT promotion_id, COUNT(*) AS n, MAX(created_at) AS last_at FROM redemptions
-        WHERE promotion_id IN (${marks}) AND customer_id = ? AND order_id IS NOT NULL
+        WHERE promotion_id IN (${marks}) AND customer_id = ? AND settled_at IS NOT NULL
         GROUP BY promotion_id`,
     )
       .bind(...promotionIds, customerId)
@@ -226,6 +226,52 @@ export async function checkForCustomer(
     targeted.has(promo.id),
   );
   return checkPromotion(promo, ctx);
+}
+
+/**
+ * 一次算完"这批活动对这个人分别能不能用"（货架用）。
+ *
+ * 为什么不循环调 `checkForCustomer`：每个活动要查 5 次库（客户事实、订阅、用量、
+ * 点名名单、邀请绑定），20 个活动就是 100 次往返 —— 而它们的**客户侧输入完全相同**。
+ * 这里客户侧只查一次，活动侧各一条聚合查询。
+ */
+export async function checkAllForCustomer(
+  env: Env,
+  promos: readonly Promotion[],
+  customerId: number | null,
+  now: Date = new Date(),
+): Promise<Map<number, PromotionCheck>> {
+  const out = new Map<number, PromotionCheck>();
+  if (!promos.length) return out;
+
+  const ids = promos.map((p) => p.id);
+  const facts = await customerFacts(env, customerId, now);
+  const sub = customerId === null
+    ? null
+    : await env.DB.prepare(`SELECT plan_id, kind FROM platform_subscriptions WHERE customer_id = ?`)
+      .bind(customerId)
+      .first<{ plan_id: string; kind: PlanKind }>();
+  const usage = await usageOf(env, ids, customerId);
+  const targeted = await targetedOf(env, ids, customerId || null);
+  const plan = { id: sub?.plan_id ?? "", kind: sub?.kind ?? "addon" };
+
+  for (const promo of promos) {
+    const ctx = contextFor(
+      plan,
+      now,
+      facts,
+      usage.get(promo.id) ?? { total: 0, byCustomer: 0, lastAt: null },
+      promo.min_subtotal_minor,
+      targeted.has(promo.id),
+    );
+    out.set(promo.id, checkPromotion(promo, ctx));
+  }
+  return out;
+}
+
+/** 全部生效中的活动（货架取数用） */
+export async function activePromotions(env: Env): Promise<Promotion[]> {
+  return allActivePromotions(env);
 }
 
 /**
@@ -498,10 +544,13 @@ export async function redeemOrderPromotion(
   now: Date = new Date(),
 ): Promise<void> {
   if (!order.promotion_id) return;
+  // 优惠券的核销**当场就完成了**（钱已经收到、折扣已经体现），
+  // 所以 `settled_at` 直接写值 —— 只有礼包才需要"先占位、后发放"。
   await env.DB.prepare(
     `INSERT OR IGNORE INTO redemptions
-       (promotion_id, customer_id, order_id, code_id, discount_minor, granted_json, created_at)
-     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+       (promotion_id, customer_id, order_id, code_id, discount_minor, granted_json,
+        settled_at, created_at)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
   )
     .bind(
       order.promotion_id,
@@ -509,6 +558,7 @@ export async function redeemOrderPromotion(
       order.id,
       order.code_id,
       order.discount_minor,
+      now.toISOString(),
       now.toISOString(),
     )
     .run();

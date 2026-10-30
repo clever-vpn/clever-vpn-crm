@@ -19,7 +19,6 @@ import {
   ApiError,
   type PromotionDraft,
   type PromotionKind,
-  type PromotionRunView,
   type PromotionView,
 } from "../api";
 import { AUDIENCE_OPTIONS, PromotionForm, emptyDraft } from "./promotion/Form";
@@ -85,87 +84,13 @@ function windowLabel(p: PromotionView): string {
  * 码的形态由「每码可用几次」决定，不用再分"主码/批次码"两种概念：
  *   1 个码 + 可用 N 次 = 共享码；N 个码 + 各 1 次 = 一人一码
  */
-/**
- * 批量发放面板。
- *
- * **不要**在这里等发放完成：上万人要分批跑完（可能几十分钟），前端只负责
- * "建任务 → 轮询进度 → 显示 CRM 给的文案"。
- */
-function BroadcastPanel({ promotionId }: { promotionId: number }) {
-  const [run, setRun] = useState<PromotionRunView | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  const load = useCallback(async () => {
-    try {
-      const res = await api.promotionRun(promotionId);
-      setRun(res.run);
-    } catch {
-      /* 进度读不到不影响主流程 */
-    }
-  }, [promotionId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  // 任务在跑时每 5 秒刷一次；跑完自动停
-  useEffect(() => {
-    if (run?.status !== "running") return;
-    const timer = setInterval(() => void load(), 5000);
-    return () => clearInterval(timer);
-  }, [run?.status, load]);
-
-  async function start() {
-    setBusy(true);
-    setMsg("");
-    try {
-      const res = await api.broadcastPromotion(promotionId);
-      setRun(res.run);
-      setMsg(res.already_running ? "已经有一个任务在跑" : `已建任务（共 ${res.run.total} 人）`);
-    } catch (err) {
-      setMsg(message(err, "创建失败"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed var(--line)" }}>
-      <div className="row between">
-        <strong>批量发放给全部客户</strong>
-        <span className="hint">后台任务，分批跑；不影响你关掉这个窗口</span>
-      </div>
-      <div className="row" style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
-        <button type="button" onClick={start} disabled={busy || run?.status === "running"}>
-          {run?.status === "running" ? "任务进行中…" : "建批量任务"}
-        </button>
-        {run?.status === "running" && (
-          <button
-            type="button"
-            onClick={() => void api.cancelPromotionRun(run.id).then(load)}
-            disabled={busy}
-          >
-            取消
-          </button>
-        )}
-        {run && <span className="hint">{run.progress_text}</span>}
-      </div>
-      {msg && <p className="hint" style={{ marginTop: 6 }}>{msg}</p>}
-    </div>
-  );
-}
-
 function deliveryLabel(p: PromotionView): string {
   const ways: string[] = [];
-  // 礼包关心的是「权益怎么到用户手上」，不是码怎么发
+  // 礼包是**货架上的一条活动**：用户自己来领，不预先发出去
   if (p.kind === "gift") {
-    ways.push(
-      p.delivery === "claim" ? `待领取（${p.claim_valid_days ?? 7} 天内有效）` : "自动到账",
-    );
+    ways.push(p.visible ? "货架可见" : "定向可见");
     const stats = p.code_stats;
     if (stats && stats.codes > 0) ways.push(`${stats.codes} 个码`);
-    if (p.audience === "expiring") ways.push("到期自动");
     return ways.join(" / ");
   }
   if (p.auto_apply) {
@@ -189,7 +114,7 @@ const STATUS_LABEL: Record<string, string> = { draft: "草稿", active: "进行�
 const TITLES: Record<PromotionKind, string> = { coupon: "优惠券", gift: "礼包", referral: "邀请返利" };
 const INTROS: Record<PromotionKind, string> = {
   coupon: "让这一单少付钱。自动生效不用发码；凭码用于渠道投放与归因。",
-  gift: "白送天数 / 流量。可以直接发，也可以设一个兑换码让用户自助领取。",
+  gift: "白送天数 / 流量。上线后出现在用户的「我的礼包」里，先到先得；也可配兑换码。",
   referral: "唯一的「谁拉来的」来源。邀请码永远选填，奖励只给权益。",
 };
 
@@ -379,11 +304,12 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
         {granting !== null && (
           <div className="notice" style={{ marginTop: 12 }}>
             <div className="row between">
-              <strong>手动发放</strong>
-              <span className="hint">填客户 ID（逗号分隔）；没有订阅的人会被跳过并说明原因</span>
+              <strong>替指定客户发放</strong>
+              <span className="hint">
+                填客户 ID（逗号分隔，一次最多 20 个）—— 等于替他们点一下「领取」；
+                没有订阅、也没配体验套餐的人会被拒绝并说明原因
+              </span>
             </div>
-            {/* 批量发放：只建任务，立刻返回；进度由 cron 推进（上万人不能在一次请求里发完） */}
-            {granting !== null && <BroadcastPanel promotionId={granting} />}
             <div className="row" style={{ gap: 8, marginTop: 8 }}>
               <input
                 value={grantIds}
@@ -405,19 +331,16 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
                   }
                   void run(async () => {
                     const r = await api.grantPromotion(granting, ids);
-                    const skipped = r.results.filter((x) => !x.granted && !x.pending);
-                    // claim 模式下"发出去"是发券，不是到账 —— 结论要分开说，否则会以为
-                    // 权益已经加上了（后台口径和用户手里的东西必须一致）
+                    const failed = r.results.filter((x) => !x.granted);
                     const parts: string[] = [];
-                    if (r.granted) parts.push(`已到账 ${r.granted} 人`);
-                    if (r.pending) parts.push(`已发券 ${r.pending} 人（等用户自己领）`);
-                    if (skipped.length) {
+                    if (r.granted) parts.push(`已发放 ${r.granted} 人`);
+                    if (failed.length) {
                       parts.push(
-                        `跳过 ${skipped.length} 人：` +
-                          skipped.map((x) => `#${x.customer_id} ${x.skipped}`).join("；"),
+                        `未发放 ${failed.length} 人：` +
+                          failed.map((x) => `#${x.customer_id} ${x.reason}`).join("；"),
                       );
                     }
-                    if (skipped.length) setError(parts.join("；"));
+                    if (failed.length) setError(parts.join("；"));
                   }, "发放完成");
                 }}
               >
@@ -429,7 +352,7 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
 
         <p className="hint" style={{ marginTop: 12 }}>
           {isGift
-            ? "礼包只改权益：不改金额、不改残值。自动到账会生成一张 0 元已付订单（财务可对账）；待领取只发券，用户点了才产生订单与核销。"
+            ? "礼包只改权益：不改金额、不改残值，也不产生订单。凭证是核销行（含活动快照），历史在订阅变更里。"
             : "规则：一次下单最多生效一个折扣（多个命中取更优，不叠加）；核销在支付成功后才记录。"}
         </p>
       </div>

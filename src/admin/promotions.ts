@@ -12,21 +12,17 @@
 
 import {
   AUDIENCES,
-  EMPTY_REWARDS,
-  GIFT_DELIVERIES,
   PROMOTION_COLUMNS,
   hasRewards,
   normalizeRewards,
   promoBadgeText,
   rowToPromotion,
 } from "../promotions/model";
-import { DEFAULT_CLAIM_DAYS } from "../promotions/claim";
-import { deliverGift } from "../promotions/gift";
-import { cancelRun, getRun, latestRun, runProgressText, startRun } from "../promotions/runs";
+import { claimGiftFor } from "../promotions/gift";
 import { generateCodes, listCodes, revokeCode } from "../promotions/codes";
 
 import type { Env } from "../env";
-import type { GiftDelivery, GiftRewards, Promotion, PromotionRow } from "../promotions/model";
+import type { GiftRewards, Promotion, PromotionRow } from "../promotions/model";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -88,22 +84,9 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   const rewards = normalizeRewards(input.rewards);
   if (kind === "gift" && !hasRewards(rewards)) errors.push("礼包至少要送一项：天数 / 流量 GB");
 
-  // ── 送达方式（只对礼包有意义）──
-  //   auto  = 触发即到账（悄悄改账，用户感知不到）
-  //   claim = 只发一张券，用户自己在有效期内点领取（做营销要用这种）
-  const deliveryRaw = str(input.delivery) || "auto";
-  if (!(GIFT_DELIVERIES as readonly string[]).includes(deliveryRaw)) {
-    errors.push("delivery 只能是 auto / claim");
-  }
-  const delivery: GiftDelivery = kind === "gift" && deliveryRaw === "claim" ? "claim" : "auto";
-  let claimValidDays: number | null = null;
-  if (delivery === "claim") {
-    const raw = num(input.claim_valid_days) ?? DEFAULT_CLAIM_DAYS;
-    if (!(raw >= 1 && raw <= 90)) errors.push("待领取有效期必须是 1–90 天");
-    else claimValidDays = Math.round(raw);
-  }
-  // 通知邮件默认开：不发的话"待领取"没人知道、"已到账"没人感知
-  const notify = input.notify !== false;
+  // 收据邮件**默认不发**：领取结果同步显示在那一屏，邮件只会晚到且重复，
+  // 还吃发信配额（那个配额是验证码的命脉）。要留档的租户自己打开。
+  const notify = input.notify === true;
 
   const audience = str(input.audience) || "all";
   if (!(AUDIENCES as readonly string[]).includes(audience)) {
@@ -187,8 +170,6 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
       limit_plan_kinds: kinds as Promotion["limit_plan_kinds"],
       limit_plan_ids: ids,
       rewards,
-      delivery,
-      claim_valid_days: claimValidDays,
       notify,
       audience: audience as Promotion["audience"],
       audience_days: audience === "expiring" ? Math.round(audienceDays ?? 7) : null,
@@ -217,8 +198,6 @@ interface PromotionInput {
   limit_plan_kinds: Promotion["limit_plan_kinds"];
   limit_plan_ids: string[];
   rewards: GiftRewards;
-  delivery: GiftDelivery;
-  claim_valid_days: number | null;
   notify: boolean;
   audience: Promotion["audience"];
   audience_days: number | null;
@@ -239,17 +218,17 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
   const now = new Date().toISOString();
   const res = await env.DB.prepare(
     `INSERT INTO promotions (auto_apply, name, kind, benefit_type, benefit_value, min_subtotal_minor,
-       limit_plan_kinds, limit_plan_ids, rewards_json, delivery, claim_valid_days, notify,
+       limit_plan_kinds, limit_plan_ids, rewards_json, notify,
        audience, audience_days, cooldown_hours,
        plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
        referrer_reward_type, referrer_reward_value, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
-      input.delivery, input.claim_valid_days, input.notify ? 1 : 0,
+      input.notify ? 1 : 0,
       input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
@@ -263,7 +242,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
   await env.DB.prepare(
     `UPDATE promotions SET auto_apply = ?, name = ?, kind = ?, benefit_type = ?, benefit_value = ?,
        min_subtotal_minor = ?, limit_plan_kinds = ?, limit_plan_ids = ?, rewards_json = ?,
-       delivery = ?, claim_valid_days = ?, notify = ?,
+       notify = ?,
        audience = ?, audience_days = ?, cooldown_hours = ?, plan_id = ?,
        new_user_within_days = ?, starts_at = ?, ends_at = ?, max_uses = ?, max_uses_per_customer = ?,
        badge_label = ?, visible = ?, referrer_reward_type = ?, referrer_reward_value = ?, updated_at = ?
@@ -273,7 +252,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
       input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
-      input.delivery, input.claim_valid_days, input.notify ? 1 : 0,
+      input.notify ? 1 : 0,
       input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
@@ -301,8 +280,7 @@ function view(
     limit_plan_kinds: promo.limit_plan_kinds,
     limit_plan_ids: promo.limit_plan_ids,
     rewards: promo.rewards,
-    delivery: promo.delivery,
-    claim_valid_days: promo.claim_valid_days,
+
     notify: promo.notify,
     audience: promo.audience,
     audience_days: promo.audience_days,
@@ -341,7 +319,6 @@ const LOCKED_LABELS: [keyof Promotion, string][] = [
   ["benefit_type", "优惠方式"],
   ["benefit_value", "力度"],
   ["rewards", "礼包内容"],
-  ["delivery", "送达方式"],
   ["min_subtotal_minor", "最低消费"],
   ["limit_plan_kinds", "适用套餐类型"],
   ["limit_plan_ids", "指定套餐"],
@@ -417,8 +394,9 @@ export async function handleAdminPromotions(
       `SELECT ${PROMOTION_COLUMNS} FROM promotions ORDER BY status, id DESC`,
     ).all<PromotionRow>();
     const counts = await env.DB.prepare(
-      `SELECT promotion_id, COUNT(*) AS n FROM redemptions
-        WHERE order_id IS NOT NULL GROUP BY promotion_id`,
+      // 口径：**数全部行**（含"正在发放"的占位）。礼包核销没有订单，
+      // 用 `order_id IS NOT NULL` 会把礼包全漏掉。
+      `SELECT promotion_id, COUNT(*) AS n FROM redemptions GROUP BY promotion_id`,
     ).all<{ promotion_id: number; n: number }>();
     const byId = new Map((counts.results ?? []).map((r) => [r.promotion_id, r.n]));
 
@@ -576,8 +554,7 @@ export async function handleAdminPromotions(
 
     const used = await env.DB.prepare(
       `SELECT (SELECT COUNT(*) FROM promotion_codes WHERE promotion_id = ?) AS codes,
-              (SELECT COUNT(*) FROM redemptions
-                WHERE promotion_id = ? AND order_id IS NOT NULL) AS redemptions`,
+              (SELECT COUNT(*) FROM redemptions WHERE promotion_id = ?) AS redemptions`,
     )
       .bind(id, id)
       .first<{ codes: number; redemptions: number }>();
@@ -653,55 +630,10 @@ export async function handleAdminPromotions(
     return json({ ok: true });
   }
 
-  // ── 批量发放（建任务，立刻返回；真正发放由 cron 分页做）──
-  //  为什么不在请求里直接发：上万人 = 上万次 D1 + 上万次 cf-api 调用，
-  //  单次 invocation 的 CPU / 子请求 / 并发连接全都撑不住（见 `promotions/runs.ts`）。
-  const broadcast = path.match(/^\/promotions\/(\d+)\/broadcast$/);
-  if (method === "POST" && broadcast) {
-    const id = Number(broadcast[1]);
-    const row = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
-      .bind(id)
-      .first<PromotionRow>();
-    if (!row) return fail(404, "promotion_not_found");
-    const promo = rowToPromotion(row);
-    if (promo.kind !== "gift") return fail(409, "not_gift", "只有礼包能批量发放");
-    if (promo.status !== "active") return fail(409, "invalid_state", "先上线再批量发放");
-
-    const { run, alreadyRunning } = await startRun(env, { promotionId: id });
-    if (!alreadyRunning) {
-      await audit(env, actor, "promotion_broadcast_started", String(id), {
-        run_id: run.id,
-        total: run.total,
-      });
-    }
-    return json(
-      {
-        run: { ...run, progress_text: runProgressText(run) },
-        // true = 已经有一个在跑，这次没有新建（幂等，重复点按钮不会开两个任务）
-        already_running: alreadyRunning,
-      },
-      alreadyRunning ? 200 : 202,
-    );
-  }
-
-  // 进度（前端轮询；文案由 CRM 给）
-  const runOne = path.match(/^\/promotions\/(\d+)\/run$/);
-  if (method === "GET" && runOne) {
-    const id = Number(runOne[1]);
-    const run = await latestRun(env, id);
-    return json({ run: run ? { ...run, progress_text: runProgressText(run) } : null });
-  }
-
-  const runCancel = path.match(/^\/promotions\/runs\/(\d+)\/cancel$/);
-  if (method === "POST" && runCancel) {
-    const runId = Number(runCancel[1]);
-    const ok = await cancelRun(env, runId);
-    if (!ok) return fail(409, "invalid_state", "这个任务已经结束或不存在");
-    await audit(env, actor, "promotion_broadcast_cancelled", String(runId), null);
-    return json({ ok: true });
-  }
-
-  // ── 手动发放（礼包）──
+  // ── 手动发放（礼包）：**直接走用户领取那条路** ──
+  //  拉取模型下没有"批量发一万份券"这回事：礼包是货架上的一条活动，
+  //  用户自己来领。后台的"发给指定客户"只是**替某个人点一下领取**，
+  //  所以它和 `POST /me/gifts/{id}/claim` 是同一个函数，同一套名额与幂等。
   const grant = path.match(/^\/promotions\/(\d+)\/grant$/);
   if (method === "POST" && grant) {
     const id = Number(grant[1]);
@@ -717,41 +649,46 @@ export async function handleAdminPromotions(
     const promo = rowToPromotion(row);
     if (promo.kind !== "gift") return fail(409, "not_gift", "只有礼包能直接发放（优惠券请让用户输码）");
 
-    // 送达方式决定这里到底是"已到账"还是"已发券"（`delivery='claim'` 时权益还没动）
-    const results = [];
-    for (const customerId of ids) {
-      const result = await deliverGift(env, { promotionId: id, customerId, source: "manual" });
-      results.push(
-        result ?? {
-          promotion_id: id,
-          customer_id: customerId,
-          granted: false,
-          pending: false,
-          skipped: "礼包不存在或已不是礼包",
-          order_id: null,
-          applied: EMPTY_REWARDS,
-        },
+    // 一次请求能处理的客户数是有上限的：每个都要改订阅 + 调 cf-api。
+    // 超过就分批调用（后台前端按页发），而不是让一次 invocation 硬扛。
+    if (ids.length > GRANT_BATCH_LIMIT) {
+      return fail(
+        400,
+        "too_many",
+        `一次最多 ${GRANT_BATCH_LIMIT} 个客户；请分批发放`,
       );
     }
+
+    const results = [];
+    for (const customerId of ids) {
+      const r = await claimGiftFor(env, { promotionId: id, customerId });
+      results.push({
+        promotion_id: id,
+        customer_id: customerId,
+        granted: r.state === "granted",
+        state: r.state,
+        reason: r.state === "granted" ? null : r.message,
+        applied: r.applied,
+      });
+    }
     const granted = results.filter((r) => r.granted).length;
-    const pending = results.filter((r) => r.pending).length;
     await audit(env, actor, "promotion_granted", String(id), {
       granted,
-      pending,
       total: results.length,
     });
-    return json({ granted, pending, total: results.length, results });
-  }
-
-  const oneRun = path.match(/^\/promotions\/runs\/(\d+)$/);
-  if (method === "GET" && oneRun) {
-    const run = await getRun(env, Number(oneRun[1]));
-    if (!run) return fail(404, "run_not_found");
-    return json({ run: { ...run, progress_text: runProgressText(run) } });
+    return json({ granted, total: results.length, results });
   }
 
   return null;
 }
+
+/**
+ * 一次手动发放的客户上限。
+ *
+ * 每个客户都要改订阅 + 调 cf-api，Workers 单次调用只有 6 个在飞连接、
+ * 30 秒 CPU —— 分批是**硬约束**，不是保守。
+ */
+export const GRANT_BATCH_LIMIT = 20;
 
 /** 把 `[1,2,3]` 归一成去重后的正整数数组；含非法值返回 null（整体拒绝） */
 function readIdList(raw: unknown): number[] | null {

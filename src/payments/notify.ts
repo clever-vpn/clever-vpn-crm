@@ -20,7 +20,6 @@ import {
 import { gatewaySecret } from "./checkout";
 import { provisionOrder } from "../platform/provision";
 import { rewardReferrer } from "../promotions/referral";
-import { grantSignupGifts } from "../promotions/triggers";
 import { redeemOrderPromotion } from "../promotions/service";
 import { customerSubscription, freshenTraffic, logChange, upsertSubscription } from "../subscriptions/store";
 import {
@@ -203,21 +202,10 @@ export async function settlePaidOrder(
 
     await provisionOrder(env, order.id);
 
-    // ── 注册礼包（`audience='new'` 的礼包）──
-    // 必须在**开通之后**：新客还没有订阅，天数/流量无处可放。
-    // 这里已经有钱到账，礼包失败绝不能影响订单结论。
-    try {
-      const gifts = await grantSignupGifts(env, order.customer_id, now);
-      const done = gifts.filter((g) => g.granted).length;
-      const pending = gifts.filter((g) => g.pending).length;
-      if (done || pending) {
-        console.log(
-          `[gift] 注册礼包已发 customer=${order.customer_id} 到账=${done} 待领取=${pending}`,
-        );
-      }
-    } catch (e) {
-      console.error(`[gift] 注册礼包失败 order=${order.code}: ${e instanceof Error ? e.message : e}`);
-    }
+    // 礼包**不在这里发**：拉取模型下礼包是货架上的一条活动，
+    // 由用户自己来领（`GET /me/gifts` → `POST /me/gifts/{id}/claim`）。
+    // 付完款顺手把"新人礼包"塞给他属于推送模型，已经删掉了 ——
+    // 推送要回答"发给谁、发多少、发漏了怎么办"，而答案永远是"他不知道"。
   } catch (e) {
     // 钱已收：绝不能回退订单状态，只记错误等重试（provision_attempts 供运维查看）
     const msg = e instanceof Error ? e.message : String(e);

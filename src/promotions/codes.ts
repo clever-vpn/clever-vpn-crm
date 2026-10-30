@@ -65,8 +65,10 @@ export async function lookupCode(env: Env, rawCode: string): Promise<CodeHit | n
     .first<PromotionRow>();
   if (!promoRow || promoRow.status !== "active") return null;
 
+  // 码用掉多少 = **数全部核销行**（含"正在发放"的占位）——
+  // 礼包核销没有订单，所以不能再靠 `order_id IS NOT NULL` 判断。
   const used = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM redemptions WHERE code_id = ? AND order_id IS NOT NULL`,
+    `SELECT COUNT(*) AS n FROM redemptions WHERE code_id = ?`,
   )
     .bind(meta.id)
     .first<{ n: number }>();
@@ -148,7 +150,7 @@ export interface CodeRowView {
 export async function listCodes(env: Env, promotionId: number): Promise<CodeRowView[]> {
   const rows = await env.DB.prepare(
     `SELECT c.id, c.code, c.batch_id, c.max_uses, c.status, c.expires_at, c.note, c.created_at,
-            (SELECT COUNT(*) FROM redemptions r WHERE r.code_id = c.id AND r.order_id IS NOT NULL) AS used
+            (SELECT COUNT(*) FROM redemptions r WHERE r.code_id = c.id) AS used
        FROM promotion_codes c
       WHERE c.promotion_id = ?
       ORDER BY c.id`,
