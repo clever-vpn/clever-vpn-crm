@@ -22,6 +22,23 @@ import { runSettlement } from "./subscriptions/store";
 import { runExpiringGifts } from "./promotions/triggers";
 import { handleUnsubscribe } from "./notices/unsubscribe";
 import { sendPendingNotices } from "./notices/store";
+import { pollPendingOrders } from "./payments/poll";
+import { getNumberSetting, setSetting } from "./settings";
+
+/** 每小时重活的门：距上次执行 ≥55 分钟就允许跑（漏了下一 tick 自动补，不用等整点） */
+const HOURLY_EVERY_MS = 55 * 60 * 1000;
+const LAST_HOURLY_RUN = "last_hourly_run";
+
+async function dueForHourly(env: Env, now: Date): Promise<boolean> {
+  const last = await getNumberSetting(env, LAST_HOURLY_RUN);
+  // 首次部署没有这一行 ⇒ 立刻跑一次（否则要空等 55 分钟）
+  if (last === null) return true;
+  return now.getTime() - last >= HOURLY_EVERY_MS;
+}
+
+async function markHourlyRun(env: Env, now: Date): Promise<void> {
+  await setSetting(env, LAST_HOURLY_RUN, String(now.getTime()), now);
+}
 
 export type { Env };
 
@@ -107,37 +124,79 @@ export default {
   },
 
   /**
-   * 定时任务：周期套餐的额度重置（每小时跑一次，幂等）。
+   * 定时任务：**一个时钟，三道门**（`wrangler.jsonc` 里只配了一个 cron）
    *
-   * 为什么不用平台的 `customers.quota`：平台的月度边界是"记账自然月"，
-   * 10 号买的用户拿不到完整 30 天额度；只有按**用户自己的锚点**重置才对得上销售话术。
-   * 结算失败时 `last_settled_at` 不动，下一小时自动重试。
+   * 每 2 分钟一次的 tick 是**泵的心跳**，不是"所有活每 2 分钟干一遍"：
+   *
+   *   门 B（每小时）—— `last_hourly_run` 距今 ≥55 分钟才跑，**并且独占这一 tick**。
+   *       跑的是一次性重活：补落账（provisioning 重试）、周期结算、到期礼包探测。
+   *       独占是为了不让它被 25 秒预算切成半截（结算可能扫上千行）。
+   *   门 A（其余 tick）—— 有界的小片：
+   *       ① 查单：只查"到点该查"的 pending 单（退避曲线，`payments/poll.ts`）；
+   *       ② 通知泵：按日配额发 `notices`（用尽自动顺延次日）。
+   *
+   * 为什么不用"分钟数匹配"判断整点：部署/异常漏掉一次 tick 就要再等一小时；
+   * 用**上次执行时间**做门是自愈的（漏了就下一 tick 补）。
    */
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     await ensureSchema(env.DB);
+    const now = new Date();
+
+    // ── 门 B：每小时重活（独占这一 tick）──
+    if (await dueForHourly(env, now)) {
+      await markHourlyRun(env, now);
+      ctx.waitUntil(
+        // 先补落账：付款成功但 cf-api 没通时，订单停在 provisioning，用户拿不到码
+        retryProvisioning(env)
+          .then((report) => {
+            if (report.retried || report.failed) {
+              console.log(`[provision] retried=${report.retried} failed=${report.failed}`);
+            }
+          })
+          .catch((e: unknown) => console.error("[provision] 重试失败", e)),
+      );
+      ctx.waitUntil(
+        runSettlement(env)
+          .then((report) => {
+            if (report.settled || report.failed) {
+              console.log(
+                `[settle] scanned=${report.scanned} settled=${report.settled} failed=${report.failed}`,
+              );
+            }
+            if (report.failed) console.warn(`[settle] errors: ${report.errors.join(" | ")}`);
+          })
+          .catch((e: unknown) => console.error("[settle] 失败", e)),
+      );
+      // 到期前挽回：把 `audience='expiring'` 的礼包发给快到期的人（幂等）
+      ctx.waitUntil(
+        runExpiringGifts(env)
+          .then((report) => {
+            if (report.granted || report.pending || report.skipped) {
+              console.log(
+                `[gift] expiring granted=${report.granted} pending=${report.pending} skipped=${report.skipped}`,
+              );
+            }
+          })
+          .catch((e: unknown) => console.error("[gift] 到期礼包失败", e)),
+      );
+      return;
+    }
+
+    // ── 门 A：查单（钱的事优先级最高）──
     ctx.waitUntil(
-      // 先补落账：付款成功但 cf-api 没通时，订单停在 provisioning，用户拿不到码
-      retryProvisioning(env)
+      pollPendingOrders(env)
         .then((report) => {
-          if (report.retried || report.failed) {
-            console.log(`[provision] retried=${report.retried} failed=${report.failed}`);
-          }
-        })
-        .catch((e: unknown) => console.error("[provision] 重试失败", e)),
-    );
-    ctx.waitUntil(
-      runSettlement(env)
-        .then((report) => {
-          if (report.settled || report.failed) {
+          if (report.paid || report.expired || report.failed) {
             console.log(
-              `[settle] scanned=${report.scanned} settled=${report.settled} failed=${report.failed}`,
+              `[poll] scanned=${report.scanned} paid=${report.paid} expired=${report.expired} failed=${report.failed}`,
             );
           }
-          if (report.failed) console.warn(`[settle] errors: ${report.errors.join(" | ")}`);
+          if (report.errors.length) console.warn(`[poll] ${report.errors.join(" | ")}`);
         })
-        .catch((e: unknown) => console.error("[settle] 失败", e)),
+        .catch((e: unknown) => console.error("[poll] 查单失败", e)),
     );
-    // 通知泵：把 `notices` 里待发的邮件发掉（按日配额平摊；配额用尽自动顺延到明天）
+
+    // ── 门 A：通知泵（按日配额；用尽自动顺延次日）──
     ctx.waitUntil(
       sendPendingNotices(env)
         .then((report) => {
@@ -149,18 +208,6 @@ export default {
           if (report.errors.length) console.warn(`[notice] errors: ${report.errors.join(" | ")}`);
         })
         .catch((e: unknown) => console.error("[notice] 发送失败", e)),
-    );
-    // 到期前挽回：把 `audience='expiring'` 的礼包发给快到期的人（幂等，重复跑不会双发）
-    ctx.waitUntil(
-      runExpiringGifts(env)
-        .then((report) => {
-          if (report.granted || report.pending || report.skipped) {
-            console.log(
-              `[gift] expiring granted=${report.granted} pending=${report.pending} skipped=${report.skipped}`,
-            );
-          }
-        })
-        .catch((e: unknown) => console.error("[gift] 到期礼包失败", e)),
     );
   },
 } satisfies ExportedHandler<Env>;

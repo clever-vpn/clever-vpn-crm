@@ -13,8 +13,16 @@ import { decryptSecret } from "./secret";
 import type { Env } from "../env";
 import type { Plan } from "../plans/model";
 
-/** 订单有效期（分钟）：超过就不再等回调，但钱晚到仍会转 paid */
-export const ORDER_TTL_MINUTES = 15;
+/**
+ * 订单有效期（分钟）= **支付窗口**。
+ *
+ * 窗口内 cron 按退避曲线主动查单（`payments/poll.ts`）；到点没查到钱就置 `expired`
+ * 并**停止主动查单**，之后只等回调（钱晚到仍会转 `paid`）+ 后台人工「查一次」。
+ *
+ * 60 分钟是权衡：更短会让"慢用户"付完就见过期，更长会让"点了又放弃"的单拖着一堆
+ * 查单请求（每个单每 2 分钟一次、打在网关的 QPS 上）。
+ */
+export const ORDER_TTL_MINUTES = 60;
 
 /** 双击保护窗口（秒）：同一 plan + 方式在这个窗口内复用未过期的 pending 单 */
 const REUSE_WINDOW_SECONDS = 60;

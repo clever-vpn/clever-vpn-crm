@@ -476,8 +476,19 @@ export const orders = sqliteTable(
     /** 创建请求 / 回调的原始报文 —— 出问题时唯一的证据 */
     raw_create: text("raw_create"),
     raw_notify: text("raw_notify"),
-    /** 支付超时；过期后不再等回调，但查到钱仍会转 paid */
+    /** 支付超时（TTL 60 分钟）；过期后**不再自动查单**，但回调到了仍会转 paid */
     expires_at: text("expires_at"),
+    /**
+     * 下一次该主动查单的时间；`NULL` = 不用查（已过期 / 没有查单接口的网关 /
+     * 已经查到结果）。
+     *
+     * 退避曲线按**订单年龄**算（`payments/poll.ts` 的 `POLL_BACKOFF`）：
+     * 前 10 分钟每 2 分钟、10–30 分钟每 5 分钟、30–60 分钟每 10 分钟，之后停 ——
+     * 一单约 12 次，而不是每 2 分钟死查到 TTL（30 次）。
+     */
+    next_poll_at: text("next_poll_at"),
+    /** 这一单我们主动问过网关几次（后台可见："确认过 8 次"） */
+    poll_attempts: integer("poll_attempts").notNull().default(0),
     /** pending | paid | provisioning | active | expired | closed | refunded */
     status: text("status").notNull().default("pending"),
     /** 生效后回填 */
@@ -499,6 +510,8 @@ export const orders = sqliteTable(
   },
   (t) => [
     index("idx_orders_customer").on(t.customer_id, t.id),
+    // 查单泵的取数索引：`status='pending' AND next_poll_at <= now`
+    index("idx_orders_poll").on(t.status, t.next_poll_at),
     index("idx_orders_status").on(t.status, t.created_at),
     /** 兜底 cron 扫 `pending` + 按网关看健康度 */
     index("idx_orders_gateway").on(t.gateway_id, t.status),

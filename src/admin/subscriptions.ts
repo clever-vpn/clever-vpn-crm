@@ -20,6 +20,7 @@ import {
   upsertSubscription,
 } from "../subscriptions/store";
 import { adjustSubscription } from "../subscriptions/adjust";
+import { pollOrderOnce } from "../payments/poll";
 
 import type { Env } from "../env";
 import type { PlanRow } from "../plans/model";
@@ -156,6 +157,17 @@ export async function handleAdminSubscriptions(
       .bind(...binds, limit)
       .all();
     return json({ orders: rows.results ?? [] });
+  }
+
+  // ── 手动查单（客服兜底）──
+  //  过期订单不再自动查（`payments/poll.ts` 的边界之一），客服就靠这个按钮问网关一次。
+  //  与自动查单走同一段 `queryOnce()`，判据完全一致；只是不看 TTL、也不改自动节奏。
+  const pollOne = path.match(/^\/orders\/([A-Za-z0-9_-]{4,64})\/poll$/);
+  if (method === "POST" && pollOne) {
+    const result = await pollOrderOnce(env, pollOne[1]!);
+    if (!result) return fail(404, "order_not_found");
+    await audit(env, actor, "order_polled", pollOne[1]!, { verdict: result.verdict });
+    return json(result);
   }
 
   if (method === "POST" && path === "/customers") {
