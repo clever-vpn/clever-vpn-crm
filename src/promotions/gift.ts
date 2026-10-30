@@ -19,7 +19,11 @@
 import { EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, rowToPromotion } from "./model";
 import { checkForCustomer } from "./service";
 import { provisionSubscription } from "../platform/provision";
-import { GIGA, updateCustomer } from "../platform/client";
+import {
+  applicableAdditive,
+  applyAdditive,
+  pushAdditive,
+} from "../subscriptions/entitlement";
 import {
   customerSubscription,
   freshenTraffic,
@@ -103,53 +107,10 @@ async function createGiftOrder(
 /**
  * 这份订阅**能收下**哪些奖励 —— 不适用的维度归 0。
  *
- *   - `days`：`expires_at === null`（永久 / 无限期）⇒ 延长无处可延，归 0
- *   - `gb`  ：period 的 `period_quota_gb === null`、traffic 的 `traffic_total_gb === null`
- *             （不限量）⇒ 加流量没有意义，归 0
- *
- * 两个维度**互不牵连**：能收天数不代表能收流量，反之亦然。
+ * 实现与"管理员直接调整"共用（`subscriptions/entitlement.ts`）：无限期不收天数、
+ * 不限量不收 GB，两个维度互不牵连。
  */
-export function applicableRewards(
-  sub: Pick<Subscription, "kind" | "expires_at" | "period_quota_gb" | "traffic_total_gb">,
-  rewards: GiftRewards,
-): GiftRewards {
-  const unlimited =
-    sub.kind === "period" ? sub.period_quota_gb === null : sub.traffic_total_gb === null;
-  return {
-    days: sub.expires_at === null ? 0 : rewards.days,
-    gb: unlimited ? 0 : rewards.gb,
-  };
-}
-
-/**
- * 只把这次礼包**真正改动的字段**推到平台。
- *
- * 为什么不复用 `provisionSubscription`：它会写**全量控制参数**，其中
- * `traffic_balance` 对 period 是 `额度 + 池子` 的绝对值 —— 只送天数时这么写，
- * 会把用户本月**已经用掉的流量还回去**。所以这里按维度精确写：
- *   - 只有天数 ⇒ 只 PATCH `expire_date`
- *   - 有 GB   ⇒ 写 `平台真实剩余 + gb`（基数由调用方先 `freshenTraffic` 拿到）
- *
- * 还没落账（没有 `platform_customer_id`）的直接返回：等 `retryProvisioning`
- * 全量落账，那时平台上还没有任何已用量，`额度 + 池子` 就是对的。
- */
-async function pushGift(
-  env: Env,
-  sub: Subscription,
-  applied: GiftRewards,
-  platformRemainingGb: number | null | undefined,
-  expiresAt: string | null,
-): Promise<void> {
-  if (!sub.platform_customer_id) return;
-
-  const patch: Record<string, unknown> = {};
-  if (applied.days > 0 && expiresAt) patch.expire_date = expiresAt.slice(0, 10);
-  if (applied.gb > 0 && platformRemainingGb !== undefined && platformRemainingGb !== null) {
-    patch.traffic_balance = Math.round((platformRemainingGb + applied.gb) * GIGA);
-  }
-  if (Object.keys(patch).length === 0) return;
-  await updateCustomer(env, sub.platform_customer_id, patch);
-}
+export const applicableRewards = applicableAdditive;
 
 /**
  * 把奖励项作用到**已有订阅**上，并落账到 cf-api。
@@ -172,29 +133,11 @@ async function applyGift(
 ): Promise<{ subscriptionId: number; applied: GiftRewards }> {
   const before = opts.before;
   const customerId = before.customer_id;
-  const { days, gb } = opts.applied;
 
-  const next: Subscription = { ...before };
-
-  // 天数：只改到期日（`applicableRewards` 已保证 expires_at 非 null）
-  if (days > 0 && next.expires_at !== null) {
-    next.expires_at = new Date(Date.parse(next.expires_at) + days * DAY_MS).toISOString();
-  }
-
-  // 流量：period 进额外池；traffic 抬高整包与剩余。基准都取平台真实剩余（有就优先）
-  if (gb > 0) {
-    if (next.kind === "traffic") {
-      next.traffic_total_gb = (next.traffic_total_gb ?? 0) + gb;
-    } else {
-      next.period_extra_gb = (next.period_extra_gb ?? 0) + gb;
-    }
-    const base = opts.platformRemainingGb ?? next.traffic_remaining_gb;
-    next.traffic_remaining_gb = base === null ? null : base + gb;
-    if (opts.platformRemainingGb !== undefined && opts.platformRemainingGb !== null) {
-      // 我们马上就把这个数写到平台 ⇒ 缓存就是真值
-      next.traffic_synced_at = new Date().toISOString();
-    }
-  }
+  // 加天数 / 加流量：与"管理员直接调整"共用同一份实现（见 entitlement.ts）
+  const next = applyAdditive(before, opts.applied, {
+    platformRemainingGb: opts.platformRemainingGb,
+  });
 
   const id = await upsertSubscription(env, next);
   const after = { ...next, id };
@@ -214,7 +157,7 @@ async function applyGift(
   });
 
   try {
-    await pushGift(env, after, opts.applied, opts.platformRemainingGb, next.expires_at);
+    await pushAdditive(env, after, opts.applied, opts.platformRemainingGb, next.expires_at);
   } catch (e) {
     // 本地账已记；推特失败交给月结/人工补齐，不影响发放结论
     console.error(
@@ -276,22 +219,9 @@ async function openFromCarrierPlan(
   const { base, applied } = opts;
   const customerId = base.customer_id;
 
-  const next: Subscription = { ...base, id: 0 };
-
-  // 天数：在**套餐给的期限之上再加**（不是覆盖）—— 载体套餐自己有 30 天、
-  // 礼包再送 7 天，用户拿到的是 37 天。`base.expires_at === null`（永久）时
-  // `applied.days` 已经归 0，这里不会动。
-  if (applied.days > 0 && base.expires_at !== null) {
-    next.expires_at = new Date(Date.parse(base.expires_at) + applied.days * DAY_MS).toISOString();
-  }
-  if (applied.gb > 0) {
-    if (base.kind === "traffic") {
-      next.traffic_total_gb = (base.traffic_total_gb ?? 0) + applied.gb;
-      next.traffic_remaining_gb = (base.traffic_remaining_gb ?? 0) + applied.gb;
-    } else {
-      next.period_extra_gb = (base.period_extra_gb ?? 0) + applied.gb;
-    }
-  }
+  // 0 元开户：套餐给骨架，礼包在**它之上累加**（不是覆盖）——
+  // 载体套餐自己有 30 天、礼包再送 7 天，用户拿到的是 37 天。
+  const next = applyAdditive({ ...base, id: 0 }, applied);
 
   const id = await upsertSubscription(env, next);
   const after = { ...next, id };

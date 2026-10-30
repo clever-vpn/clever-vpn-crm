@@ -19,6 +19,7 @@ import {
   runSettlement,
   upsertSubscription,
 } from "../subscriptions/store";
+import { adjustSubscription } from "../subscriptions/adjust";
 
 import type { Env } from "../env";
 import type { PlanRow } from "../plans/model";
@@ -228,6 +229,42 @@ export async function handleAdminSubscriptions(
     });
     await audit(env, actor, "subscription_created", String(id), { plan: plan.id, paid_minor: paidMinor });
     return json({ subscription: { id, ...draft }, plan: planForClient(plan) }, 201);
+  }
+
+  // ── **直接调整权益**（特殊补偿通道）──
+  //    与礼包的边界：礼包是营销活动（有人群/名额/统计、产生 0 元订单）；
+  //    这里是"给某一个人补一点"，不绑定活动、不进营销统计，但**必须写原因**。
+  if (method === "POST" && path === "/subscriptions/adjust") {
+    const body = await readBody(request);
+    const customerId = Number(body.customer_id ?? 0);
+    if (!customerId) return fail(400, "customer_id_required");
+
+    const result = await adjustSubscription(env, {
+      customerId,
+      days: body.days === undefined || body.days === null ? 0 : Number(body.days),
+      gb: body.gb === undefined || body.gb === null ? 0 : Number(body.gb),
+      reason: typeof body.reason === "string" ? body.reason : "",
+      operator: actor,
+    });
+
+    if (!result.ok) {
+      const status =
+        result.error === "no_subscription" ? 404 : result.error === "platform_unreadable" ? 502 : 400;
+      return fail(status, result.error ?? "invalid", result.message);
+    }
+
+    await audit(env, actor, "subscription_adjusted", String(customerId), {
+      days: result.applied.days,
+      gb: result.applied.gb,
+      reason: (body.reason as string).trim(),
+    });
+
+    return json({
+      subscription: result.after,
+      applied: result.applied,
+      records: result.records,
+      platform_synced: result.platform_synced,
+    });
   }
 
   // ── 跑一次结算（默认 dry-run，避免误写线上）──
