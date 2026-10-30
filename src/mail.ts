@@ -31,6 +31,13 @@ export interface MailMessage {
   subject: string;
   text: string;
   html?: string;
+  /**
+   * 自定义邮件头（只放行白名单，见 Cloudflare Email Service headers 文档）。
+   *
+   * 目前只用于**退订**：`List-Unsubscribe` + `List-Unsubscribe-Post`
+   * 让邮件客户端的"退订"按钮能一键生效。Resend 走同名 `headers` 字段。
+   */
+  headers?: Record<string, string>;
 }
 
 export interface MailResult {
@@ -81,6 +88,7 @@ export async function sendMail(env: MailEnv, message: MailMessage): Promise<Mail
         subject: message.subject,
         text: message.text,
         html: message.html ?? `<p>${message.text}</p>`,
+        ...(message.headers ? { headers: message.headers } : {}),
       });
       return { ok: true };
     }
@@ -96,6 +104,7 @@ export async function sendMail(env: MailEnv, message: MailMessage): Promise<Mail
         subject: message.subject,
         text: message.text,
         html: message.html ?? `<p>${message.text}</p>`,
+        ...(message.headers ? { headers: message.headers } : {}),
       }),
     });
     if (!res.ok) {

@@ -88,6 +88,7 @@ export function emptyDraft(kind: PromotionKind): PromotionDraft {
     // 礼包默认「待领取」：送权益却不告诉用户，等于没送（营销要靠感知）
     delivery: kind === "gift" ? "claim" : "auto",
     claim_valid_days: kind === "gift" ? 7 : null,
+    notify: true,
     audience: kind === "referral" ? "new" : kind === "gift" ? "new" : "all",
     audience_days: null,
     cooldown_hours: null,
@@ -449,6 +450,19 @@ export function PromotionForm({
                   <option value="claim">待领取 —— 发一张券，用户自己领（推荐做营销）</option>
                   <option value="auto">自动到账 —— 触发即加进权益，静默</option>
                 </select>
+              </Field>
+              <Field
+                label="通知邮件"
+                hint="默认发。关掉 = 用户不会收到任何邮件（待领取的券没人知道、到账的权益没人感知）"
+              >
+                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={draft.notify}
+                    onChange={(e) => patch({ notify: e.target.checked })}
+                  />
+                  <span>给用户发通知邮件</span>
+                </label>
               </Field>
               {draft.delivery === "claim" && (
                 <Field

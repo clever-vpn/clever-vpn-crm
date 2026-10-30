@@ -22,6 +22,7 @@ import { consumeCode, issueCode } from "./email-code";
 import { handleAdminPlans } from "./plans";
 import { handleAdminGateways } from "./gateways";
 import { handleAdminPromotions } from "./promotions";
+import { handleAdminSettings } from "./settings";
 import { handleAdminSubscriptions } from "./subscriptions";
 import { emailCodeAvailable, mailReady, sendMail } from "../mail";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
@@ -411,6 +412,10 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
   // ── 促销（优惠码 / 邀请活动）──
   const promoResponse = await handleAdminPromotions(request, env, admin.email);
   if (promoResponse) return promoResponse;
+
+  // ── 运行期设置（发信配额等）──
+  const settingsResponse = await handleAdminSettings(request, env);
+  if (settingsResponse) return settingsResponse;
 
   if (method === "GET" && path === "/me") {
     return json({

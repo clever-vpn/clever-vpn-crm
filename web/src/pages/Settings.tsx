@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   ApiError,
   api,
+  type AdminSettings,
   type AuditEntry,
   type Me,
   type SessionInfo,
@@ -206,6 +207,91 @@ function MailCard({ me }: { me: Me }) {
         <p className="hint" style={{ marginTop: 8 }}>
           配置方式：`EMAIL` 绑定或 `RESEND_API_KEY`，并且设 `EMAIL_FROM`（域名需验证）。
         </p>
+      )}
+      <MailQuota />
+    </div>
+  );
+}
+
+/**
+ * 每日发信配额 —— **软上限**，不是"能发多少"。
+ *
+ * Cloudflare Email Service 的日配额按账号不同（示例 5000/天），我们在这里声明
+ * 一个自愿遵守的上限，并留出 `1 − ratio` 给**验证码**：
+ * App 是无密码登录，礼包邮件把配额吃干净 = 登录挂掉。
+ */
+function MailQuota() {
+  const [data, setData] = useState<AdminSettings["mail"] | null>(null);
+  const [quota, setQuota] = useState("");
+  const [ratio, setRatio] = useState("");
+  const [state, setState] = useState<{ kind: "idle" | "ok" | "error"; text: string }>({
+    kind: "idle",
+    text: "",
+  });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void api
+      .settings()
+      .then((res) => {
+        setData(res.mail);
+        setQuota(String(res.mail.daily_quota));
+        setRatio(String(res.mail.soft_ratio));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setState({ kind: "idle", text: "" });
+    try {
+      const res = await api.saveMailSettings({
+        daily_quota: Number(quota) || undefined,
+        soft_ratio: Number(ratio) || undefined,
+      });
+      setData(res.mail);
+      setState({ kind: "ok", text: "已保存" });
+    } catch (err) {
+      setState({ kind: "error", text: message(err, "保存失败") });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 18, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+      <h4 style={{ margin: "0 0 8px" }}>每日发信配额</h4>
+      <p className="hint" style={{ marginTop: 0 }}>
+        礼包通知和验证码共用同一个账号配额。这里配的是**我们自愿遵守的软上限**，
+        剩下的比例留给验证码 —— App 是无密码登录，配额吃干净等于用户登不进来。
+      </p>
+      <div className="row" style={{ gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 12, color: "var(--text-dim)" }}>每日配额</span>
+          <input value={quota} onChange={(e) => setQuota(e.target.value)} style={{ width: 120 }} />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 12, color: "var(--text-dim)" }}>软上限比例（0.1–1）</span>
+          <input value={ratio} onChange={(e) => setRatio(e.target.value)} style={{ width: 100 }} />
+        </label>
+        <button type="button" onClick={save} disabled={saving}>
+          保存
+        </button>
+        {data && (
+          <span className="hint" style={{ marginLeft: "auto" }}>
+            今日已发 {data.sent_today} / 软上限 {Math.floor(data.daily_quota * data.soft_ratio)}，
+            剩余 {data.quota_left}
+          </span>
+        )}
+      </div>
+      {data && (
+        <p className="hint" style={{ marginTop: 8 }}>
+          配额用尽后，未发出的礼包通知会**顺延到次日**（券和权益不受影响，只是晚点告诉他）。
+          默认值 {data.defaults.daily_quota} / {data.defaults.soft_ratio}。
+        </p>
+      )}
+      {state.kind !== "idle" && (
+        <div className={`notice ${state.kind === "ok" ? "ok" : "error"}`}>{state.text}</div>
       )}
     </div>
   );

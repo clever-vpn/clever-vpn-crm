@@ -20,6 +20,8 @@ import { handlePayRoutes } from "./payments/routes";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
 import { runExpiringGifts } from "./promotions/triggers";
+import { handleUnsubscribe } from "./notices/unsubscribe";
+import { sendPendingNotices } from "./notices/store";
 
 export type { Env };
 
@@ -46,6 +48,12 @@ export default {
         contract: env.CRM_CONTRACT_VERSION ?? "1",
         tenant: env.CRM_TENANT_ID ?? null,
       });
+    }
+
+    // 退订（邮件里点过来的链接）——不走 App CORS/会话，也不需要登录
+    if (url.pathname === "/unsubscribe") {
+      await ensureSchema(env.DB);
+      return handleUnsubscribe(request, env);
     }
 
     // 支付回调（服务商过来）与 mock 演示页（浏览器直接打开）——不走 App CORS/会话
@@ -128,6 +136,19 @@ export default {
           if (report.failed) console.warn(`[settle] errors: ${report.errors.join(" | ")}`);
         })
         .catch((e: unknown) => console.error("[settle] 失败", e)),
+    );
+    // 通知泵：把 `notices` 里待发的邮件发掉（按日配额平摊；配额用尽自动顺延到明天）
+    ctx.waitUntil(
+      sendPendingNotices(env)
+        .then((report) => {
+          if (report.sent || report.failed || report.deferred) {
+            console.log(
+              `[notice] sent=${report.sent} suppressed=${report.suppressed} failed=${report.failed} deferred=${report.deferred} quota_left=${report.quotaLeft}`,
+            );
+          }
+          if (report.errors.length) console.warn(`[notice] errors: ${report.errors.join(" | ")}`);
+        })
+        .catch((e: unknown) => console.error("[notice] 发送失败", e)),
     );
     // 到期前挽回：把 `audience='expiring'` 的礼包发给快到期的人（幂等，重复跑不会双发）
     ctx.waitUntil(

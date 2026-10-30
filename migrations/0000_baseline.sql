@@ -68,6 +68,7 @@ CREATE TABLE `customers` (
 	`display_name` text,
 	`status` text DEFAULT 'active' NOT NULL,
 	`referral_code` text,
+	`marketing_opt_out` integer DEFAULT 0 NOT NULL,
 	`created_at` text NOT NULL
 );
 --> statement-breakpoint
@@ -82,6 +83,25 @@ CREATE TABLE `email_codes` (
 	`attempts` integer DEFAULT 0 NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE `notices` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`customer_id` integer NOT NULL,
+	`kind` text NOT NULL,
+	`ref_id` text NOT NULL,
+	`title` text NOT NULL,
+	`body` text NOT NULL,
+	`action_url` text,
+	`action_text` text,
+	`status` text DEFAULT 'pending' NOT NULL,
+	`attempts` integer DEFAULT 0 NOT NULL,
+	`next_attempt_at` text NOT NULL,
+	`sent_at` text,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_notices` ON `notices` (`kind`,`customer_id`,`ref_id`);--> statement-breakpoint
+CREATE INDEX `idx_notices_pending` ON `notices` (`status`,`next_attempt_at`);--> statement-breakpoint
+CREATE INDEX `idx_notices_customer` ON `notices` (`customer_id`,`id`);--> statement-breakpoint
 CREATE TABLE `orders` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`code` text NOT NULL,
@@ -267,6 +287,7 @@ CREATE TABLE `promotions` (
 	`plan_id` text,
 	`delivery` text DEFAULT 'auto' NOT NULL,
 	`claim_valid_days` integer,
+	`notify` integer DEFAULT 1 NOT NULL,
 	`badge_label` text,
 	`visible` integer DEFAULT 1 NOT NULL,
 	`referrer_reward_type` text,
@@ -321,6 +342,12 @@ CREATE TABLE `refunds` (
 );
 --> statement-breakpoint
 CREATE INDEX `idx_refunds_order` ON `refunds` (`order_id`,`id`);--> statement-breakpoint
+CREATE TABLE `settings` (
+	`key` text PRIMARY KEY NOT NULL,
+	`value` text NOT NULL,
+	`updated_at` text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE `subscription_changes` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`at` text NOT NULL,
