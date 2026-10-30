@@ -22,6 +22,7 @@ import {
 } from "../promotions/model";
 import { DEFAULT_CLAIM_DAYS } from "../promotions/claim";
 import { deliverGift } from "../promotions/gift";
+import { cancelRun, getRun, latestRun, runProgressText, startRun } from "../promotions/runs";
 import { generateCodes, listCodes, revokeCode } from "../promotions/codes";
 
 import type { Env } from "../env";
@@ -652,6 +653,54 @@ export async function handleAdminPromotions(
     return json({ ok: true });
   }
 
+  // ── 批量发放（建任务，立刻返回；真正发放由 cron 分页做）──
+  //  为什么不在请求里直接发：上万人 = 上万次 D1 + 上万次 cf-api 调用，
+  //  单次 invocation 的 CPU / 子请求 / 并发连接全都撑不住（见 `promotions/runs.ts`）。
+  const broadcast = path.match(/^\/promotions\/(\d+)\/broadcast$/);
+  if (method === "POST" && broadcast) {
+    const id = Number(broadcast[1]);
+    const row = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
+      .bind(id)
+      .first<PromotionRow>();
+    if (!row) return fail(404, "promotion_not_found");
+    const promo = rowToPromotion(row);
+    if (promo.kind !== "gift") return fail(409, "not_gift", "只有礼包能批量发放");
+    if (promo.status !== "active") return fail(409, "invalid_state", "先上线再批量发放");
+
+    const { run, alreadyRunning } = await startRun(env, { promotionId: id });
+    if (!alreadyRunning) {
+      await audit(env, actor, "promotion_broadcast_started", String(id), {
+        run_id: run.id,
+        total: run.total,
+      });
+    }
+    return json(
+      {
+        run: { ...run, progress_text: runProgressText(run) },
+        // true = 已经有一个在跑，这次没有新建（幂等，重复点按钮不会开两个任务）
+        already_running: alreadyRunning,
+      },
+      alreadyRunning ? 200 : 202,
+    );
+  }
+
+  // 进度（前端轮询；文案由 CRM 给）
+  const runOne = path.match(/^\/promotions\/(\d+)\/run$/);
+  if (method === "GET" && runOne) {
+    const id = Number(runOne[1]);
+    const run = await latestRun(env, id);
+    return json({ run: run ? { ...run, progress_text: runProgressText(run) } : null });
+  }
+
+  const runCancel = path.match(/^\/promotions\/runs\/(\d+)\/cancel$/);
+  if (method === "POST" && runCancel) {
+    const runId = Number(runCancel[1]);
+    const ok = await cancelRun(env, runId);
+    if (!ok) return fail(409, "invalid_state", "这个任务已经结束或不存在");
+    await audit(env, actor, "promotion_broadcast_cancelled", String(runId), null);
+    return json({ ok: true });
+  }
+
   // ── 手动发放（礼包）──
   const grant = path.match(/^\/promotions\/(\d+)\/grant$/);
   if (method === "POST" && grant) {
@@ -692,6 +741,13 @@ export async function handleAdminPromotions(
       total: results.length,
     });
     return json({ granted, pending, total: results.length, results });
+  }
+
+  const oneRun = path.match(/^\/promotions\/runs\/(\d+)$/);
+  if (method === "GET" && oneRun) {
+    const run = await getRun(env, Number(oneRun[1]));
+    if (!run) return fail(404, "run_not_found");
+    return json({ run: { ...run, progress_text: runProgressText(run) } });
   }
 
   return null;
