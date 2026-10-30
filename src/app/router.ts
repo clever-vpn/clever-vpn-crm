@@ -247,8 +247,30 @@ async function currentContext(
   return { sub, current: toQuoteInput(sub, await planListPrice(env, sub.plan_id)) };
 }
 
+/**
+ * 订阅卡片上的**小标签** —— 由 CRM 决定，App 只渲染、不判断业务。
+ *
+ * - `tag`：文案（`null` = 不显示）
+ * - `tag_tone`：样式键（App 映射到颜色 / 底纹）。**不要**让 App 看中文去猜风格：
+ *   文案随时会改，`tag_tone` 是稳定的契约。
+ */
+function subscriptionTag(
+  sub: Subscription,
+  state: { status: "active" | "inactive"; reason: string | null },
+): { tag: string | null; tag_tone: string | null } {
+  if (state.status === "active") {
+    return sub.trial ? { tag: "试用中", tag_tone: "info" } : { tag: "已订阅", tag_tone: "success" };
+  }
+  // 试用结束比普通到期更需要引导，所以单独一句
+  if (sub.trial) return { tag: "试用已结束", tag_tone: "muted" };
+  const label = state.reason === "exhausted" ? "流量用尽" : state.reason === "frozen" ? "已暂停" : "已过期";
+  return { tag: label, tag_tone: "muted" };
+}
+
 function subscriptionView(sub: Subscription | null): Record<string, unknown> {
-  if (!sub) return { status: "none", reason: null, status_text: "还没有订阅" };
+  if (!sub) {
+    return { status: "none", reason: null, status_text: "还没有订阅", tag: null, tag_tone: null };
+  }
   const unlimited = sub.kind === "period" && sub.period_quota_gb === null;
   const base = {
     kind: sub.kind,
@@ -276,17 +298,23 @@ function subscriptionView(sub: Subscription | null): Record<string, unknown> {
       status: "provisioning",
       reason: null,
       status_text: "正在开通，通常 1 分钟内完成",
+      tag: "开通中",
+      tag_tone: "info",
       ...base,
     };
   }
 
   const state = statusOf(sub);
+  const { tag, tag_tone } = subscriptionTag(sub, state);
   return {
     status: state.status,
     // 不能用的原因只有三种：到期 / 用完 / 冻结（撤销、退款也归 frozen）
     reason: state.reason,
     // 用户可见文案的唯一来源，App 不拼文案
     status_text: state.status_text,
+    // 卡片小标签：试用 / 已订阅 / 已过期…，同样由 CRM 组织
+    tag,
+    tag_tone,
     ...base,
     // 激活码只给 App 自己用：不展示、不写日志（app-crm.md §2.3）
     code: sub.activation_code,
