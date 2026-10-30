@@ -10,12 +10,22 @@
  * 建一个 `visible=0` 的活动把码单独发给他即可。
  */
 
-import { AUDIENCES, EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, normalizeRewards, promoBadgeText, rowToPromotion } from "../promotions/model";
-import { grantGift } from "../promotions/gift";
+import {
+  AUDIENCES,
+  EMPTY_REWARDS,
+  GIFT_DELIVERIES,
+  PROMOTION_COLUMNS,
+  hasRewards,
+  normalizeRewards,
+  promoBadgeText,
+  rowToPromotion,
+} from "../promotions/model";
+import { DEFAULT_CLAIM_DAYS } from "../promotions/claim";
+import { deliverGift } from "../promotions/gift";
 import { generateCodes, listCodes, revokeCode } from "../promotions/codes";
 
 import type { Env } from "../env";
-import type { GiftRewards, Promotion, PromotionRow } from "../promotions/model";
+import type { GiftDelivery, GiftRewards, Promotion, PromotionRow } from "../promotions/model";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -76,6 +86,21 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   // ── 礼包的奖励项与人群（契约 §2.9.6）──
   const rewards = normalizeRewards(input.rewards);
   if (kind === "gift" && !hasRewards(rewards)) errors.push("礼包至少要送一项：天数 / 流量 GB");
+
+  // ── 送达方式（只对礼包有意义）──
+  //   auto  = 触发即到账（悄悄改账，用户感知不到）
+  //   claim = 只发一张券，用户自己在有效期内点领取（做营销要用这种）
+  const deliveryRaw = str(input.delivery) || "auto";
+  if (!(GIFT_DELIVERIES as readonly string[]).includes(deliveryRaw)) {
+    errors.push("delivery 只能是 auto / claim");
+  }
+  const delivery: GiftDelivery = kind === "gift" && deliveryRaw === "claim" ? "claim" : "auto";
+  let claimValidDays: number | null = null;
+  if (delivery === "claim") {
+    const raw = num(input.claim_valid_days) ?? DEFAULT_CLAIM_DAYS;
+    if (!(raw >= 1 && raw <= 90)) errors.push("待领取有效期必须是 1–90 天");
+    else claimValidDays = Math.round(raw);
+  }
 
   const audience = str(input.audience) || "all";
   if (!(AUDIENCES as readonly string[]).includes(audience)) {
@@ -159,6 +184,8 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
       limit_plan_kinds: kinds as Promotion["limit_plan_kinds"],
       limit_plan_ids: ids,
       rewards,
+      delivery,
+      claim_valid_days: claimValidDays,
       audience: audience as Promotion["audience"],
       audience_days: audience === "expiring" ? Math.round(audienceDays ?? 7) : null,
       cooldown_hours: cooldownHours === null ? null : Math.round(cooldownHours),
@@ -186,6 +213,8 @@ interface PromotionInput {
   limit_plan_kinds: Promotion["limit_plan_kinds"];
   limit_plan_ids: string[];
   rewards: GiftRewards;
+  delivery: GiftDelivery;
+  claim_valid_days: number | null;
   audience: Promotion["audience"];
   audience_days: number | null;
   cooldown_hours: number | null;
@@ -205,15 +234,17 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
   const now = new Date().toISOString();
   const res = await env.DB.prepare(
     `INSERT INTO promotions (auto_apply, name, kind, benefit_type, benefit_value, min_subtotal_minor,
-       limit_plan_kinds, limit_plan_ids, rewards_json, audience, audience_days, cooldown_hours,
+       limit_plan_kinds, limit_plan_ids, rewards_json, delivery, claim_valid_days,
+       audience, audience_days, cooldown_hours,
        plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
        referrer_reward_type, referrer_reward_value, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
+      input.delivery, input.claim_valid_days,
       input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
@@ -227,6 +258,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
   await env.DB.prepare(
     `UPDATE promotions SET auto_apply = ?, name = ?, kind = ?, benefit_type = ?, benefit_value = ?,
        min_subtotal_minor = ?, limit_plan_kinds = ?, limit_plan_ids = ?, rewards_json = ?,
+       delivery = ?, claim_valid_days = ?,
        audience = ?, audience_days = ?, cooldown_hours = ?, plan_id = ?,
        new_user_within_days = ?, starts_at = ?, ends_at = ?, max_uses = ?, max_uses_per_customer = ?,
        badge_label = ?, visible = ?, referrer_reward_type = ?, referrer_reward_value = ?, updated_at = ?
@@ -236,6 +268,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
       input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
+      input.delivery, input.claim_valid_days,
       input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
@@ -263,6 +296,8 @@ function view(
     limit_plan_kinds: promo.limit_plan_kinds,
     limit_plan_ids: promo.limit_plan_ids,
     rewards: promo.rewards,
+    delivery: promo.delivery,
+    claim_valid_days: promo.claim_valid_days,
     audience: promo.audience,
     audience_days: promo.audience_days,
     cooldown_hours: promo.cooldown_hours,
@@ -300,6 +335,7 @@ const LOCKED_LABELS: [keyof Promotion, string][] = [
   ["benefit_type", "优惠方式"],
   ["benefit_value", "力度"],
   ["rewards", "礼包内容"],
+  ["delivery", "送达方式"],
   ["min_subtotal_minor", "最低消费"],
   ["limit_plan_kinds", "适用套餐类型"],
   ["limit_plan_ids", "指定套餐"],
@@ -625,14 +661,16 @@ export async function handleAdminPromotions(
     const promo = rowToPromotion(row);
     if (promo.kind !== "gift") return fail(409, "not_gift", "只有礼包能直接发放（优惠券请让用户输码）");
 
+    // 送达方式决定这里到底是"已到账"还是"已发券"（`delivery='claim'` 时权益还没动）
     const results = [];
     for (const customerId of ids) {
-      const result = await grantGift(env, { promotionId: id, customerId, source: "manual" });
+      const result = await deliverGift(env, { promotionId: id, customerId, source: "manual" });
       results.push(
         result ?? {
           promotion_id: id,
           customer_id: customerId,
           granted: false,
+          pending: false,
           skipped: "礼包不存在或已不是礼包",
           order_id: null,
           applied: EMPTY_REWARDS,
@@ -640,8 +678,13 @@ export async function handleAdminPromotions(
       );
     }
     const granted = results.filter((r) => r.granted).length;
-    await audit(env, actor, "promotion_granted", String(id), { granted, total: results.length });
-    return json({ granted, total: results.length, results });
+    const pending = results.filter((r) => r.pending).length;
+    await audit(env, actor, "promotion_granted", String(id), {
+      granted,
+      pending,
+      total: results.length,
+    });
+    return json({ granted, pending, total: results.length, results });
   }
 
   return null;

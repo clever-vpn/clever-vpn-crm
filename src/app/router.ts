@@ -10,6 +10,8 @@
  *   POST /auth/logout
  *   GET  /me                   用户 + 订阅快照 + 邀请面板
  *   GET  /subscription         订阅状态（status + reason + status_text）
+ *   GET  /me/gifts             我的礼包（待领取 / 已领取 / 已过期）
+ *   POST /me/gifts/{id}/claim  领取一张待领取的礼包
  *   GET  /plans                可售套餐（免登录；每项只带一个 `action` + 促销展示位）
  *   GET  /payment-methods      可用支付方式（需登录）
  *   POST /quote                报价（唯一的应付金额来源；可带 promo_code）
@@ -31,6 +33,7 @@ import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
+import { claimGift, listGifts, pendingGiftCount } from "../promotions/gift";
 import { bindReferral, referralPanel } from "../promotions/referral";
 import { redeemGiftCode } from "../promotions/redeem";
 import { planPromos, resolveForPlans, resolvePromotion } from "../promotions/service";
@@ -559,6 +562,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
       subscription: subscriptionView(sub),
       // 邀请面板：官网与 App 共用（§2.9.3）。不需要邀请功能的客户端忽略即可
       referral: await referralPanel(env, customer.id),
+      // 有几张礼包等他领（App 拿它做红点，省掉一次列表请求）
+      pending_gifts: await pendingGiftCount(env, customer.id),
     });
   }
 
@@ -566,6 +571,27 @@ async function route(request: Request, env: Env, path: string, method: string): 
     if (!customer) return err(401, "unauthorized");
     const sub = await loadFreshSubscription(env, customer.id);
     return json(subscriptionView(sub));
+  }
+
+  // ── 我的礼包（待领取 / 已领取 / 已过期）──
+  //  与 `/plans` 同一个原则：**文案全部由 CRM 组织**（`status_text` / `rewards_text` /
+  //  `action`），App 只画卡片。过期了会怎样、还剩几天，是业务口径，不是客户端的事。
+  if (method === "GET" && path === "/me/gifts") {
+    if (!customer) return err(401, "unauthorized");
+    return json({ gifts: await listGifts(env, customer.id) });
+  }
+
+  // 领取：业务性失败（已领过 / 已过期 / 领不了）一律 200 + ok:false + reason，
+  // 与 `/redeem`、`/quote` 同口径；只有"这张券不是你的"才是 404。
+  const claimOne = path.match(/^\/me\/gifts\/(\d+)\/claim$/);
+  if (method === "POST" && claimOne) {
+    if (!customer) return err(401, "unauthorized");
+    const result = await claimGift(env, {
+      customerId: customer.id,
+      claimId: Number(claimOne[1]),
+    });
+    if (result.status === "missing") return err(404, "claim_not_found");
+    return json(result);
   }
 
   // ── 兑换码（契约 §2.9.7）──

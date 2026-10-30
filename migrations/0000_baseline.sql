@@ -207,6 +207,21 @@ CREATE TABLE `platform_subscriptions` (
 CREATE UNIQUE INDEX `uq_subs_customer` ON `platform_subscriptions` (`customer_id`);--> statement-breakpoint
 CREATE INDEX `idx_subs_due` ON `platform_subscriptions` (`kind`,`period_settled_at`);--> statement-breakpoint
 CREATE INDEX `idx_subs_order` ON `platform_subscriptions` (`order_id`);--> statement-breakpoint
+CREATE TABLE `promotion_claims` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`promotion_id` integer NOT NULL,
+	`customer_id` integer NOT NULL,
+	`status` text DEFAULT 'pending' NOT NULL,
+	`source` text NOT NULL,
+	`created_at` text NOT NULL,
+	`expires_at` text NOT NULL,
+	`claimed_at` text,
+	`order_id` integer,
+	`granted_json` text DEFAULT '{}' NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_promotion_claims` ON `promotion_claims` (`promotion_id`,`customer_id`);--> statement-breakpoint
+CREATE INDEX `idx_promotion_claims_customer` ON `promotion_claims` (`customer_id`,`status`);--> statement-breakpoint
 CREATE TABLE `promotion_codes` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`promotion_id` integer NOT NULL,
@@ -250,6 +265,8 @@ CREATE TABLE `promotions` (
 	`max_uses_per_customer` integer DEFAULT 1 NOT NULL,
 	`cooldown_hours` integer,
 	`plan_id` text,
+	`delivery` text DEFAULT 'auto' NOT NULL,
+	`claim_valid_days` integer,
 	`badge_label` text,
 	`visible` integer DEFAULT 1 NOT NULL,
 	`referrer_reward_type` text,

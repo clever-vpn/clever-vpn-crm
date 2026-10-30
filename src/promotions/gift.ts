@@ -16,7 +16,8 @@
  *   4. **一次发放 = 一张 0 元已付订单**，且幂等靠次数与冷却（`max_uses_per_customer`
  *      + `cooldown_hours` 在发放前判定）：否则财务侧永远解释不了"这个人为什么多了 7 天"。
  */
-import { EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, rowToPromotion } from "./model";
+import { EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, normalizeRewards, rowToPromotion } from "./model";
+import { CLAIM_LOCK_MS, claimDeadline, claimView } from "./claim";
 import { checkForCustomer } from "./service";
 import { provisionSubscription } from "../platform/provision";
 import {
@@ -34,6 +35,7 @@ import { rowToPlan } from "../plans/model";
 import { subscriptionFromPlan } from "../plans/subscription";
 
 import type { Env } from "../env";
+import type { GiftClaimStatus, GiftClaimView } from "./claim";
 import type { GiftRewards, Promotion, PromotionRow } from "./model";
 import type { Plan, PlanRow } from "../plans/model";
 import type { Subscription } from "../plans/subscription";
@@ -270,6 +272,14 @@ export async function grantGift(
     assumeFirstPurchase?: boolean;
     /** 命中的批次码 id（`promotion_codes.id`）；用主码 / 系统发放时为 null */
     codeId?: number | null;
+    /**
+     * 跳过「人群 / 时间窗 / 名额 / 冷却」重判。
+     *
+     * 只给**领取待领券**用：券送达那一刻已经判过一次，那张券就是按他当时的身份点名的。
+     * 用户晚两天回来领，不该因为期间付过费（`audience='new'` 不再成立）而领不到。
+     * 幂等仍然由「券本身只有一张 + 状态只能从 pending 跳一次」保证。
+     */
+    skipCheck?: boolean;
   },
 ): Promise<GiftGrant | null> {
   const now = opts.now ?? new Date();
@@ -289,10 +299,13 @@ export async function grantGift(
     applied: EMPTY_REWARDS,
   });
 
-  const check = await checkForCustomer(env, promo, opts.customerId, now, {
-    assumeFirstPurchase: opts.assumeFirstPurchase ?? opts.source === "signup",
-  });
-  if (!check.ok) return skip(check.reason);
+  // 领取待领券时不重判人群（见 opts.skipCheck）：那张券是按当时身份点名的
+  if (!opts.skipCheck) {
+    const check = await checkForCustomer(env, promo, opts.customerId, now, {
+      assumeFirstPurchase: opts.assumeFirstPurchase ?? opts.source === "signup",
+    });
+    if (!check.ok) return skip(check.reason);
+  }
 
   // 有没有"地方可放"：有订阅 → 加权益；没有订阅 → 看礼包有没有配载体套餐。
   const before = await customerSubscription(env, opts.customerId);
@@ -380,93 +393,306 @@ export async function grantGift(
   };
 }
 
-/**
- * 「注册即送」：首单开通后给新客发 `audience='new'` 的礼包。
- *
- * 时机放在**首单开通之后**而不是注册那一刻 —— 新注册的人还没有订阅，
- * 天数与流量都无处可放。`audience='new'` 就是"注册礼包"的标记，不需要额外字段。
- *
- * 幂等：`max_uses_per_customer`（默认 1）+ 冷却；重复调用不会双发。
- */
-export async function grantSignupGifts(
-  env: Env,
-  customerId: number,
-  now: Date = new Date(),
-): Promise<GiftGrant[]> {
-  const rows = await env.DB.prepare(
-    `SELECT ${PROMOTION_COLUMNS} FROM promotions
-      WHERE status = 'active' AND kind = 'gift' AND audience = 'new'
-      ORDER BY id`,
-  ).all<PromotionRow>();
+// ─────────────────────────────────────────────────────────────────────────────
+// 待领取（`promotions.delivery = 'claim'`）
+//
+//   券先送到手里（`promotion_claims`），用户在有效期内**自己点一下**才真正到账。
+//   为什么要这样：直接改账用户感知不到 —— 到期日悄悄延长 10 天，用户直到某天发现
+//   "居然还能用"才隐约感觉到，那不是营销，是没人知道的善意。必须有个"领取"动作，
+//   福利才变成用户看得见、记得住、会跟人说的事。
+//
+//   这里只做三件事：建券 / 领券 / 列券。权益怎么加仍然只有 `grantGift` 一份实现 ——
+//   待领取只是"送达"，不是第二套发放逻辑。
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const out: GiftGrant[] = [];
-  for (const row of rows.results ?? []) {
-    const promo = rowToPromotion(row);
-    try {
-      const result = await grantGift(env, {
-        promotionId: promo.id,
-        customerId,
-        source: "signup",
-        now,
-      });
-      if (result) out.push(result);
-    } catch (e) {
-      console.error(
-        `[gift] 注册礼包发放失败 promo=${promo.id} customer=${customerId}: ${e instanceof Error ? e.message : e}`,
-      );
-    }
-  }
-  return out;
+interface ClaimRecord {
+  id: number;
+  promotion_id: number;
+  customer_id: number;
+  status: string;
+  source: string;
+  created_at: string;
+  expires_at: string;
+  claimed_at: string | null;
+  order_id: number | null;
+  granted_json: string;
+}
+
+const CLAIM_COLUMNS = `id, promotion_id, customer_id, status, source, created_at, expires_at,
+  claimed_at, order_id, granted_json`;
+
+/** 配送结论：`pending = true` 表示券已送出、权益**还没**到账（等用户领） */
+export interface GiftDelivery extends GiftGrant {
+  pending?: boolean;
+  claim_id?: number | null;
+  /** 这张券的领取截止时间 */
+  claim_expires_at?: string | null;
+}
+
+/** 用户点「领取」的结果 */
+export interface ClaimResult {
+  ok: boolean;
+  /** 失败原因（中文整句，App 直接显示） */
+  reason: string | null;
+  /** missing = 这张券不存在（或不属于当前用户） */
+  status: GiftClaimStatus | "missing";
+  /** 真正到账的权益 */
+  applied?: GiftRewards;
+  /** 领完之后这张券长什么样 */
+  gift: GiftClaimView | null;
 }
 
 /**
- * 扫描"即将到期"的礼包并自动发下去（`scheduled` 每天跑一次）。
+ * 给一个客户**发券**（不发权益）。
  *
- * - 只看 `audience='expiring'` 的活动：别的受众不靠自动发放；
- * - 每个客户最多一次由 `max_uses_per_customer` 保证；
- * - **错了不影响别的客户**：单个失败只记日志，绝不中断整轮。
+ * 判断顺序与直接发放完全一致 —— 人群 / 名额 / 时间窗先过一遍，
+ * 再确认"这份订阅收不收得下"（无限期不收天数、不限量不收 GB）。
+ * 收不下就**连券都不发**，免得用户看到一张永远领不掉的卡。
  */
-export async function runExpiringGifts(
+async function offerGift(
   env: Env,
-  now: Date = new Date(),
-): Promise<{ granted: number; skipped: number }> {
-  const rows = await env.DB.prepare(
-    `SELECT ${PROMOTION_COLUMNS} FROM promotions
-      WHERE status = 'active' AND kind = 'gift' AND audience = 'expiring'
-      ORDER BY id`,
-  ).all<PromotionRow>();
+  opts: { promo: Promotion; customerId: number; source: GiftSource; now: Date },
+): Promise<GiftDelivery> {
+  const { promo, customerId, source, now } = opts;
+  const skip = (reason: string): GiftDelivery => ({
+    promotion_id: promo.id,
+    customer_id: customerId,
+    granted: false,
+    pending: false,
+    skipped: reason,
+    order_id: null,
+    applied: EMPTY_REWARDS,
+    claim_id: null,
+    claim_expires_at: null,
+  });
 
-  const report = { granted: 0, skipped: 0 };
-  for (const row of rows.results ?? []) {
-    const promo = rowToPromotion(row);
-    const days = promo.audience_days ?? 7;
-    const horizon = new Date(now.getTime() + days * 86_400_000);
+  const check = await checkForCustomer(env, promo, customerId, now, {
+    assumeFirstPurchase: source === "signup",
+  });
+  if (!check.ok) return skip(check.reason);
 
-    const targets = await env.DB.prepare(
-      `SELECT customer_id FROM platform_subscriptions
-        WHERE hold = 'none' AND expires_at IS NOT NULL
-          AND expires_at > ? AND expires_at <= ?`,
-    )
-      .bind(now.toISOString(), horizon.toISOString())
-      .all<{ customer_id: number }>();
-
-    for (const t of targets.results ?? []) {
-      try {
-        const result = await grantGift(env, {
-          promotionId: promo.id,
-          customerId: t.customer_id,
-          source: "expiring",
-          now,
-        });
-        if (result?.granted) report.granted += 1;
-        else report.skipped += 1;
-      } catch (e) {
-        console.error(
-          `[gift] 到期礼包发放失败 promo=${promo.id} customer=${t.customer_id}: ${e instanceof Error ? e.message : e}`,
-        );
-        report.skipped += 1;
-      }
+  const before = await customerSubscription(env, customerId);
+  let target: Subscription | Omit<Subscription, "id">;
+  if (before) {
+    target = before;
+  } else {
+    if (!promo.plan_id) {
+      return skip("还需要先有套餐；这个礼包没有配置体验套餐，请联系客服");
     }
+    const plan = await loadCarrierPlan(env, promo.plan_id);
+    if (!plan) return skip("礼包的体验套餐已不可用，请联系客服");
+    target = subscriptionFromPlan(plan, { customerId, paidMinor: 0, now });
   }
-  return report;
+  const willApply = applicableRewards(target, promo.rewards);
+  if (!hasRewards(willApply)) {
+    return skip("这个礼包送的内容对当前套餐不适用（不限量 / 无限期），未发放");
+  }
+
+  const nowIso = now.toISOString();
+  const deadline = claimDeadline(promo, now).toISOString();
+
+  // 同一活动对同一个人只留一张：重复触发只**刷新截止时间**；
+  // 已领取的绝不回退（`WHERE status != 'claimed'`）。
+  await env.DB.prepare(
+    `INSERT INTO promotion_claims
+       (promotion_id, customer_id, status, source, created_at, expires_at, granted_json)
+     VALUES (?, ?, 'pending', ?, ?, ?, '{}')
+     ON CONFLICT(promotion_id, customer_id) DO UPDATE SET
+       status = 'pending', source = excluded.source, created_at = excluded.created_at,
+       expires_at = excluded.expires_at, claimed_at = NULL
+     WHERE promotion_claims.status != 'claimed'`,
+  )
+    .bind(promo.id, customerId, source, nowIso, deadline)
+    .run();
+
+  const claim = await env.DB.prepare(
+    `SELECT ${CLAIM_COLUMNS} FROM promotion_claims WHERE promotion_id = ? AND customer_id = ?`,
+  )
+    .bind(promo.id, customerId)
+    .first<ClaimRecord>();
+  if (!claim) return skip("待领取凭证写入失败，请稍后再试");
+  if (claim.status === "claimed") return skip("这个礼包已经领过了，权益已到账");
+
+  return {
+    promotion_id: promo.id,
+    customer_id: customerId,
+    granted: false,
+    pending: true,
+    skipped: null,
+    order_id: null,
+    // 券上写的是"领了能得到什么"（按当前订阅裁过，与真正发放时的口径一致）
+    applied: willApply,
+    claim_id: claim.id,
+    claim_expires_at: claim.expires_at,
+  };
+}
+
+/**
+ * 按活动配置把礼包**送出去** —— 所有触发点（注册 / 到期挽回 / 后台点名）都走这里。
+ *
+ * `delivery = 'auto'`  ⇒ 直接到账（返回的就是 `grantGift` 的结论）
+ * `delivery = 'claim'` ⇒ 只发一张券，权益等用户自己来领
+ */
+export async function deliverGift(
+  env: Env,
+  opts: {
+    promotionId: number;
+    customerId: number;
+    source: GiftSource;
+    now?: Date;
+    assumeFirstPurchase?: boolean;
+    codeId?: number | null;
+  },
+): Promise<GiftDelivery | null> {
+  const now = opts.now ?? new Date();
+  const row = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
+    .bind(opts.promotionId)
+    .first<PromotionRow>();
+  if (!row) return null;
+  const promo = rowToPromotion(row);
+  if (promo.kind !== "gift") return null;
+
+  if (promo.delivery !== "claim") return grantGift(env, opts);
+  return offerGift(env, { promo, customerId: opts.customerId, source: opts.source, now });
+}
+
+/**
+ * 用户点「领取」。
+ *
+ * 并发保护靠**状态机**而不是锁：`pending → claiming` 是一次带条件的 UPDATE，
+ * `changes = 0` 就说明别人（另一个设备 / 手抖两次）已经抢到了。
+ * 领取途中失败（平台余额读不到等）就把券**还回 pending**，用户能再试一次 —— 券不该因为
+ * 一次网络抖动就消失。占位超过 `CLAIM_LOCK_MS` 视为那次失败（进程被杀也能自愈）。
+ */
+export async function claimGift(
+  env: Env,
+  opts: { customerId: number; claimId: number; now?: Date },
+): Promise<ClaimResult> {
+  const now = opts.now ?? new Date();
+  const nowIso = now.toISOString();
+
+  const claim = await env.DB.prepare(
+    `SELECT ${CLAIM_COLUMNS} FROM promotion_claims WHERE id = ? AND customer_id = ?`,
+  )
+    .bind(opts.claimId, opts.customerId)
+    .first<ClaimRecord>();
+  if (!claim) return { ok: false, reason: "这张券不存在", status: "missing", gift: null };
+
+  const row = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
+    .bind(claim.promotion_id)
+    .first<PromotionRow>();
+  if (!row) return { ok: false, reason: "这个活动已经不存在了", status: "missing", gift: null };
+  const promo = rowToPromotion(row);
+  const view = claimView(claim, promo, now);
+
+  if (claim.status === "claimed") {
+    return { ok: false, reason: "已经领过了，权益已到账", status: "claimed", gift: view };
+  }
+  if (view.status === "expired") {
+    return { ok: false, reason: "这张券已经过期了", status: "expired", gift: view };
+  }
+
+  // 抢券：只有一张、只能从 pending（或超时的 claiming）跳一次
+  const staleBefore = new Date(now.getTime() - CLAIM_LOCK_MS).toISOString();
+  const lock = await env.DB.prepare(
+    `UPDATE promotion_claims SET status = 'claiming', claimed_at = ?
+      WHERE id = ? AND customer_id = ?
+        AND (status = 'pending' OR (status = 'claiming' AND claimed_at < ?))`,
+  )
+    .bind(nowIso, claim.id, opts.customerId, staleBefore)
+    .run();
+  if (!lock.meta.changes) {
+    return { ok: false, reason: "正在处理中，请稍后再看", status: "pending", gift: view };
+  }
+
+  // 权益发放仍然只有一份实现（含"平台余额回源失败就不发"这些规则）
+  const grant = await grantGift(env, {
+    promotionId: promo.id,
+    customerId: opts.customerId,
+    source: claim.source as GiftSource,
+    now,
+    skipCheck: true,
+  });
+
+  if (!grant || !grant.granted) {
+    await env.DB.prepare(
+      `UPDATE promotion_claims SET status = 'pending', claimed_at = NULL WHERE id = ?`,
+    )
+      .bind(claim.id)
+      .run();
+    return {
+      ok: false,
+      reason: grant?.skipped ?? "领取失败，请稍后再试",
+      status: "pending",
+      gift: view,
+    };
+  }
+
+  await env.DB.prepare(
+    `UPDATE promotion_claims SET status = 'claimed', claimed_at = ?, order_id = ?, granted_json = ?
+      WHERE id = ?`,
+  )
+    .bind(nowIso, grant.order_id, JSON.stringify(grant.applied), claim.id)
+    .run();
+
+  return {
+    ok: true,
+    reason: null,
+    status: "claimed",
+    applied: grant.applied,
+    gift: claimView({ ...claim, status: "claimed" }, promo, now),
+  };
+}
+
+/**
+ * 我的礼包列表（**含已领取 / 已过期**，让用户看得见"我拿过什么"）。
+ *
+ * 排序：能领的在前（越快要作废越靠前），其次已过期，最后已领取。
+ */
+export async function listGifts(
+  env: Env,
+  customerId: number,
+  now: Date = new Date(),
+): Promise<GiftClaimView[]> {
+  const rows = await env.DB.prepare(
+    `SELECT c.id, c.promotion_id, c.status, c.source, c.expires_at, p.badge_label, p.rewards_json
+       FROM promotion_claims c JOIN promotions p ON p.id = c.promotion_id
+      WHERE c.customer_id = ?`,
+  )
+    .bind(customerId)
+    .all<{
+      id: number;
+      promotion_id: number;
+      status: string;
+      source: string;
+      expires_at: string;
+      badge_label: string | null;
+      rewards_json: string;
+    }>();
+
+  const rank: Record<GiftClaimStatus, number> = { pending: 0, expired: 1, claimed: 2 };
+  return (rows.results ?? [])
+    .map((r) =>
+      claimView(
+        r,
+        { badge_label: r.badge_label, rewards: normalizeRewards(JSON.parse(r.rewards_json || "{}")) },
+        now,
+      ),
+    )
+    .sort((a, b) => rank[a.status] - rank[b.status] || a.expires_at.localeCompare(b.expires_at));
+}
+
+/** 有几张能领（`/me` 的红点用，省掉一次列表请求） */
+export async function pendingGiftCount(
+  env: Env,
+  customerId: number,
+  now: Date = new Date(),
+): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM promotion_claims
+      WHERE customer_id = ? AND status != 'claimed' AND expires_at > ?`,
+  )
+    .bind(customerId, now.toISOString())
+    .first<{ n: number }>();
+  return Number(row?.n ?? 0);
 }

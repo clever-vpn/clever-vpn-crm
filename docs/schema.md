@@ -75,8 +75,10 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
+| `promotions` | 促销活动 / 礼包规则（`kind`=coupon/gift/referral） | `delivery`(auto/claim，礼包的送达方式)、`claim_valid_days`、`rewards_json`、`audience`、`plan_id`（载体套餐） |
 | `plans` | 可售商品定义（**可变目录**，历史靠快照） | `kind`(period/traffic/addon)、`price_minor`、`visibility`(public/hidden)、`status`(draft/active/retired)、`trial`（免费试用，全库最多一个）、`retired_at` |
 | `platform_subscriptions` | **订阅**（当前权益，**一个客户一行**：`uq_subs_customer`） | `kind`、`order_id`、`period_quota_gb`/`period_extra_gb`/`period_anchor_day`/`period_settled_at`（period 专有）、`traffic_total_gb`/`traffic_remaining_gb`/`traffic_synced_at`/`traffic_validity_days`（traffic 专有）、`expires_at`、`hold`/`hold_reason`（手工控制位）、`activation_code`、`trial`（快照：这份权益是不是试用） |
+| `promotion_claims` | **待领取的礼包**（`promotions.delivery='claim'`）：券，不是权益 | `promotion_id`+`customer_id` unique、`status`(pending/claiming/claimed)、`source`(signup/expiring/manual)、`expires_at`（过期是算出来的，不是状态）、`order_id`/`granted_json`（领取时才有） |
 | `subscription_changes` | 权益变更台账（**单行模型的历史全在这里**） | `action`(new/renewal/upgrade/addon/settle/hold/gift)、`paid_minor`、`residual_minor`、`payable_minor`、`kind_before`/`kind_after`、`plan_before`/`plan_after`、`expires_before`/`expires_after`、`period_extra_before`/`period_extra_after` |
 
 ### 2.3 钱

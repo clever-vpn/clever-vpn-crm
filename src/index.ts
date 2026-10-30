@@ -19,7 +19,7 @@ import { handleAdminApi } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
-import { runExpiringGifts } from "./promotions/gift";
+import { runExpiringGifts } from "./promotions/triggers";
 
 export type { Env };
 
@@ -133,8 +133,10 @@ export default {
     ctx.waitUntil(
       runExpiringGifts(env)
         .then((report) => {
-          if (report.granted || report.skipped) {
-            console.log(`[gift] expiring granted=${report.granted} skipped=${report.skipped}`);
+          if (report.granted || report.pending || report.skipped) {
+            console.log(
+              `[gift] expiring granted=${report.granted} pending=${report.pending} skipped=${report.skipped}`,
+            );
           }
         })
         .catch((e: unknown) => console.error("[gift] 到期礼包失败", e)),
