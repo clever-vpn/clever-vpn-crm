@@ -34,7 +34,7 @@ import { statusOf } from "../plans/subscription";
 import { bindReferral, referralPanel } from "../promotions/referral";
 import { redeemGiftCode } from "../promotions/redeem";
 import { planPromos, resolveForPlans, resolvePromotion } from "../promotions/service";
-import { customerSubscription } from "../subscriptions/store";
+import { customerSubscription, ensureTrafficFresh } from "../subscriptions/store";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
 import type { Env } from "../env";
@@ -217,12 +217,22 @@ function toQuoteInput(sub: Subscription, listPriceMinor: number): CurrentSubscri
     kind: sub.kind === "traffic" ? "traffic" : "period",
     list_price_minor: listPriceMinor,
     paid_minor: sub.paid_minor,
-    term_days: sub.term_days,
-    traffic_gb: sub.traffic_total_gb,
+    period_term_days: sub.period_term_days,
+    traffic_total_gb: sub.traffic_total_gb,
     expires_at: sub.expires_at,
-    remaining_gb: sub.remaining_gb,
-    unlimited: sub.quota_gb === null && sub.kind === "period",
+    traffic_remaining_gb: sub.traffic_remaining_gb,
+    unlimited: sub.period_quota_gb === null && sub.kind === "period",
   };
+}
+
+/**
+ * 取订阅并保证余量不旧于 15 分钟（缓存新则一次库都不多查）。
+ *
+ * 只有“要给用户看/要算残值”的读才走这里；写平台前必须用 `freshenTraffic` 强制回源。
+ */
+async function loadFreshSubscription(env: Env, customerId: number): Promise<Subscription | null> {
+  const sub = await customerSubscription(env, customerId);
+  return sub ? ensureTrafficFresh(env, sub) : null;
 }
 
 /** 当前订阅 + 它的标价；两者要么都有，要么都没有 */
@@ -230,27 +240,37 @@ async function currentContext(
   env: Env,
   customerId: number,
 ): Promise<{ sub: Subscription | null; current: CurrentSubscription | null }> {
-  const sub = await customerSubscription(env, customerId);
+  // 报价要算残值 ⇒ 余量不能是旧值
+  const sub = await loadFreshSubscription(env, customerId);
   if (!sub) return { sub: null, current: null };
   return { sub, current: toQuoteInput(sub, await planListPrice(env, sub.plan_id)) };
 }
 
 function subscriptionView(sub: Subscription | null): Record<string, unknown> {
   if (!sub) return { status: "none", reason: null, status_text: "还没有订阅" };
-  const unlimited = sub.kind === "period" && sub.quota_gb === null;
+  const unlimited = sub.kind === "period" && sub.period_quota_gb === null;
   const base = {
     kind: sub.kind,
     plan_id: sub.plan_id,
     expires_at: sub.expires_at,
     licence_limit: sub.licence_limit,
     unlimited,
-    // traffic 用同步过来的余量；period 由结算任务维护
-    remaining_gb: unlimited ? null : sub.kind === "traffic" ? sub.remaining_gb : sub.quota_gb,
+    /**
+     * 对外口径统一成“还剩多少 GB”：
+     *   - traffic：同步过来的剩余（`null` = 未同步，App 应显示“—”）
+     *   - period：真实剩余（平台余额缓存）优先，没同步过就退化为“额度 + 额外池”，
+     *     即“这个周期最多还能用多少”，宁可多显示也不误报“已用完”。
+     */
+    remaining_gb: unlimited
+      ? null
+      : sub.kind === "traffic"
+        ? sub.traffic_remaining_gb
+        : (sub.traffic_remaining_gb ?? (sub.period_quota_gb ?? 0) + (sub.period_extra_gb ?? 0)),
     line_ids: sub.line_ids,
   };
 
   // 已付款但 cf-api 还没建好客户 ⇒ 还没有码。App 应显示"正在开通"而不是"无订阅"
-  if (!sub.code) {
+  if (!sub.activation_code) {
     return {
       status: "provisioning",
       reason: null,
@@ -268,7 +288,7 @@ function subscriptionView(sub: Subscription | null): Record<string, unknown> {
     status_text: state.status_text,
     ...base,
     // 激活码只给 App 自己用：不展示、不写日志（app-crm.md §2.3）
-    code: sub.code,
+    code: sub.activation_code,
   };
 }
 
@@ -392,12 +412,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
       )
       .run();
 
-    const sub = await customerSubscription(env, customerId);
+    const sub = await loadFreshSubscription(env, customerId);
     const view = subscriptionView(sub);
     // 平台快照：**只有拿到 code 才算有**。provisioning 时 App 应显示"正在开通"（§2.6）
-    const platform = sub?.code
+    const platform = sub?.activation_code
       ? {
-          token: sub.code,
+          token: sub.activation_code,
           status: view.status,
           reason: view.reason,
           status_text: view.status_text,
@@ -410,7 +430,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
         session_token: token,
         user: { id: customerId, email, name: existing?.display_name ?? null },
         platform,
-        platform_status: sub ? (sub.code ? view.status : "provisioning") : "none",
+        platform_status: sub ? (sub.activation_code ? view.status : "provisioning") : "none",
       },
       200,
       // 官网直接拿到登录态；App 忽略这个头（它用 Bearer）
@@ -492,7 +512,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
   if (method === "GET" && path === "/me") {
     if (!customer) return err(401, "unauthorized");
-    const sub = await customerSubscription(env, customer.id);
+    const sub = await loadFreshSubscription(env, customer.id);
     return json({
       user: { id: customer.id, email: customer.email, name: customer.display_name },
       subscription: subscriptionView(sub),
@@ -503,7 +523,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
   if (method === "GET" && path === "/subscription") {
     if (!customer) return err(401, "unauthorized");
-    const sub = await customerSubscription(env, customer.id);
+    const sub = await loadFreshSubscription(env, customer.id);
     return json(subscriptionView(sub));
   }
 
@@ -588,7 +608,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
     // 已付款的订单顺带把订阅快照一起给，客户端少一次往返
     const settled = row.status !== "pending" && row.status !== "expired" && row.status !== "closed";
-    const sub = settled ? await customerSubscription(env, customer.id) : null;
+    const sub = settled ? await loadFreshSubscription(env, customer.id) : null;
     return json({
       order_code: row.code,
       status: row.status,

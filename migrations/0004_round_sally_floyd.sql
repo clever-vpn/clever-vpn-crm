@@ -1,1 +1,0 @@
-ALTER TABLE `promotions` ADD `plan_id` text;

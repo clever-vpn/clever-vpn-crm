@@ -50,12 +50,12 @@ async function seedSubscription(opts: { lastSettledAt: string; platformId: numbe
 
   await env.DB.prepare(
     `INSERT INTO platform_subscriptions
-       (customer_id, plan_id, kind, hold, paid_minor, currency, licence_limit, term_days,
-        quota_gb, traffic_total_gb, validity_days, line_ids, started_at,
-        expires_at, anchor_day, balance_gb, remaining_gb, last_settled_at,
-        platform_customer_id, code, created_at, updated_at)
+       (customer_id, plan_id, kind, hold, paid_minor, currency, licence_limit, period_term_days,
+        period_quota_gb, traffic_total_gb, traffic_validity_days, line_ids, started_at,
+        expires_at, period_anchor_day, period_extra_gb, period_settled_at,
+        platform_customer_id, activation_code, created_at, updated_at)
      VALUES (?, 'p_month', 'period', 'none', 1500, 'CNY', 1, 30,
-        100, NULL, NULL, '[]', ?, ?, 1, 10, NULL, ?, ?, '7391000000000001', ?, ?)`,
+        100, NULL, NULL, '[]', ?, ?, 1, 10, ?, ?, '7391000000000001', ?, ?)`,
   )
     .bind(
       customerId,
@@ -113,11 +113,11 @@ describe("runSettlement：额度重置并回写平台", () => {
     expect(cf.customers.get(PLATFORM_ID)?.quota).toBeNull();
 
     const row = await env.DB.prepare(
-      `SELECT balance_gb, last_settled_at FROM platform_subscriptions WHERE customer_id = ?`,
+      `SELECT period_extra_gb, period_settled_at FROM platform_subscriptions WHERE customer_id = ?`,
     )
       .bind(customerId)
-      .first<{ balance_gb: number; last_settled_at: string }>();
-    expect(row?.balance_gb).toBe(5);
+      .first<{ period_extra_gb: number; period_settled_at: string }>();
+    expect(row?.period_extra_gb).toBe(5);
 
     const change = await env.DB.prepare(
       `SELECT action FROM subscription_changes WHERE customer_id = ? ORDER BY id DESC LIMIT 1`,

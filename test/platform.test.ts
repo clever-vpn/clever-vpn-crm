@@ -15,6 +15,7 @@ function sub(over: Partial<Subscription> = {}): Subscription {
   const base: Subscription = {
     id: 1,
     customer_id: 7,
+    order_id: 11,
     plan_id: "p_30d_100g_1d",
     kind: "period",
     hold: "none",
@@ -23,19 +24,20 @@ function sub(over: Partial<Subscription> = {}): Subscription {
     paid_minor: 1500,
     currency: "CNY",
     licence_limit: 1,
-    term_days: 30,
-    quota_gb: 100,
+    period_term_days: 30,
+    period_quota_gb: 100,
     traffic_total_gb: null,
-    validity_days: null,
+    traffic_validity_days: null,
+    traffic_remaining_gb: null,
+    traffic_synced_at: null,
     line_ids: [],
     started_at: "2026-10-01T00:00:00Z",
     expires_at: "2026-10-31T12:34:56Z",
-    anchor_day: 1,
-    balance_gb: 0,
-    remaining_gb: null,
-    last_settled_at: null,
+    period_anchor_day: 1,
+    period_extra_gb: 0,
+    period_settled_at: null,
     platform_customer_id: null,
-    code: null,
+    activation_code: null,
   };
   return { ...base, ...over } as Subscription;
 }
@@ -45,35 +47,35 @@ describe("trafficBytes：单位是字节，不是 GB", () => {
     expect(GIGA).toBe(1073741824);
   });
 
-  it("period：本期额度 + 加购包余额", () => {
-    expect(trafficBytes(sub({ quota_gb: 100, balance_gb: 20 }))).toBe(120 * GIGA);
+  it("period：本期额度 + 额外池", () => {
+    expect(trafficBytes(sub({ period_quota_gb: 100, period_extra_gb: 20 }))).toBe(120 * GIGA);
   });
 
-  it("period 不限量（quota_gb = null）→ null（cf-api 侧等于不计费）", () => {
-    expect(trafficBytes(sub({ quota_gb: null, balance_gb: 50 }))).toBeNull();
+  it("period 不限量（quota = null）→ null（cf-api 侧等于不计费）", () => {
+    expect(trafficBytes(sub({ period_quota_gb: null, period_extra_gb: 50 }))).toBeNull();
   });
 
   it("traffic：用剩余量，不是整包容量", () => {
     expect(
-      trafficBytes(sub({ kind: "traffic", quota_gb: null, traffic_total_gb: 200, remaining_gb: 50 })),
+      trafficBytes(sub({ kind: "traffic", period_quota_gb: null, traffic_total_gb: 200, traffic_remaining_gb: 50 })),
     ).toBe(50 * GIGA);
   });
 
   it("traffic 余量未同步（null）→ 退化为整包，宁可多给不可误杀", () => {
     expect(
-      trafficBytes(sub({ kind: "traffic", quota_gb: null, traffic_total_gb: 200, remaining_gb: null })),
+      trafficBytes(sub({ kind: "traffic", period_quota_gb: null, traffic_total_gb: 200, traffic_remaining_gb: null })),
     ).toBe(200 * GIGA);
   });
 
   it("traffic 不限量（无整包容量）→ null", () => {
     expect(
-      trafficBytes(sub({ kind: "traffic", quota_gb: null, traffic_total_gb: null, remaining_gb: null })),
+      trafficBytes(sub({ kind: "traffic", period_quota_gb: null, traffic_total_gb: null, traffic_remaining_gb: null })),
     ).toBeNull();
   });
 
   it("余量为负也不下发负数", () => {
     expect(
-      trafficBytes(sub({ kind: "traffic", quota_gb: null, traffic_total_gb: 200, remaining_gb: -5 })),
+      trafficBytes(sub({ kind: "traffic", period_quota_gb: null, traffic_total_gb: 200, traffic_remaining_gb: -5 })),
     ).toBe(0);
   });
 });

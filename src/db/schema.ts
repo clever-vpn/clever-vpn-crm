@@ -64,8 +64,8 @@ export const auditLog = sqliteTable(
 /**
  * 客户：**身份**，不含任何权益（见 domain.md §1）。
  *
- * `cf_customer_id` 是 cf-api 侧的行 id —— cf-api 才是"能不能用"的真相；
- * 本地这行只负责身份与聚合查询。
+ * 与 cf-api 的关联挂在 `platform_subscriptions.platform_customer_id` 上（那里才是
+ * "这份权益对应谁"），这里不重复存。
  */
 export const customers = sqliteTable(
   "customers",
@@ -75,8 +75,6 @@ export const customers = sqliteTable(
     password_hash: text("password_hash"),
     display_name: text("display_name"),
     status: text("status").notNull().default("active"),
-    /** cf-api `customers.id`；首次安装/绑定后回填 */
-    cf_customer_id: integer("cf_customer_id"),
     /**
      * 这个用户自己的邀请码（**懒生成**：第一次被要就发一张，之后不变）。
      * NULL = 还没生成过。它是"关系层"的唯一入口，与促销折扣无关。
@@ -184,57 +182,106 @@ export const plans = sqliteTable(
 );
 
 /**
- * 订阅 = 一次购买产生的**使用权**（销售事实：套餐快照 + 实付价已冻结）。
+ * 订阅 = **这一份权益现在的完整快照**（域模型见 domain.md §1）。
  *
- * 同一用户同一时刻只有一个 active 主订阅（period / traffic）；
- * addon 单独一行但不占主位。
+ * 定位三句话：
+ *   - 存"这份权益是什么规则 + 还剩多少 + 在平台上对应谁"；
+ *   - **不存**钱（`orders`）、历史（`subscription_changes`）、身份（`customers`）、
+ *     商品定义（`plans`）；
+ *   - **一个客户最多一行**（`uq_subs_customer`），新购/续费/升级都是"算出新快照
+ *     → 覆盖这一行"，所以 `kind` 只可能是 `period` / `traffic`
+ *     （加量包不产生订阅行，它只往 `period_extra_gb` 里加数）。
  *
- * `params_version` 用于**写冲突检测**（domain.md I3）：CRM 侧改参数前先读、
- * 写回时比对，冲突就重算，避免与后台其它操作互相覆盖。
+ * 状态不落库：到期看 `expires_at`、用完看额度；`hold*` 只表达"人的意图"。
+ *
+ * **列名带类型前缀**（`period_*` / `traffic_*`）：只给"单一 kind 专有"的列加，
+ * 两种都用的（`expires_at` / `licence_limit` / `line_ids`）不加。
  */
 export const platformSubscriptions = sqliteTable(
   "platform_subscriptions",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     customer_id: integer("customer_id").notNull(),
-    /** 来源订单（赠送/补单也有订单，见 domain.md I1） */
+    /**
+     * **最初**让这份权益生效的订单（domain.md I1「权益必须有来源」）。
+     *
+     * 只在 `action = 'new'` 时写入；续费/加量/升级**不覆盖**它 ——
+     * 那些订单的归属看 `subscription_changes.detail.order_id`。
+     */
     order_id: integer("order_id"),
     plan_id: text("plan_id").notNull(),
     kind: text("kind").notNull(),
     /**
      * 手工控制位：`none` / `frozen` / `revoked`。
-     * **状态是算出来的**（domain.md §1.3）：到期看 `expires_at`，用完看余额；
+     * **状态是算出来的**（domain.md §1.3）：到期看 `expires_at`，用完看额度；
      * 这一列只表达“人的意图”（管理员冻结 / 退款作废）。
      */
     hold: text("hold").notNull().default("none"),
     hold_reason: text("hold_reason"),
     hold_at: text("hold_at"),
+    /**
+     * 这份权益的**成交价**（不是账户余额、不是累计付款）。唯一用途是算残值：
+     * `residual = paid_minor × 剩余比例`。
+     *
+     * ⚠️ 加量包/赠送**不得覆盖它** —— 否则残值基准被拉低（那笔钱记在
+     * `orders` 与 `subscription_changes` 里）。
+     */
     paid_minor: integer("paid_minor").notNull(),
+    /** 成交币种。**仅快照**，不参与任何计算（我们单币种） */
     currency: text("currency").notNull(),
     licence_limit: integer("licence_limit").notNull(),
-    term_days: integer("term_days"),
-    quota_gb: real("quota_gb"),
+
+    // ── period 专有 ──
+    /** period：计费天数（残值按小时比例折算的依据） */
+    period_term_days: integer("period_term_days"),
+    /** period：每月额度（来自 `plans.monthly_quota_gb`），按 `period_anchor_day` 重置 */
+    period_quota_gb: real("period_quota_gb"),
+    /** period：月度重置锚点（1–28，按购买日封顶），cron 据此重置额度 */
+    period_anchor_day: integer("period_anchor_day"),
+    /**
+     * period：**额外流量池**（GB）。三个来源：加量包、礼包赠送、邀请奖励。
+     *
+     * - 不随月度重置清零；与 `period_quota_gb` 一起被消耗；
+     * - 月底用 `min(池子, 平台剩余)` 反推还剩多少 —— **本月没用完的额度不结转**；
+     * - 它是 GB 数量，升级时原样搬到新订阅，**不折钱**。
+     */
+    period_extra_gb: real("period_extra_gb"),
+    /** period：上次月结时间（结算 cron 的幂等依据，也用于跳过漏跑的周期） */
+    period_settled_at: text("period_settled_at"),
+
+    // ── traffic 专有 ──
+    /** traffic：流量套餐总量（残值按"剩余/总量"算比例） */
     traffic_total_gb: real("traffic_total_gb"),
-    validity_days: integer("validity_days"),
+    /**
+     * traffic：剩余量 —— **缓存**，不是权威值。真实剩余在 cf-api，它随用户使用减少。
+     *
+     * - 比 `traffic_synced_at` 新过 TTL（15 分钟）后视为过期，需要重新同步；
+     * - **任何写平台的操作（如加量包）必须先强制同步**，否则会把用户已用掉的流量还回去；
+     * - `null` = 从未同步（≠ 0，不能当"用完"）。
+     */
+    traffic_remaining_gb: real("traffic_remaining_gb"),
+    /** traffic：上面那个缓存最后一次与 cf-api 同步的时间（TTL 判据） */
+    traffic_synced_at: text("traffic_synced_at"),
+    /** traffic：流量包有效期（天）。仅快照，续费时以套餐当时的值为准 */
+    traffic_validity_days: integer("traffic_validity_days"),
+
+    // ── 两种 kind 共用 ──
     line_ids: text("line_ids").notNull().default("[]"),
+    /** 这份权益的开始时间；`new` / `upgrade` 时重置，`renewal` / `addon` 不变 */
     started_at: text("started_at").notNull(),
+    /** 到期时间；`null` = 永久 / 不限期 */
     expires_at: text("expires_at"),
-    /** 重置锚点（1–28，按购买日封顶），cron 据此重置 */
-    anchor_day: integer("anchor_day"),
-    /** 结转 / 加购的累积余额（跨期不清零） */
-    balance_gb: real("balance_gb"),
-    remaining_gb: real("remaining_gb"),
-    last_settled_at: text("last_settled_at"),
+    /** cf-api 侧的客户 id（落账后回填；未落账 = null，订单会停在 provisioning） */
     platform_customer_id: integer("platform_customer_id"),
-    code: text("code"),
-    params_version: integer("params_version").notNull().default(0),
+    /** cf-api 侧的激活码；`licence_limit` 变化时置 null 等重新落账（旧码立即失效） */
+    activation_code: text("activation_code"),
     created_at: text("created_at").notNull(),
     updated_at: text("updated_at").notNull(),
   },
   (t) => [
     // I7：一个客户最多一行（历史留在 orders / subscription_changes）
     uniqueIndex("uq_subs_customer").on(t.customer_id),
-    index("idx_subs_due").on(t.kind, t.last_settled_at),
+    index("idx_subs_due").on(t.kind, t.period_settled_at),
     index("idx_subs_order").on(t.order_id),
   ],
 );
@@ -261,8 +308,9 @@ export const subscriptionChanges = sqliteTable(
     plan_after: text("plan_after"),
     expires_before: text("expires_before"),
     expires_after: text("expires_after"),
-    balance_before: real("balance_before"),
-    balance_after: real("balance_after"),
+    /** `period_extra_gb` 的前后值（只有 period 有） */
+    period_extra_before: real("period_extra_before"),
+    period_extra_after: real("period_extra_after"),
     detail: text("detail"),
   },
   (t) => [index("idx_changes_customer").on(t.customer_id, t.id)],

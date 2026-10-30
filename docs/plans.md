@@ -47,7 +47,7 @@ Last updated: 2026-10-24
 - **升级可以跨 `kind`**（周期 ⇄ 流量都行），因为残值是“实付价 × 剩余比例”，与量纲无关。
 - **加购包不折钱**：`addon` 是纯 GB 余额，升级时原样搬到新订阅。
 - **加购没有开关**：只要有一份生效中的周期套餐就能买加量包（它不产生第二份订阅，
-  只往 `balance_gb` 上加 GB）；唯一例外是不限量套餐——加了对用户没有任何作用。
+  只往 `period_extra_gb` 上加 GB）；唯一例外是不限量套餐——加了对用户没有任何作用。
 - **加量包可买时 `action` 就是 `buy`**：它的交易行为恒为“按标价加流量”，不需要单独一格
   （`kind === "addon"` 已经说明它是什么）。
 
@@ -157,27 +157,24 @@ plans (id, name, kind, price_minor, currency, licence_limit,
 
 ## 6. 订阅与结算（已实现）
 
-`platform_subscriptions` 一行 = 一次成交的**规则快照**（`paid_minor`、`quota_gb`、`term_days`、
-`anchor_day`、`balance_gb`）；之后改套餐不影响已经卖出去的订阅。
+`platform_subscriptions` 一行 = 一次成交的**规则快照**（`paid_minor`、`period_quota_gb`、
+`period_term_days`、`period_anchor_day`、`period_extra_gb`）；之后改套餐不影响已经卖出去的订阅。
 
 结算不变量：
 
 $$R = P + B, \qquad B' = \min(B, R), \qquad R' = P + B'$$
 
-`R` = 平台余额、`P` = 本月额度、`B` = 加购包余额。等价于"按已用量扣包"，但**不需要记录已用量**。
+`R` = 平台余额、`P` = 本月额度（`period_quota_gb`）、`B` = 额外流量池（`period_extra_gb`）。
+等价于"按已用量扣包"，但**不需要记录已用量**。本月没用完的额度**不结转**（只看池子）。
 
-- 触发：`crons = ["17 * * * *"]`（`src/index.ts` 的 `scheduled`），幂等——`settle()` 只看 `last_settled_at`。
-- **单位**：`settle()` 内部全程用 **GB**；回写 cf-api 时乘 `1024³`（平台存的是字节），
-  读写都过 `src/platform/client.ts`，换算只在这一层发生。
-- **读不到平台余额就跳过本轮**：绝不能拿 `quota_gb` 兜底（那等于凭空造额度），
-  `failed` 记一条错误，下一小时重试；还没落账的订阅直接跳过（交给 `retryProvisioning`）。
+- 触发：`crons = ["17 * * * *"]`（`src/index.ts` 的 `scheduled`），幂等——`settle()` 只看 `period_settled_at`。
 - **单位**：`settle()` 内部全程用 **GB**；回写 cf-api 时乘 `1024³`（平台存的是字节）。
   读写都经过 `src/platform/client.ts`，换算只在这一层发生。
-- **读不到平台余额就跳过本轮**：绝不能拿 `quota_gb` 兜底（那等于凭空造额度）；
+- **读不到平台余额就跳过本轮**：绝不能拿 `period_quota_gb` 兜底（那等于凭空造额度）；
   `failed` 会记一条错误，下一小时重试。
 - 还没落账的订阅（无 `platform_customer_id`）直接跳过，交给 `retryProvisioning`。
 - 漏跑几个月：只结算一次并把锚点推到最近一期，**不重放**（中间用量已经滚进 R 了，重放等于凭空发额度）。
-- 平台写入失败：`last_settled_at` 不动，下一小时自动重试（不会出现"CRM 以为重置了、平台还是旧余额"）。
+- 平台写入失败：`period_settled_at` 不动，下一小时自动重试（不会出现"CRM 以为重置了、平台还是旧余额"）。
 - 本地试跑：`POST /api/admin/subscriptions/settle {"dry_run": true}` —— 默认就是 dry-run，
   打印"会写成什么"而不写库。
 

@@ -56,7 +56,7 @@ Last updated: 2026-10-24
 代价与前提：改写这一行时**必须**在 `subscription_changes` 记完整的 before / after
 （到期日、套餐、`kind`、余额），否则退款模式 A 无法回滚到购买前状态。
 
-加购包（`addon`）不占订阅行：它只往这一行的 `balance_gb` 上加 GB。
+加购包（`addon`）不占订阅行：它只往这一行的 `period_extra_gb`（额外流量池）上加 GB。
 
 ### 1.3 状态是算出来的，并且要告诉用户具体原因
 
@@ -84,8 +84,8 @@ Last updated: 2026-10-24
   App 的放行判断就得跟着改一次。现在 App 只判断一条 `status === "active"`，
   新增原因只需改 CRM（App 照旧展示 `status_text`）。
 - `expired` 对周期套餐是**本周期**用完（重置后自动恢复），对流量包是**整包**用完。
-  不限量套餐（`remaining_gb = NULL`）永远不会 `exhausted`；`remaining_gb = null`
-  在其它情况下表示“未同步”，**不是 0**。
+  不限量套餐（`traffic_remaining_gb = NULL`）永远不会 `exhausted`；`traffic_remaining_gb = null`
+  在其它情况下表示“未同步”（缓存还没回源），**不是 0**。
 - **没有 cron 去写 `expired`**：过期是读的时候算出来的，不会出现“到期了但任务没跑”的状态错误。
 
 “能不能连”的**最终判定仍在 cf-api**（心跳读自己的 `traffic_balance`）；CRM 算出的
@@ -110,7 +110,7 @@ flowchart LR
 
 | 动作 | 什么时候 | 应付 | 对那一行订阅做了什么 |
 |---|---|---|---|
-| **新购/直购** `buy` | 没有可用订阅，**或买的是加量包** | 目录价 | 新购写新快照；加量包不动订阅，只 `balance_gb +=` |
+| **新购/直购** `buy` | 没有可用订阅，**或买的是加量包** | 目录价 | 新购写新快照（`order_id` = 这笔单）；加量包不动订阅，只 `period_extra_gb +=` |
 | **续订** `renewal` | 有订阅、买的**同一个套餐** | 目录价（全款） | 到期日 = `max(现在, 原到期日) + 期限` |
 | **升级** `upgrade` | 有订阅、目标**标价更高**（含换 `kind`） | 新价 − 残值，**必须 > 0** | 换成新快照（到期日 = 现在 + 新期限） |
 
@@ -119,7 +119,8 @@ flowchart LR
 - **升级只认标价**：`目标 price_minor > 当前套餐 price_minor`。标价相同/更低一律拒，
   哪怕残值抵扣后应付 > 0（否则“花更少的钱换一个更贵的套餐”会成为漏洞）。
 - **残值只按实付价算**：`price_minor` 用来比贵，`paid_minor` 用来折钱，两个数在促销时会分叉。
-- **加量包不折钱**：它是纯 GB 数量，升级时**原样搬到新订阅**，不参与残值计算。
+- **加量包不折钱**：它是纯 GB 数量，升级时**原样搬到新订阅**（目标是 period 就留在池子里，
+  目标是 traffic 就并进流量包），不参与残值计算；它也**不覆盖 `paid_minor`**（那是主订阅成交价）。
 - 每一条权益变化都能追溯到一行 `orders` 或 `adjustments`。
 
 ## 3. 六条不变量
@@ -141,18 +142,19 @@ flowchart LR
 | 参数 | 真相在 | CRM 何时写 | 写入语义 |
 |---|---|---|---|
 | `traffic_balance` | **cf-api**（心跳扣减） | ① 重置点（cron）② 加量 / 赠送 / 改额度 / 退款回滚 | **读 → 加差值 → 写回** |
-| `quota_gb`（月额度） | CRM | 改额度 | 只在本地，决定下次重置给多少 |
-| `balance_gb`（结转 / 加购） | CRM | 加购包、赠送 | `balance_gb += Δ`，跨期不丢 |
+| `period_quota_gb`（月额度） | CRM | 改额度 | 只在本地，决定下次重置给多少 |
+| `period_extra_gb`（额外流量池） | CRM | 加量包、赠送、邀请奖励 | `period_extra_gb += Δ`，**不随月度重置清零** |
+| `traffic_remaining_gb`（平台剩余缓存） | **cf-api** | 展示/报价前懒同步（TTL 15min）、每月结算 | 只缓存，**写平台前必须强制回源** |
 | `expire_date` | CRM | 新购 / 续订 / 升级 / 退款回滚 | 绝对值投影 |
 | `licence_limit` / `line_ids` | CRM | 变更 / 绑定 | 绝对值投影 |
 
 ### 4.2 周期重置（cron，每小时跑，只在锚点生效）
 
 ```
-剩余   = readPlatformBalance(客户)            // cf-api 实际还剩多少
-新余额 = quota_gb + min(balance_gb, 剩余)     // 结转不超过真实剩余
+剩余   = readPlatformBalance(客户)                          // cf-api 实际还剩多少
+新余额 = period_quota_gb + min(period_extra_gb, 剩余)       // 池子抵扣不超过真实剩余
 writePlatformBalance(新余额)
-// 不动 quota_gb、不动 balance_gb
+// 不动 period_quota_gb、不动 period_extra_gb（但会把池子写成 min(B, 剩余)，并刷新 remaining 缓存）
 ```
 
 ### 4.3 管理员改月额度（100 → 200）

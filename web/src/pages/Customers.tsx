@@ -193,28 +193,28 @@ export default function Customers() {
               dataIndex: "subscription",
               render: (s: AdminCustomer["subscription"]) => {
                 if (!s) return "—";
-                // 不限量只看 quota_gb（period 才有）；remaining_gb 为 null 只是"还没同步 cf-api"
-                const unlimited = s.kind === "period" && s.quota_gb === null;
+                // 不限量只看 period_quota_gb（period 才有）；traffic_remaining_gb 为 null = 还没同步 cf-api
+                const unlimited = s.kind === "period" && s.period_quota_gb === null;
                 const quota =
-                  s.quota_gb !== null
-                    ? `${s.quota_gb} GB/月`
+                  s.period_quota_gb !== null
+                    ? `${s.period_quota_gb} GB/月`
                     : s.traffic_total_gb !== null
                       ? `${s.traffic_total_gb} GB`
                       : "不限量";
                 const remaining = unlimited
                   ? null
-                  : s.remaining_gb === null
+                  : s.traffic_remaining_gb === null
                     ? "余额待同步"
-                    : `剩 ${s.remaining_gb} GB`;
+                    : `剩 ${s.traffic_remaining_gb} GB`;
                 return (
                   <Space direction="vertical" size={0}>
                     <span>
                       {quota}
                       {remaining ? ` · ${remaining}` : ""}
                     </span>
-                    {!!s.balance_gb && (
+                    {!!s.period_extra_gb && (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        加购余额 {s.balance_gb} GB
+                        额外流量池 {s.period_extra_gb} GB
                       </Typography.Text>
                     )}
                   </Space>

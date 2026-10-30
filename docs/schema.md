@@ -1,6 +1,6 @@
 # 表结构（Drizzle / D1）
 
-Last updated: 2026-10-24
+Last updated: 2026-10-30
 
 > 设计依据：[`domain.md`](domain.md)（六条不变量）。改表先改那边，再改本文件，最后改 schema。
 > 实现：`src/db/schema.ts`；生产迁移：`migrations/`；开发链：`migrations-dev/`（gitignore）。
@@ -67,7 +67,7 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 | `admin_users` | 管理员（单账号） | `email` unique、`password_hash`、`totp_*`、`failed_attempts`/`locked_until` |
 | `admin_sessions` | 后台会话（cookie） | `id` = sha256(token)、`pending`（2FA 挑战票） |
 | `audit_log` | 审计 | `at`、`actor`、`action`、`target`、`detail` |
-| `customers` | **客户身份**（不含权益） | `email` unique、`cf_customer_id`（cf-api 行 id） |
+| `customers` | **客户身份**（不含权益） | `email` unique、`referral_code`；与 cf-api 的关联在 `platform_subscriptions.platform_customer_id` |
 | `email_codes` | 邮箱验证码（只存哈希） | `email` PK、`purpose`、`expires_at`、`attempts` |
 | `app_sessions` | App 会话（Bearer） | `id` = sha256(token)、`revoked_at` |
 
@@ -76,8 +76,8 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 | 表 | 用途 | 关键列 |
 |---|---|---|
 | `plans` | 可售商品定义（**可变目录**，历史靠快照） | `kind`(period/traffic/addon)、`price_minor`、`visibility`(public/hidden)、`status`(draft/active/retired)、`retired_at` |
-| `platform_subscriptions` | **订阅**（当前权益，**一个客户一行**：`uq_subs_customer`） | `kind`、`quota_gb`、`balance_gb`（结转）、`anchor_day`、`expires_at`、`hold`/`hold_reason`（手工控制位）、`params_version` |
-| `subscription_changes` | 权益变更台账（**单行模型的历史全在这里**） | `action`(new/renewal/upgrade/addon/settle/hold)、`paid_minor`、`residual_minor`、`payable_minor`、`kind_before`/`kind_after`、`plan_before`/`plan_after`、`expires_before`/`expires_after`、`balance_before`/`balance_after` |
+| `platform_subscriptions` | **订阅**（当前权益，**一个客户一行**：`uq_subs_customer`） | `kind`、`order_id`、`period_quota_gb`/`period_extra_gb`/`period_anchor_day`/`period_settled_at`（period 专有）、`traffic_total_gb`/`traffic_remaining_gb`/`traffic_synced_at`/`traffic_validity_days`（traffic 专有）、`expires_at`、`hold`/`hold_reason`（手工控制位）、`activation_code` |
+| `subscription_changes` | 权益变更台账（**单行模型的历史全在这里**） | `action`(new/renewal/upgrade/addon/settle/hold/gift)、`paid_minor`、`residual_minor`、`payable_minor`、`kind_before`/`kind_after`、`plan_before`/`plan_after`、`expires_before`/`expires_after`、`period_extra_before`/`period_extra_after` |
 
 ### 2.3 钱
 
@@ -99,6 +99,35 @@ status: pending → paid → provisioning → active
         周期到期 → closed
 source: purchase（自助） | gift（赠送） | manual（后台补单）
 ```
+
+### 2.5 容易混的字段（`platform_subscriptions`）
+
+列名带**类型前缀** (`period_*` / `traffic_*`) 就是为了让这张表不再靠猜：
+
+| 字段 | 属于 | 它回答什么 | **不是** |
+|---|---|---|---|
+| `period_quota_gb` | period | 每月额度 P —— 月结时**重置回这个数** | 不是"还剩多少" |
+| `period_extra_gb` | period | 额外流量池 B（加量包 + 礼包赠送 + 邀请），**不随月度重置清零** | 不是月度额度，也不是"结转"——本月没用的额度会消失 |
+| `period_anchor_day` | period | 月结锚点日（1–28，取购买日、超过 28 归 28） | — |
+| `period_settled_at` | period | 上次月结时间（`settle()` 的幂等依据） | 不是到期时间 |
+| `traffic_total_gb` | traffic | 整包容量（残值的分母） | 不是剩余 |
+| `traffic_remaining_gb` | **两种都有** | 平台真实剩余（GB）—— **缓存**，随用户使用下降 | ⚠️ 不是权威值；`null` = 从未同步，**不等于 0**（不能当"用完"） |
+| `traffic_synced_at` | **两种都有** | 上面那个缓存最后一次与 cf-api 对齐的时间 | TTL 过 15 分钟视为过期 |
+| `traffic_validity_days` | traffic | 有效期天数快照 | 仅快照，续费看套餐当时的值 |
+| `paid_minor` | — | 这份权益的**成交价**（残值 = `paid_minor × 剩余比例`） | ⚠️ 不是累计付款：加量包/赠送**不得覆盖它** |
+| `order_id` | — | **最初**让权益生效的那笔订单（I1） | 只在 `action='new'` 写；续费/升级/加量不覆盖（去 `subscription_changes` 查） |
+| `hold` / `hold_reason` | — | **人的意图**（冻结 / 作废） | 不是状态：状态由 `expires_at` + 余量算出来，不落库 |
+| `currency` | — | 成交币种 | 仅快照，不参与任何计算（我们单币种） |
+| `activation_code` | — | cf-api 激活码 | 设备数变了会被置空等重新落账（旧码立即失效） |
+
+**"还剩多少"的统一口径**（对外 API 的 `remaining_gb`）：
+
+- traffic：`traffic_remaining_gb`
+- period：`traffic_remaining_gb` 优先（真值）；还没同步过就退化成 `period_quota_gb + period_extra_gb`
+  —— 即"这个周期最多还能用多少"，宁可多显示，也不误报"已用完"。
+
+**什么时候必须回源平台**（不能吃 15 分钟缓存）：任何**写平台余额**的操作（加量包落账、改额度、
+月结）。用旧缓存会把用户已经用掉的流量又还回去。
 
 ## 3. 迁移历史
 

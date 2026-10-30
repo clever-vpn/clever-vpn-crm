@@ -61,8 +61,8 @@ export async function handleAdminSubscriptions(
     const rows = await env.DB.prepare(
       `SELECT c.id, c.email, c.display_name, c.status, c.created_at,
               s.plan_id, s.kind AS sub_kind, s.expires_at, s.hold, s.hold_reason,
-              s.anchor_day, s.remaining_gb, s.quota_gb, s.traffic_total_gb,
-              s.balance_gb, s.licence_limit, s.paid_minor
+              s.period_anchor_day, s.traffic_remaining_gb, s.period_quota_gb,
+              s.traffic_total_gb, s.period_extra_gb, s.licence_limit, s.paid_minor
          FROM customers c
          LEFT JOIN platform_subscriptions s ON s.customer_id = c.id
         ORDER BY c.id DESC LIMIT 200`,
@@ -77,11 +77,11 @@ export async function handleAdminSubscriptions(
       expires_at: string | null;
       hold: string | null;
       hold_reason: string | null;
-      anchor_day: number | null;
-      remaining_gb: number | null;
-      quota_gb: number | null;
+      period_anchor_day: number | null;
+      traffic_remaining_gb: number | null;
+      period_quota_gb: number | null;
       traffic_total_gb: number | null;
-      balance_gb: number | null;
+      period_extra_gb: number | null;
       licence_limit: number | null;
       paid_minor: number | null;
     }>();
@@ -95,9 +95,9 @@ export async function handleAdminSubscriptions(
           hold: (r.hold ?? "none") as "none" | "frozen" | "revoked",
           hold_reason: r.hold_reason,
           expires_at: r.expires_at,
-          remaining_gb: r.remaining_gb,
+          traffic_remaining_gb: r.traffic_remaining_gb,
           kind: (r.sub_kind ?? "period") as "period" | "traffic" | "addon",
-          anchor_day: r.anchor_day,
+          period_anchor_day: r.period_anchor_day,
         },
         new Date(),
       );
@@ -111,10 +111,10 @@ export async function handleAdminSubscriptions(
           kind: r.sub_kind,
           expires_at: r.expires_at,
           licence_limit: r.licence_limit,
-          quota_gb: r.quota_gb,
+          period_quota_gb: r.period_quota_gb,
           traffic_total_gb: r.traffic_total_gb,
-          remaining_gb: r.remaining_gb,
-          balance_gb: r.balance_gb,
+          traffic_remaining_gb: r.traffic_remaining_gb,
+          period_extra_gb: r.period_extra_gb,
           paid_minor: r.paid_minor,
           status: state.status,
           // 后台看到的是机器原因 + 用户文案两个字段

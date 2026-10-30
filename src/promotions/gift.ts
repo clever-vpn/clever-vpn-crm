@@ -2,7 +2,7 @@
  * 礼包发放（**权益层**）—— 契约 `app-crm.md` §2.9.6
  *
  * 与优惠券的区别只有一句：优惠券少收钱，礼包改权益。所以这里
- * **一分钱都不碰**（`benefit_value` 恒 0），只动订阅的 `expires_at` / `balance_gb`。
+ * **一分钱都不碰**（`benefit_value` 恒 0），只动订阅的 `expires_at` / `period_extra_gb`。
  *
  * 三条硬规则：
  *   1. **必须有订阅**：没有订阅就没有地方存放权益 —— 跳过并留痕，不报错。
@@ -114,17 +114,19 @@ async function applyGift(
   if (days > 0 && next.expires_at !== null) {
     next.expires_at = new Date(Date.parse(next.expires_at) + days * 86_400_000).toISOString();
   }
-  // 流量：进加购余额（跨期不清零那本账）
+  // 流量：period 进额外流量池（跨期不清零那本账）；traffic 直接加在剩余上
   if (gb > 0) {
-    next.balance_gb = (next.balance_gb ?? 0) + gb;
-    if (next.kind === "traffic" && next.remaining_gb !== null) {
-      next.remaining_gb = next.remaining_gb + gb;
+    if (next.kind === "traffic") {
+      if (next.traffic_remaining_gb !== null) next.traffic_remaining_gb += gb;
+      if (next.traffic_total_gb !== null) next.traffic_total_gb += gb;
+    } else {
+      next.period_extra_gb = (next.period_extra_gb ?? 0) + gb;
     }
   }
-  // 重置本月已用：period 侧靠下面这次落账把 `quota + balance` 重新推给平台；
+  // 重置本月已用：period 侧靠下面这次落账把 `quota + extra` 重新推给平台；
   // traffic 侧直接把剩余拉到整包容量
   if (reset_month && next.kind === "traffic" && next.traffic_total_gb !== null) {
-    next.remaining_gb = next.traffic_total_gb;
+    next.traffic_remaining_gb = next.traffic_total_gb;
   }
 
   const id = await upsertSubscription(env, next);
@@ -212,8 +214,16 @@ async function openFromCarrierPlan(
       opts.rewards.days > 0
         ? new Date(opts.now.getTime() + opts.rewards.days * DAY_MS).toISOString()
         : base.expires_at,
-    // 礼包额外送的 GB 叠在加购余额上（套餐额度不动）
-    balance_gb: opts.rewards.gb > 0 ? opts.rewards.gb : 0,
+    // 礼包额外送的 GB 跟着套餐类型走：period 进池子，traffic 加在整包上
+    period_extra_gb: plan.kind === "period" && opts.rewards.gb > 0 ? opts.rewards.gb : 0,
+    traffic_total_gb:
+      plan.kind === "traffic" && opts.rewards.gb > 0
+        ? (base.traffic_total_gb ?? 0) + opts.rewards.gb
+        : base.traffic_total_gb,
+    traffic_remaining_gb:
+      plan.kind === "traffic" && opts.rewards.gb > 0
+        ? (base.traffic_remaining_gb ?? 0) + opts.rewards.gb
+        : base.traffic_remaining_gb,
   };
 
   const id = await upsertSubscription(env, next);

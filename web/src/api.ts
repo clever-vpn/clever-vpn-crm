@@ -361,11 +361,14 @@ export interface AdminSubscriptionSummary {
   kind: "period" | "traffic" | "addon";
   expires_at: string | null;
   licence_limit: number | null;
-  quota_gb: number | null;
+  /** period 专有：每月额度 */
+  period_quota_gb: number | null;
+  /** period 专有：额外流量池（加量包 + 赠送 + 邀请），不随月度重置清零 */
+  period_extra_gb: number | null;
   /** traffic 包的整包容量（period 为 null） */
   traffic_total_gb: number | null;
-  remaining_gb: number | null;
-  balance_gb: number | null;
+  /** 平台真实剩余（缓存，TTL 15 分钟；null = 还没同步过） */
+  traffic_remaining_gb: number | null;
   paid_minor: number | null;
   status: SubscriptionStatus;
   /** 不可用的原因（expired / exhausted / frozen）；`active` 时为 null */
