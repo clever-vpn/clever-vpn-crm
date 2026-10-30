@@ -104,6 +104,10 @@ cf-api 禁用该客户，否则用户照样能连。
 为什么给 `tag_tone` 而不是让 App 看中文猜风格：**文案会改，样式键是稳定的**。
 App 里不该出现 `if (isTrial)` —— "这份权益是不是试用"属于 CRM 的账，不属于客户端的渲染逻辑。
 
+- **时间线（`/me/timeline`）只放「用户的账」**：`new / renewal / upgrade / addon / gift / adjust`。
+  `settle`（每月重置）用 `/subscription.next_reset_at` 表达（那是**规则**不是事件）；
+  `hold` 是内部原因（结论已经体现在 `status_text` 里）。
+
 ## 2. 关系
 
 ```mermaid

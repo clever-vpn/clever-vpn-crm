@@ -10,6 +10,7 @@
  *   POST /auth/logout
  *   GET  /me                   用户 + 订阅快照 + 邀请面板
  *   GET  /subscription         订阅状态（status + reason + status_text）
+ *   GET  /me/timeline         权益变更时间线（用户视角，cursor 分页）
  *   GET  /me/gifts             我的礼包（待领取 / 已领取 / 已过期）
  *   POST /me/gifts/{id}/claim  领取一张待领取的礼包
  *   GET  /plans                可售套餐（免登录；每项只带一个 `action` + 促销展示位）
@@ -34,6 +35,8 @@ import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
 import { claimGift, listGifts, pendingGiftCount } from "../promotions/gift";
+import { listTimeline } from "../subscriptions/timeline";
+import { orderListView } from "../orders/view";
 import { bindReferral, referralPanel } from "../promotions/referral";
 import { redeemGiftCode } from "../promotions/redeem";
 import { planPromos, resolveForPlans, resolvePromotion } from "../promotions/service";
@@ -67,6 +70,34 @@ const PAY_METHOD_LABEL: Record<string, string> = {
   stripe: "银行卡",
   transfer: "银行转账",
 };
+
+/**
+ * 下一次月度额度重置的时间（**规则**，不是事件）。
+ *
+ * 为什么单独给：`settle`（每月重置）不进时间线（每月一行噪音，且容易被读成"又给我
+ * 加了额度"）。用户想知道"什么时候回到满额"，看这一个字段就够了。
+ *
+ * 口径：`period_anchor_day` 是买的那天（1–31），下个月同一天；本月还没到就是本月。
+ * 月底（31 号买、下月只有 30 天）按当月最后一天算 —— 与结算侧一致。
+ */
+function nextResetAt(sub: { kind: string; period_anchor_day: number | null; expires_at: string | null; period_quota_gb: number | null } | null): string | null {
+  if (!sub) return null;
+  if (sub.kind !== "period" || sub.period_quota_gb === null) return null;
+  const anchor = sub.period_anchor_day ?? 1;
+
+  const now = new Date();
+  const clampDay = (year: number, month: number): number =>
+    Math.min(anchor, new Date(Date.UTC(year, month + 1, 0)).getUTCDate());
+
+  const thisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), clampDay(now.getUTCFullYear(), now.getUTCMonth())));
+  const next =
+    thisMonth.getTime() > now.getTime()
+      ? thisMonth
+      : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, clampDay(now.getUTCFullYear(), now.getUTCMonth() + 1)));
+  // 订阅已经到期 / 无限期 ⇒ 谈不上"下次重置"
+  if (sub.expires_at && Date.parse(sub.expires_at) <= next.getTime()) return null;
+  return next.toISOString();
+}
 
 function json(body: unknown, status = 200, extra?: HeadersInit): Response {
   return new Response(JSON.stringify(body), {
@@ -570,7 +601,23 @@ async function route(request: Request, env: Env, path: string, method: string): 
   if (method === "GET" && path === "/subscription") {
     if (!customer) return err(401, "unauthorized");
     const sub = await loadFreshSubscription(env, customer.id);
-    return json(subscriptionView(sub));
+    return json({
+      ...subscriptionView(sub),
+      // 「每月 X 日重置」是**规则**，不是事件 —— 所以放这里，而不是塞进时间线
+      next_reset_at: nextResetAt(sub),
+    });
+  }
+
+  // ── 权益变更时间线（用户视角）──
+  //  白名单 + 文案都在 `subscriptions/timeline.ts`：settle / hold 不进（见那里的注释）。
+  if (method === "GET" && path === "/me/timeline") {
+    if (!customer) return err(401, "unauthorized");
+    const q = new URL(request.url).searchParams;
+    const page = await listTimeline(env, customer.id, {
+      cursor: Number(q.get("cursor") ?? 0) || 0,
+      limit: Number(q.get("limit") ?? 20) || 20,
+    });
+    return json(page);
   }
 
   // ── 我的礼包（待领取 / 已领取 / 已过期）──
@@ -578,7 +625,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
   //  `action`），App 只画卡片。过期了会怎样、还剩几天，是业务口径，不是客户端的事。
   if (method === "GET" && path === "/me/gifts") {
     if (!customer) return err(401, "unauthorized");
-    return json({ gifts: await listGifts(env, customer.id) });
+    const gifts = await listGifts(env, customer.id);
+    return json({
+      gifts,
+      // 空态文案也由 CRM 给：前端不该自己拼"暂无礼包"
+      empty_text: gifts.length ? null : "暂时没有可领的礼包，有新的会通知你",
+    });
   }
 
   // 领取：业务性失败（已领过 / 已过期 / 领不了）一律 200 + ok:false + reason，
@@ -591,7 +643,15 @@ async function route(request: Request, env: Env, path: string, method: string): 
       claimId: Number(claimOne[1]),
     });
     if (result.status === "missing") return err(404, "claim_not_found");
-    return json(result);
+    return json({
+      ...result,
+      // 领取成功给一句完整的话（App 直接显示，不用拼"到账了多少、到哪天"）
+      result_text: result.ok
+        ? `已到账：${result.gift?.rewards_text ?? ""}${
+            result.gift ? "，可以在「我的订阅」里看到" : ""
+          }`
+        : (result.reason ?? "领取失败"),
+    });
   }
 
   // ── 兑换码（契约 §2.9.7）──
@@ -615,19 +675,26 @@ async function route(request: Request, env: Env, path: string, method: string): 
   //    给官网"我的"页做收据用。只返回当前登录用户自己的订单，不接受任何 userId 入参。
   if (method === "GET" && path === "/orders") {
     if (!customer) return err(401, "unauthorized");
+    const params = new URL(request.url).searchParams;
     const limit = Math.min(
       50,
-      Math.max(1, Number(new URL(request.url).searchParams.get("pagination[limit]") ?? 20) || 20),
+      Math.max(1, Number(params.get("pagination[limit]") ?? 20) || 20),
     );
+    // 游标翻页（`cursor` = 上一页最后一条的 id）。原来的实现只有一个 limit，
+    // 第 21 单以后永远拿不到。
+    const cursor = Number(params.get("cursor") ?? 0) || 0;
     const rows = await env.DB.prepare(
-      `SELECT code, plan_id, amount_minor, discount_minor, currency, status,
+      `SELECT id, code, plan_snapshot, amount_minor, discount_minor, currency, status,
               created_at, paid_at
-         FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT ?`,
+         FROM orders
+        WHERE customer_id = ? AND (? = 0 OR id < ?)
+        ORDER BY id DESC LIMIT ?`,
     )
-      .bind(customer.id, limit)
+      .bind(customer.id, cursor, cursor, limit + 1)
       .all<{
+        id: number;
         code: string;
-        plan_id: string;
+        plan_snapshot: string;
         amount_minor: number;
         discount_minor: number;
         currency: string;
@@ -635,17 +702,14 @@ async function route(request: Request, env: Env, path: string, method: string): 
         created_at: string;
         paid_at: string | null;
       }>();
+    const now = new Date();
+    const all = rows.results ?? [];
+    const hasMore = all.length > limit;
+    const page = hasMore ? all.slice(0, limit) : all;
     return json({
-      items: (rows.results ?? []).map((row) => ({
-        order_code: row.code,
-        plan_id: row.plan_id,
-        amount_minor: row.amount_minor,
-        discount_minor: row.discount_minor,
-        currency: row.currency,
-        status: row.status,
-        created_at: row.created_at,
-        paid_at: row.paid_at,
-      })),
+      // 文案全部由 CRM 组织（标题/金额/状态句/建议轮询间隔）
+      items: page.map((row) => orderListView(row, now)),
+      next_cursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
     });
   }
 

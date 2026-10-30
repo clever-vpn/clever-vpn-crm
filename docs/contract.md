@@ -19,7 +19,8 @@ Last updated: 2026-10-25
 |---|---|
 | 契约版本 | `CRM_CONTRACT_VERSION`（当前 `19`，对齐 `app-crm.md` v19），由 `GET /__version` 回显 |
 | 客户端 | **两个壳（App + 品牌官网）调同一批 `/api/app/v1`**；App 用 `Bearer`，官网用 httpOnly Cookie |
-| App 端接口 | `/api/app/v1/*`（✅ 登录/套餐/报价/下单/订阅/邀请已实现）；契约见 `app-crm.md`，`app_contract: 19` |
+| App 端接口 | `/api/app/v1/*`（✅ 登录/套餐/报价/下单/订阅/邀请/礼包/时间线已实现）；契约见 `app-crm.md`，`app_contract: 19` |
+| 用户视角视图 | **全部「CRM 出文案、客户端只渲染」**：`GET /me/timeline`（权益变更，白名单 new/renewal/upgrade/addon/gift/adjust；`settle`/`hold` 不进）、`GET /orders`（列表带 `title`/`amount_text`/`status_text`/`next_poll_after_ms`，`cursor` 翻页）、`GET /me/gifts`（含 `empty_text`）、`POST /me/gifts/{id}/claim`（含 `result_text`）、`GET /subscription`（含 `next_reset_at`） |
 | 客服 / 官网 | `GET /support` 免登录；官网**持有登录态**（同一个 `/auth` + `session_token`），已删游客结账 `checkout_token` |
 | 兑换码 | `POST /api/app/v1/redeem`（v16）：登录后输码换礼包权益；失败一律 `200 + ok:false + reason`，猜码过频 `429`；见 [promotion.md](promotion.md) §1 |
 | 促销 | 三类物件：优惠券（金额）+ 礼包（权益）+ 邀请（关系），见 [promotion.md](promotion.md)；✅ v15 已实现（`/plans` 角标、`/quote` 折扣、`/auth/verify` 邀请码、`/me.referral`、支付成功才核销、礼包发放 / 人群六值 / 冷却 / 到期挽回定时任务） |
