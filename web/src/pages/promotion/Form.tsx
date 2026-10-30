@@ -84,7 +84,7 @@ export function emptyDraft(kind: PromotionKind): PromotionDraft {
     min_subtotal_minor: 0,
     limit_plan_kinds: [],
     limit_plan_ids: [],
-    rewards: { days: kind === "gift" ? 7 : 0, gb: 0, reset_month: false },
+    rewards: { days: kind === "gift" ? 7 : 0, gb: 0 },
     audience: kind === "referral" ? "new" : kind === "gift" ? "new" : "all",
     audience_days: null,
     cooldown_hours: null,
@@ -384,7 +384,7 @@ export function PromotionForm({
             <Section title="送什么" hint="只改权益，不改金额「少收钱」是优惠券的事">
               <Field
                 label="送天数（0 = 不送）"
-                hint="直接延长有效期；永久套餐不受影响"
+                hint="只延长到期日，不碰流量；永久（无限期）订阅不受影响"
                 locked={codesIssued}
                 lockReason={lockReason}
               >
@@ -397,7 +397,7 @@ export function PromotionForm({
               </Field>
               <Field
                 label="送流量 GB（0 = 不送）"
-                hint="进加购余额，跨期不清零"
+                hint="只加流量，不碰到期日；不限量套餐不受影响"
                 locked={codesIssued}
                 lockReason={lockReason}
               >
@@ -408,16 +408,10 @@ export function PromotionForm({
                   placeholder="5"
                 />
               </Field>
-              <Field label="重置本月已用" hint="客服补偿场景" locked={codesIssued} lockReason={lockReason}>
-                <select
-                  value={draft.rewards.reset_month ? "yes" : "no"}
-                  disabled={codesIssued}
-                  onChange={(e) => patch({ rewards: { ...draft.rewards, reset_month: e.target.value === "yes" } })}
-                >
-                  <option value="no">不重置</option>
-                  <option value="yes">把本月已用流量清零</option>
-                </select>
-              </Field>
+              <div className="hint" style={{ lineHeight: 1.7 }}>
+                两个维度互相独立，各改各的。订阅本身没有这项权益时（无限期 / 不限量）会被自动忽略；
+                两项都用不上就不会发出去（也不会留空订单）。
+              </div>
             </Section>
           )}
 

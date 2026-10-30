@@ -31,7 +31,7 @@
 | | **优惠券** | **邀请** | **礼包** |
 |---|---|---|---|
 | 生效时机 | 结账时 | 注册时 | 随时（注册 / 到期 / 手动） |
-| 改什么 | **订单金额** | **关系** + 首单金额 | **订阅权益**（天数 / 流量 / 重置本月） |
+| 改什么 | **订单金额** | **关系** + 首单金额 | **订阅权益**（天数 / 流量） |
 | 归因 | ❌ | ✅ **唯一来源** | ❌ |
 | 是否产生订单 | ✅ 折扣后的正常订单 | ✅ 同上 | ✅ **0 元已付订单**（留痕用） |
 | 分发 | 服务商（有成本） | **用户自己**（零成本） | 系统自动 / 后台手动 |
@@ -136,7 +136,7 @@ promotions                     一个活动 / 一批码
   kind                         coupon | gift | referral
   benefit_type                 金额维度：amount | percent（kind=gift 时不用）
   benefit_value
-  rewards_json                 权益维度：{days, gb, reset_month}（kind=gift）
+  rewards_json                 权益维度：{days, gb}（kind=gift）
   referrer_reward_type/value   kind=referral：给推荐人什么（默认给权益，不给现金）
   min_subtotal_minor           ⚠️ 两家面板都没有，我们必须有
   limit_plan_kinds / limit_plan_ids
@@ -211,7 +211,7 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 |---|---|---|
 | P1 | 优惠券（自动活动 / 凭码 / 节日全场） | ✅ |
 | P1 | 邀请（注册绑定 + 首单双向奖励） | ✅ |
-| P2 | 礼包（送天数 / 送流量 / 重置本月） | ✅ |
+| P2 | 礼包（送天数 / 送流量） | ✅ |
 | P2 | 人群六值 + 冷却 + 点名名单（`promotion_targets`） | ✅ |
 | P2 | 注册礼包（首单后自动）/ 到期挽回礼包（每日定时） | ✅ |
 | P2 | 兑换码（共享码 + 官网/App 兑换入口 + 防撞库） | ✅ v16 |

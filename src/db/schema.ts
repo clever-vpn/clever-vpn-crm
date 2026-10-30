@@ -503,7 +503,9 @@ export const promotions = sqliteTable(
     benefit_type: text("benefit_type").notNull(),
     benefit_value: integer("benefit_value").notNull(),
     /**
-     * kind=gift 的奖励项（JSON）：`{days, gb, reset_month}`，可组合。
+     * kind=gift 的奖励项（JSON）：`{days, gb}`，可组合。
+     * **两个维度互相独立**（天数只改到期日、GB 只改流量），且只在订阅本身有这项权益时
+     * 生效 —— 无限期不收天数、不限量不收 GB。
      * **只改权益不改金额** —— 所以与 benefit_* 是两套账。
      * 刻意没有 device_limit：平台侧 `licence_limit` 建客户时固定、不可改。
      */
