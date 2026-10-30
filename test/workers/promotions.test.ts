@@ -13,6 +13,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
 import { installFakeCfApi } from "./fake-cf-api";
+import { GIGA } from "../../src/platform/client";
+
+import type { FakeCfApi } from "./fake-cf-api";
 
 const BASE = "https://crm.test";
 const CSRF = { "x-crm-request": "1" };
@@ -28,6 +31,11 @@ const REFERRER = "promo-referrer@test.com";
 const GIFT_TO = "gift-receiver@test.com";
 const GIFT_SIGNUP = "gift-signup@test.com";
 const GIFT_NO_SUB = "gift-no-sub@test.com";
+/** 礼包规则用例：只送天数 / 送 GB 基准 / 不限量 / 无限期 */
+const GIFT_DAYS_ONLY = "gift-days-only@test.com";
+const GIFT_GB_BASE = "gift-gb-base@test.com";
+const GIFT_UNLIMITED = "gift-unlimited@test.com";
+const GIFT_FOREVER = "gift-forever@test.com";
 /** 兑换码用例的收件人（网关白名单一并放行） */
 const REDEEM_WITH_SUB = "redeem-sub@test.com";
 const REDEEM_NEW_USER = "redeem-new@test.com";
@@ -44,6 +52,8 @@ const worker = rawExports as unknown as {
 };
 
 let adminCookie = "";
+/** 假 cf-api 句柄：礼包用例要断言「平台上的字节到底写没写」 */
+let cf: FakeCfApi;
 
 function fetchJson(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}) {
   const headers: Record<string, string> = { ...init.headers };
@@ -143,6 +153,7 @@ beforeAll(async () => {
   // 没有平台时订单就该停在 provisioning（契约行为），但这里要断言「付款后真的生效」，
   // 所以装一个假 cf-api —— 与 payment-flow / settlement 测试同一个做法。
   const cfApi = installFakeCfApi();
+  cf = cfApi;
   (env as unknown as Record<string, unknown>).CF_API_BASE = cfApi.base;
   (env as unknown as Record<string, unknown>).CF_API_TOKEN = cfApi.token;
   const now = new Date().toISOString();
@@ -160,6 +171,7 @@ beforeAll(async () => {
     ).bind(
       JSON.stringify([
         PAYER, FRIEND, REFERRER, GIFT_TO, GIFT_SIGNUP, GIFT_NO_SUB,
+        GIFT_DAYS_ONLY, GIFT_GB_BASE, GIFT_UNLIMITED, GIFT_FOREVER,
         REDEEM_WITH_SUB, REDEEM_NEW_USER, REDEEM_NO_PLAN, REDEEM_BRUTE,
         BATCH_A, BATCH_B, BATCH_C, BATCH_COUPON,
       ]),
@@ -180,6 +192,21 @@ beforeAll(async () => {
          store_product_id, sort_order, status, visibility, created_at, updated_at)
        VALUES ('promo_90d', '季付 · 30 元', 'period', 3000, 'CNY', 1, 90, 300,
          NULL, NULL, '[]', '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 2, 'active', 'public', ?, ?)`,
+    ).bind(now, now),
+    // 礼包规则用例：不限量周期套餐 / 永久流量包（礼包对它们无计可施）
+    env.DB.prepare(
+      `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
+         monthly_quota_gb, traffic_gb, validity_days, line_ids, sales_channels,
+         store_product_id, sort_order, status, visibility, created_at, updated_at)
+       VALUES ('promo_unl', '不限量 · 30 天', 'period', 5000, 'CNY', 1, 30, NULL,
+         NULL, NULL, '[]', '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 3, 'active', 'public', ?, ?)`,
+    ).bind(now, now),
+    env.DB.prepare(
+      `INSERT INTO plans (id, name, kind, price_minor, currency, licence_limit, term_days,
+         monthly_quota_gb, traffic_gb, validity_days, line_ids, sales_channels,
+         store_product_id, sort_order, status, visibility, created_at, updated_at)
+       VALUES ('promo_forever', '永久流量包 · 200GB', 'traffic', 9000, 'CNY', 1, NULL,
+         NULL, 200, NULL, '[]', '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 4, 'active', 'public', ?, ?)`,
     ).bind(now, now),
   ]);
 
@@ -738,6 +765,160 @@ describe("礼包（gift）", () => {
 
     const sub = await snapshotOf(customerId);
     expect(sub!.period_extra_gb).toBe(2);
+  });
+
+  /** 订阅全貌（含落账 id 与缓存列），礼包规则用例用 */
+  const subRow = async (customerId: number) => {
+    const row = await env.DB.prepare(
+      `SELECT platform_customer_id, expires_at, period_quota_gb, period_extra_gb,
+              traffic_total_gb, traffic_remaining_gb, traffic_synced_at
+         FROM platform_subscriptions WHERE customer_id = ?`,
+    )
+      .bind(customerId)
+      .first<{
+        platform_customer_id: number | null;
+        expires_at: string | null;
+        period_quota_gb: number | null;
+        period_extra_gb: number | null;
+        traffic_total_gb: number | null;
+        traffic_remaining_gb: number | null;
+        traffic_synced_at: string | null;
+      }>();
+    expect(row).toBeTruthy();
+    return row!;
+  };
+
+  /** 平台侧余额，换算成 GB */
+  const platformGb = (platformId: number) => {
+    const c = cf.customers.get(platformId);
+    return c?.traffic_balance === null || c?.traffic_balance === undefined
+      ? null
+      : c.traffic_balance / GIGA;
+  };
+
+  const grant = (promoId: number, customerId: number) =>
+    adminCall(`/api/admin/promotions/${promoId}/grant`, {
+      method: "POST",
+      body: { customer_ids: [customerId] },
+    });
+
+  it("只送天数：只改到期日，**绝不碰平台流量**（已用掉的不还回去）", async () => {
+    const promoId = await createPromotion({
+      name: "纯延期礼包",
+      kind: "gift",
+      audience: "all",
+      rewards: { days: 7 },
+    });
+
+    const token = await login(GIFT_DAYS_ONLY);
+    await payOrder(token, "promo_30d");
+    const customerId = await customerIdOf(GIFT_DAYS_ONLY);
+
+    const before = await subRow(customerId);
+    const pid = before.platform_customer_id!;
+
+    // 用户已经用掉 60GB：平台只剩 40；本地缓存故意留一个离谱的旧值 100
+    cf.customers.get(pid)!.traffic_balance = 40 * GIGA;
+    await env.DB.prepare(
+      `UPDATE platform_subscriptions SET traffic_remaining_gb = 100 WHERE customer_id = ?`,
+    )
+      .bind(customerId)
+      .run();
+
+    expect(((await (await grant(promoId, customerId)).json()) as { granted: number }).granted).toBe(1);
+
+    // 平台一点没动 —— 旧实现会写 `额度 + 池子` = 100，等于把用掉的 60 还回去
+    expect(platformGb(pid)).toBe(40);
+
+    const after = await subRow(customerId);
+    expect((Date.parse(after.expires_at!) - Date.parse(before.expires_at!)) / 86_400_000).toBe(7);
+    expect(after.period_extra_gb).toBe(before.period_extra_gb ?? 0);
+    expect(after.traffic_remaining_gb).toBe(100); // 缓存也没被"顺手"改掉
+  });
+
+  it("只送流量：基数取**平台真实剩余**，不是本地缓存", async () => {
+    const promoId = await createPromotion({
+      name: "纯加量礼包",
+      kind: "gift",
+      audience: "all",
+      rewards: { gb: 5 },
+    });
+
+    const token = await login(GIFT_GB_BASE);
+    await payOrder(token, "promo_30d");
+    const customerId = await customerIdOf(GIFT_GB_BASE);
+    const before = await subRow(customerId);
+    const pid = before.platform_customer_id!;
+
+    cf.customers.get(pid)!.traffic_balance = 40 * GIGA;
+    await env.DB.prepare(
+      `UPDATE platform_subscriptions SET traffic_remaining_gb = 100 WHERE customer_id = ?`,
+    )
+      .bind(customerId)
+      .run();
+
+    await grant(promoId, customerId);
+
+    // 40 + 5 = 45；如果用缓存（100）去加就会变成 105 —— 那是凭空造流量
+    expect(platformGb(pid)).toBe(45);
+
+    const after = await subRow(customerId);
+    expect(after.period_extra_gb).toBe((before.period_extra_gb ?? 0) + 5);
+    expect(after.traffic_remaining_gb).toBe(45); // 缓存跟着对齐真值
+    expect(after.expires_at).toBe(before.expires_at); // 不碰到期日
+  });
+
+  it("不限量套餐不收 GB：直接跳过，连 0 元订单都不建", async () => {
+    const promoId = await createPromotion({
+      name: "加量礼包（对不限量无意义）",
+      kind: "gift",
+      audience: "all",
+      rewards: { gb: 5 },
+    });
+
+    const token = await login(GIFT_UNLIMITED);
+    await payOrder(token, "promo_unl");
+    const customerId = await customerIdOf(GIFT_UNLIMITED);
+    expect((await subRow(customerId)).period_quota_gb).toBeNull(); // 确认是不限量
+
+    const body = (await (await grant(promoId, customerId)).json()) as {
+      granted: number;
+      results: { skipped: string | null }[];
+    };
+    expect(body.granted).toBe(0);
+    expect(body.results[0]?.skipped).toContain("不适用");
+
+    const orders = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift'`,
+    )
+      .bind(customerId)
+      .first<{ n: number }>();
+    expect(Number(orders?.n ?? 0)).toBe(0);
+  });
+
+  it("无限期（永久流量包）不收天数：跳过，不发也不记单", async () => {
+    const promoId = await createPromotion({
+      name: "延期礼包（对永久包无意义）",
+      kind: "gift",
+      audience: "all",
+      rewards: { days: 7 },
+    });
+
+    const token = await login(GIFT_FOREVER);
+    await payOrder(token, "promo_forever");
+    const customerId = await customerIdOf(GIFT_FOREVER);
+
+    const before = await subRow(customerId);
+    expect(before.expires_at).toBeNull(); // 确认是永久
+
+    const body = (await (await grant(promoId, customerId)).json()) as {
+      granted: number;
+      results: { skipped: string | null }[];
+    };
+    expect(body.granted).toBe(0);
+    expect(body.results[0]?.skipped).toContain("不适用");
+
+    expect((await subRow(customerId)).traffic_total_gb).toBe(before.traffic_total_gb);
   });
 });
 

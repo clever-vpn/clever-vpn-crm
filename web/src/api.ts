@@ -273,11 +273,10 @@ export const api = {
 export type PromotionKind = "coupon" | "gift" | "referral";
 /** 人群（契约 §2.9.6）：全员 / 新客 / 老客 / 快到期 / 已过期 / 点名 */
 export type Audience = "all" | "new" | "existing" | "expiring" | "expired" | "specific";
-/** 礼包奖励项：只改权益，不改金额 */
+/** 礼包奖励项：只改权益，不改金额。两个维度互相独立，不适用于当前套餐的会被忽略 */
 export interface GiftRewards {
   days: number;
   gb: number;
-  reset_month: boolean;
 }
 export interface PromotionCodeView {
   id: number;

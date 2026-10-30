@@ -2,25 +2,35 @@
  * 礼包发放（**权益层**）—— 契约 `app-crm.md` §2.9.6
  *
  * 与优惠券的区别只有一句：优惠券少收钱，礼包改权益。所以这里
- * **一分钱都不碰**（`benefit_value` 恒 0），只动订阅的 `expires_at` / `period_extra_gb`。
+ * **一分钱都不碰**（`benefit_value` 恒 0），只动订阅的 `expires_at` / `period_extra_gb` /
+ * `traffic_total_gb`+`traffic_remaining_gb`。
  *
- * 三条硬规则：
- *   1. **必须有订阅**：没有订阅就没有地方存放权益 —— 跳过并留痕，不报错。
- *   2. **一次发放 = 一张 0 元已付订单**：礼包也要能被"订单/对账"看见，
- *      否则财务侧永远解释不了"这个人为什么多了 7 天"。
- *   3. **幂等靠次数与冷却**：`max_uses_per_customer` + `cooldown_hours`
- *      在发放前判定；重复点"发放"不会发两次。
+ * 四条硬规则：
+ *   1. **必须有地方放**：有订阅 ⇒ 加到订阅上；没订阅 ⇒ 用礼包的「载体套餐」0 元开户。
+ *   2. **两个维度互相独立**：送天数只改到期日，送 GB 只改流量，谁也不推谁。
+ *      **不提供 "重置本月已用"** —— 那等于把已消费的流量变回额度，是改账不是送礼。
+ *   3. **订阅没有这个权益就不改**：无限期（`expires_at = null`）不收天数、
+ *      不限量（period 的 `period_quota_gb = null` / traffic 的 `traffic_total_gb = null`）
+ *      不收 GB —— 两项都不适用就直接跳过，连 0 元订单都不建。
+ *   4. **一次发放 = 一张 0 元已付订单**，且幂等靠次数与冷却（`max_uses_per_customer`
+ *      + `cooldown_hours` 在发放前判定）：否则财务侧永远解释不了"这个人为什么多了 7 天"。
  */
-import { PROMOTION_COLUMNS, rowToPromotion } from "./model";
+import { EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, rowToPromotion } from "./model";
 import { checkForCustomer } from "./service";
 import { provisionSubscription } from "../platform/provision";
-import { customerSubscription, logChange, upsertSubscription } from "../subscriptions/store";
+import { GIGA, updateCustomer } from "../platform/client";
+import {
+  customerSubscription,
+  freshenTraffic,
+  logChange,
+  upsertSubscription,
+} from "../subscriptions/store";
 import { rowToPlan } from "../plans/model";
 import { subscriptionFromPlan } from "../plans/subscription";
 
 import type { Env } from "../env";
 import type { GiftRewards, Promotion, PromotionRow } from "./model";
-import type { PlanRow } from "../plans/model";
+import type { Plan, PlanRow } from "../plans/model";
 import type { Subscription } from "../plans/subscription";
 
 const DAY_MS = 86_400_000;
@@ -90,43 +100,99 @@ async function createGiftOrder(
 }
 
 /**
+ * 这份订阅**能收下**哪些奖励 —— 不适用的维度归 0。
+ *
+ *   - `days`：`expires_at === null`（永久 / 无限期）⇒ 延长无处可延，归 0
+ *   - `gb`  ：period 的 `period_quota_gb === null`、traffic 的 `traffic_total_gb === null`
+ *             （不限量）⇒ 加流量没有意义，归 0
+ *
+ * 两个维度**互不牵连**：能收天数不代表能收流量，反之亦然。
+ */
+export function applicableRewards(
+  sub: Pick<Subscription, "kind" | "expires_at" | "period_quota_gb" | "traffic_total_gb">,
+  rewards: GiftRewards,
+): GiftRewards {
+  const unlimited =
+    sub.kind === "period" ? sub.period_quota_gb === null : sub.traffic_total_gb === null;
+  return {
+    days: sub.expires_at === null ? 0 : rewards.days,
+    gb: unlimited ? 0 : rewards.gb,
+  };
+}
+
+/**
+ * 只把这次礼包**真正改动的字段**推到平台。
+ *
+ * 为什么不复用 `provisionSubscription`：它会写**全量控制参数**，其中
+ * `traffic_balance` 对 period 是 `额度 + 池子` 的绝对值 —— 只送天数时这么写，
+ * 会把用户本月**已经用掉的流量还回去**。所以这里按维度精确写：
+ *   - 只有天数 ⇒ 只 PATCH `expire_date`
+ *   - 有 GB   ⇒ 写 `平台真实剩余 + gb`（基数由调用方先 `freshenTraffic` 拿到）
+ *
+ * 还没落账（没有 `platform_customer_id`）的直接返回：等 `retryProvisioning`
+ * 全量落账，那时平台上还没有任何已用量，`额度 + 池子` 就是对的。
+ */
+async function pushGift(
+  env: Env,
+  sub: Subscription,
+  applied: GiftRewards,
+  platformRemainingGb: number | null | undefined,
+  expiresAt: string | null,
+): Promise<void> {
+  if (!sub.platform_customer_id) return;
+
+  const patch: Record<string, unknown> = {};
+  if (applied.days > 0 && expiresAt) patch.expire_date = expiresAt.slice(0, 10);
+  if (applied.gb > 0 && platformRemainingGb !== undefined && platformRemainingGb !== null) {
+    patch.traffic_balance = Math.round((platformRemainingGb + applied.gb) * GIGA);
+  }
+  if (Object.keys(patch).length === 0) return;
+  await updateCustomer(env, sub.platform_customer_id, patch);
+}
+
+/**
  * 把奖励项作用到**已有订阅**上，并落账到 cf-api。
  *
- * 调用方必须先确认订阅存在（见 `grantGift`）—— 这里不再判空，
- * 以免"先建单、后发现没订阅"留下无主订单。
+ * 调用方必须先确认订阅存在、且 `applied` 已经过 `applicableRewards` 过滤
+ * （全 0 时不该走到这里）—— 这里不再判空，以免"先建单、后发现没订阅"留下无主订单。
  */
 async function applyGift(
   env: Env,
   opts: {
     before: Subscription;
-    rewards: GiftRewards;
+    /** 已经过滤过"这份订阅收不收得下"的奖励 */
+    applied: GiftRewards;
     promotionId: number;
     orderId: number;
     source: GiftSource;
+    /** 已落账时的平台真实剩余（GB）；未落账传 undefined */
+    platformRemainingGb?: number | null;
   },
 ): Promise<{ subscriptionId: number; applied: GiftRewards }> {
   const before = opts.before;
   const customerId = before.customer_id;
+  const { days, gb } = opts.applied;
 
-  const { days, gb, reset_month } = opts.rewards;
   const next: Subscription = { ...before };
-  // 天数：永久订阅（expires_at = null）不动 —— 给期限没意义
+
+  // 天数：只改到期日（`applicableRewards` 已保证 expires_at 非 null）
   if (days > 0 && next.expires_at !== null) {
-    next.expires_at = new Date(Date.parse(next.expires_at) + days * 86_400_000).toISOString();
+    next.expires_at = new Date(Date.parse(next.expires_at) + days * DAY_MS).toISOString();
   }
-  // 流量：period 进额外流量池（跨期不清零那本账）；traffic 直接加在剩余上
+
+  // 流量：period 进额外池；traffic 抬高整包与剩余。基准都取平台真实剩余（有就优先）
   if (gb > 0) {
     if (next.kind === "traffic") {
-      if (next.traffic_remaining_gb !== null) next.traffic_remaining_gb += gb;
-      if (next.traffic_total_gb !== null) next.traffic_total_gb += gb;
+      next.traffic_total_gb = (next.traffic_total_gb ?? 0) + gb;
     } else {
       next.period_extra_gb = (next.period_extra_gb ?? 0) + gb;
     }
-  }
-  // 重置本月已用：period 侧靠下面这次落账把 `quota + extra` 重新推给平台；
-  // traffic 侧直接把剩余拉到整包容量
-  if (reset_month && next.kind === "traffic" && next.traffic_total_gb !== null) {
-    next.traffic_remaining_gb = next.traffic_total_gb;
+    const base = opts.platformRemainingGb ?? next.traffic_remaining_gb;
+    next.traffic_remaining_gb = base === null ? null : base + gb;
+    if (opts.platformRemainingGb !== undefined && opts.platformRemainingGb !== null) {
+      // 我们马上就把这个数写到平台 ⇒ 缓存就是真值
+      next.traffic_synced_at = new Date().toISOString();
+    }
   }
 
   const id = await upsertSubscription(env, next);
@@ -142,95 +208,94 @@ async function applyGift(
       source: opts.source,
       promotion_id: opts.promotionId,
       order_id: opts.orderId,
-      rewards: opts.rewards,
+      rewards: opts.applied,
     },
   });
 
   try {
-    await provisionSubscription(env, after);
+    await pushGift(env, after, opts.applied, opts.platformRemainingGb, next.expires_at);
   } catch (e) {
-    // 本地账已记；落账失败交给结算重试，不影响发放结论
+    // 本地账已记；推特失败交给月结/人工补齐，不影响发放结论
     console.error(
       `[gift] 落账失败 customer=${customerId} promo=${opts.promotionId}: ${e instanceof Error ? e.message : e}`,
     );
   }
 
-  return { subscriptionId: id, applied: opts.rewards };
+  return { subscriptionId: id, applied: opts.applied };
 }
 
 /**
- * 用**载体套餐**给一个没有订阅的客户开户（契约 §2.9.7）。
+ * 读礼包的**载体套餐**（客户还没有订阅时用它 0 元开户）。
  *
  * 语义分工：**套餐管"是什么包"**（流量 / 线路 / 设备数），
- * **礼包管"送多久"**（`rewards.days`）—— 与 XBoard 的 `plan_id` +
+ * **礼包管"多送多少"**（`rewards.days` / `rewards.gb`）—— 与 XBoard 的 `plan_id` +
  * `plan_validity_days` 同一个道理，避免两个地方都说天数。
  *
  * 只允许 `visibility='hidden'` 的套餐：公开套餐能被直接买到，
  * 拿它当载体等于开了个 0 元购买通道。
  *
- * @returns `null` = 载体套餐不可用（调用方负责回滚刚建的订单）
+ * @returns `null` = 不可用（不存在 / 不是 hidden / 已下架 / 是加购包）
+ */
+async function loadCarrierPlan(env: Env, planId: string): Promise<Plan | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
+       traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
+       store_product_id, sort_order, status, retired_at, visibility
+     FROM plans WHERE id = ?`,
+  )
+    .bind(planId)
+    .first<PlanRow & { visibility: string }>();
+  if (!row) return null;
+  if (row.visibility !== "hidden" || row.status !== "active") return null;
+
+  const plan = rowToPlan(row);
+  if (plan.kind === "addon") return null; // 加购包不产生订阅
+  return plan;
+}
+
+/**
+ * 用载体套餐 0 元开户，并把已经过滤过的奖励叠上去。
+ *
+ * `base` 由调用方算好（同一份快照也用来判断"礼包对它有没有意义"），
+ * 这里只负责落库与落账。
  */
 async function openFromCarrierPlan(
   env: Env,
   opts: {
     planId: string;
-    customerId: number;
-    rewards: GiftRewards;
+    /** 已算好的骨架快照（同一份也用来判断礼包对它有没有意义） */
+    base: Omit<Subscription, "id">;
+    /** 已经过 `applicableRewards` 过滤 */
+    applied: GiftRewards;
     promotionId: number;
     orderId: number;
     source: GiftSource;
-    now: Date;
   },
-): Promise<{ subscriptionId: number; applied: GiftRewards } | null> {
-  const row = await env.DB.prepare(
-    `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
-       traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
-       store_product_id, sort_order, status, retired_at
-     FROM plans WHERE id = ?`,
-  )
-    .bind(opts.planId)
-    .first<PlanRow>();
-  if (!row) return null;
+): Promise<{ subscriptionId: number; applied: GiftRewards }> {
+  const { base, applied } = opts;
+  const customerId = base.customer_id;
 
-  const isHidden =
-    (await env.DB.prepare(`SELECT visibility FROM plans WHERE id = ?`)
-      .bind(opts.planId)
-      .first<{ visibility: string }>())?.visibility === "hidden";
-  if (!isHidden || row.status !== "active") return null;
+  const next: Subscription = { ...base, id: 0 };
 
-  const plan = rowToPlan(row);
-  if (plan.kind === "addon") return null; // 加购包不产生订阅
-
-  // 0 元开户：套餐提供骨架，礼包的天数覆盖有效期
-  const base = subscriptionFromPlan(plan, {
-    customerId: opts.customerId,
-    paidMinor: 0,
-    now: opts.now,
-  });
-  const next: Subscription = {
-    ...base,
-    id: 0,
-    expires_at:
-      opts.rewards.days > 0
-        ? new Date(opts.now.getTime() + opts.rewards.days * DAY_MS).toISOString()
-        : base.expires_at,
-    // 礼包额外送的 GB 跟着套餐类型走：period 进池子，traffic 加在整包上
-    period_extra_gb: plan.kind === "period" && opts.rewards.gb > 0 ? opts.rewards.gb : 0,
-    traffic_total_gb:
-      plan.kind === "traffic" && opts.rewards.gb > 0
-        ? (base.traffic_total_gb ?? 0) + opts.rewards.gb
-        : base.traffic_total_gb,
-    traffic_remaining_gb:
-      plan.kind === "traffic" && opts.rewards.gb > 0
-        ? (base.traffic_remaining_gb ?? 0) + opts.rewards.gb
-        : base.traffic_remaining_gb,
-  };
+  // 天数：有效期由礼包决定（有天数就盖掉套餐自带的期限）；`base.expires_at === null`
+  // 说明套餐是永久的，`applied.days` 已经归 0，这里不会动
+  if (applied.days > 0) {
+    next.expires_at = new Date(Date.parse(base.started_at) + applied.days * DAY_MS).toISOString();
+  }
+  if (applied.gb > 0) {
+    if (base.kind === "traffic") {
+      next.traffic_total_gb = (base.traffic_total_gb ?? 0) + applied.gb;
+      next.traffic_remaining_gb = (base.traffic_remaining_gb ?? 0) + applied.gb;
+    } else {
+      next.period_extra_gb = (base.period_extra_gb ?? 0) + applied.gb;
+    }
+  }
 
   const id = await upsertSubscription(env, next);
   const after = { ...next, id };
 
   await logChange(env, {
-    customer_id: opts.customerId,
+    customer_id: customerId,
     subscription_id: id,
     action: "new",
     before: null,
@@ -241,19 +306,20 @@ async function openFromCarrierPlan(
       promotion_id: opts.promotionId,
       order_id: opts.orderId,
       carrier_plan_id: opts.planId,
-      rewards: opts.rewards,
+      rewards: opts.applied,
     },
   });
 
   try {
+    // 新开户要**建客户**，所以走全量落账（此时平台上还没有已用量，`额度 + 池子` 就是对的）
     await provisionSubscription(env, after);
   } catch (e) {
     console.error(
-      `[gift] 开户落账失败 customer=${opts.customerId} plan=${opts.planId}: ${e instanceof Error ? e.message : e}`,
+      `[gift] 开户落账失败 customer=${customerId} plan=${opts.planId}: ${e instanceof Error ? e.message : e}`,
     );
   }
 
-  return { subscriptionId: id, applied: opts.rewards };
+  return { subscriptionId: id, applied: opts.applied };
 }
 
 /**
@@ -288,7 +354,7 @@ export async function grantGift(
     granted: false,
     skipped: reason,
     order_id: null,
-    applied: { days: 0, gb: 0, reset_month: false },
+    applied: EMPTY_REWARDS,
   });
 
   const check = await checkForCustomer(env, promo, opts.customerId, now, {
@@ -297,42 +363,63 @@ export async function grantGift(
   if (!check.ok) return skip(check.reason);
 
   // 有没有"地方可放"：有订阅 → 加权益；没有订阅 → 看礼包有没有配载体套餐。
-  // 两者都没有就不建单 —— 否则账簿上会多一张 0 元订单，却对应不到任何权益。
   const before = await customerSubscription(env, opts.customerId);
-  if (!before && !promo.plan_id) {
-    return skip("还需要先有套餐；这个兑换码没有配置体验套餐，请联系客服");
+
+  let plan: Plan | null = null;
+  if (!before) {
+    if (!promo.plan_id) {
+      return skip("还需要先有套餐；这个兑换码没有配置体验套餐，请联系客服");
+    }
+    plan = await loadCarrierPlan(env, promo.plan_id);
+    if (!plan) return skip("礼包的体验套餐已不可用，请联系客服");
+  }
+
+  // 先算出"目标订阅快照"，再判断礼包**对它有没有意义**：
+  // 无限期不收天数、不限量不收 GB。两条都不适用就**不发放、也不建 0 元订单**。
+  const target =
+    before ??
+    subscriptionFromPlan(plan as Plan, { customerId: opts.customerId, paidMinor: 0, now });
+  const appliedRewards = applicableRewards(target, promo.rewards);
+  if (!hasRewards(appliedRewards)) {
+    return skip("这个礼包送的内容对当前套餐不适用（不限量 / 无限期），未发放");
+  }
+
+  // 送 GB 必须落在**平台真实剩余**上：先回源，读不到就不发 ——
+  // 拿旧缓存去加，会把用户这段时间用掉的流量又还回去。
+  let platformRemainingGb: number | undefined;
+  if (appliedRewards.gb > 0 && before?.platform_customer_id) {
+    const fresh = await freshenTraffic(env, before);
+    if (!fresh || fresh.traffic_remaining_gb === null) {
+      return skip("平台的剩余流量暂时读不到，礼包稍后再发");
+    }
+    platformRemainingGb = fresh.traffic_remaining_gb;
   }
 
   const orderId = await createGiftOrder(env, promo, opts.customerId, now);
 
-  let applied: { subscriptionId: number; applied: GiftRewards };
+  let result: { subscriptionId: number; applied: GiftRewards };
   let opened = false;
   if (before) {
-    applied = await applyGift(env, {
+    result = await applyGift(env, {
       before,
-      rewards: promo.rewards,
+      applied: appliedRewards,
       promotionId: promo.id,
       orderId,
       source: opts.source,
+      platformRemainingGb,
     });
   } else {
-    const result = await openFromCarrierPlan(env, {
+    result = await openFromCarrierPlan(env, {
       planId: promo.plan_id as string,
-      customerId: opts.customerId,
-      rewards: promo.rewards,
+      base: target,
+      applied: appliedRewards,
       promotionId: promo.id,
       orderId,
       source: opts.source,
-      now,
     });
-    if (!result) {
-      // 载体套餐不可用（被删 / 不是 hidden / 已下架）：删掉刚建的单，保持账簿干净
-      await env.DB.prepare(`DELETE FROM orders WHERE id = ?`).bind(orderId).run();
-      return skip("礼包的体验套餐已不可用，请联系客服");
-    }
-    applied = result;
     opened = true;
   }
+  const applied = result;
 
   await env.DB.prepare(
     `INSERT OR IGNORE INTO redemptions
@@ -344,7 +431,8 @@ export async function grantGift(
       opts.customerId,
       orderId,
       opts.codeId ?? null,
-      JSON.stringify(promo.rewards),
+      // 记**实际生效**的维度，不是配置值（不间断量/无限期时可能少一项）
+      JSON.stringify(applied.applied),
       now.toISOString(),
     )
     .run();

@@ -3,7 +3,7 @@
  *
  * 三种物件共用一张列表，但**列和表单都按类型定制**：
  *   优惠券 —— 改订单金额（自动生效 或 凭码）
- *   礼包   —— 改订阅权益（送天数 / 送流量 / 重置本月）
+ *   礼包   —— 改订阅权益（送天数 / 送流量）
  *   邀请   —— 建关系（唯一能回答"谁拉来的"）
  *
  * 这里**不做任何价格判断**：能不能用、便宜多少，全在服务端
@@ -30,12 +30,11 @@ function benefitLabel(p: { benefit_type: string; benefit_value: number }): strin
   return p.benefit_type === "percent" ? `减 ${p.benefit_value}%` : `立减 ¥${yuan(p.benefit_value)}`;
 }
 
-/** 礼包的内容：送多少天 / 多少 GB / 是否清零本月 */
-function rewardsLabel(r: { days: number; gb: number; reset_month: boolean }): string {
+/** 礼包的内容：送多少天 / 多少 GB（两个维度独立，谁也没连带） */
+function rewardsLabel(r: { days: number; gb: number }): string {
   const parts: string[] = [];
   if (r.days > 0) parts.push(`+${r.days} 天`);
   if (r.gb > 0) parts.push(`+${r.gb} GB`);
-  if (r.reset_month) parts.push("重置本月");
   return parts.length ? parts.join(" · ") : "空礼包";
 }
 

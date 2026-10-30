@@ -31,7 +31,7 @@ function promo(over: Partial<Promotion> = {}): Promotion {
     min_subtotal_minor: 0,
     limit_plan_kinds: [],
     limit_plan_ids: [],
-    rewards: { days: 0, gb: 0, reset_month: false },
+    rewards: { days: 0, gb: 0 },
     audience: "all",
     audience_days: null,
     cooldown_hours: null,
@@ -269,5 +269,56 @@ describe("兑换码的纯逻辑", () => {
     expect(MIN_CODE_LENGTH).toBeGreaterThanOrEqual(6);
     // 与契约 §2.9.7 一致
     expect(MAX_FAILED_ATTEMPTS).toBe(5);
+  });
+});
+
+describe("礼包能作用到哪些维度（applicableRewards）", () => {
+  /** 只挑判断用得上的四个字段 */
+  const sub = (over: {
+    kind?: "period" | "traffic";
+    expires_at?: string | null;
+    period_quota_gb?: number | null;
+    traffic_total_gb?: number | null;
+  }) => ({
+    kind: over.kind ?? ("period" as const),
+    expires_at: over.expires_at === undefined ? "2026-11-22T00:00:00.000Z" : over.expires_at,
+    period_quota_gb: over.period_quota_gb === undefined ? 100 : over.period_quota_gb,
+    traffic_total_gb: over.traffic_total_gb ?? null,
+  });
+
+  const gift = { days: 7, gb: 5 };
+
+  it("正常周期套餐：两个维度都收", async () => {
+    const { applicableRewards } = await import("../src/promotions/gift");
+    expect(applicableRewards(sub({}), gift)).toEqual({ days: 7, gb: 5 });
+  });
+
+  it("无限期（expires_at = null）⇒ 不收天数，但流量照收", async () => {
+    const { applicableRewards } = await import("../src/promotions/gift");
+    expect(applicableRewards(sub({ expires_at: null }), gift)).toEqual({ days: 0, gb: 5 });
+  });
+
+  it("period 不限量（quota = null）⇒ 不收 GB，但天数照收", async () => {
+    const { applicableRewards } = await import("../src/promotions/gift");
+    expect(applicableRewards(sub({ period_quota_gb: null }), gift)).toEqual({ days: 7, gb: 0 });
+  });
+
+  it("traffic 不限量（total = null）⇒ 不收 GB", async () => {
+    const { applicableRewards } = await import("../src/promotions/gift");
+    expect(applicableRewards(sub({ kind: "traffic", traffic_total_gb: null }), gift)).toEqual({
+      days: 7,
+      gb: 0,
+    });
+  });
+
+  it("两项都不适用 ⇒ 全 0（调用方据此跳过，不发也不建单）", async () => {
+    const { applicableRewards } = await import("../src/promotions/gift");
+    const { hasRewards } = await import("../src/promotions/model");
+    const applied = applicableRewards(
+      sub({ expires_at: null, period_quota_gb: null }),
+      gift,
+    );
+    expect(applied).toEqual({ days: 0, gb: 0 });
+    expect(hasRewards(applied)).toBe(false);
   });
 });

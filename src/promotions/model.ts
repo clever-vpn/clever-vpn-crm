@@ -36,23 +36,25 @@ export const AUDIENCES: readonly Audience[] = ["all", "new", "existing", "expiri
  * 礼包的奖励项（`kind = gift`）。**只改权益，不改金额** —— 所以它与
  * `benefit_*` 是两套账，残值计算完全不受影响。
  *
+ * 两个维度**完全独立**：`days` 只动到期日，`gb` 只动流量，谁也不推谁。
+ * 也不提供“重置本月已用”：那会把用户已经用掉的流量变成新的额度，
+ * 属于改账，不是送礼（真需要就给 GB，它落在额外流量池里）。
+ *
  * 刻意没有 `device`：cf-api 的 `licence_limit` 建客户时固定、1–3、不可改，
  * 加设备等于删旧建新并换激活码（契约 §2.7）。也刻意没有 `balance`：我们没有钱包。
  */
 export interface GiftRewards {
-  /** 延长有效期（天） */
+  /** 延长有效期（天）；订阅是「无限期」（`expires_at = null`）时忽略 */
   days: number;
-  /** 加到加购余额（GB，跨期不清零那部分） */
+  /** 增加流量（GB）；订阅是「不限量」时忽略 */
   gb: number;
-  /** 重置本月已用（补偿场景） */
-  reset_month: boolean;
 }
 
-export const EMPTY_REWARDS: GiftRewards = { days: 0, gb: 0, reset_month: false };
+export const EMPTY_REWARDS: GiftRewards = { days: 0, gb: 0 };
 
 /** 礼包是否真的给了什么（全 0 = 空礼包，不允许上线） */
 export function hasRewards(r: GiftRewards): boolean {
-  return r.days > 0 || r.gb > 0 || r.reset_month;
+  return r.days > 0 || r.gb > 0;
 }
 
 export interface Promotion {
@@ -134,14 +136,14 @@ function parseJsonArray(raw: string): string[] {
   }
 }
 
-/** 礼包奖励项入库前一律归一：负数归 0、小数取 1 位 */
+/** 礼包奖励项入库前一律归一：负数归 0、小数取 1 位（未知键直接丢弃） */
 export function normalizeRewards(raw: unknown): GiftRewards {
   const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const num = (v: unknown): number => {
     const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
     return n > 0 ? Math.round(n * 10) / 10 : 0;
   };
-  return { days: num(o.days), gb: num(o.gb), reset_month: o.reset_month === true };
+  return { days: num(o.days), gb: num(o.gb) };
 }
 
 function parseRewards(raw: string): GiftRewards {

@@ -10,7 +10,7 @@
  * 建一个 `visible=0` 的活动把码单独发给他即可。
  */
 
-import { AUDIENCES, PROMOTION_COLUMNS, hasRewards, normalizeRewards, promoBadgeText, rowToPromotion } from "../promotions/model";
+import { AUDIENCES, EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, normalizeRewards, promoBadgeText, rowToPromotion } from "../promotions/model";
 import { grantGift } from "../promotions/gift";
 import { generateCodes, listCodes, revokeCode } from "../promotions/codes";
 
@@ -75,7 +75,7 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
 
   // ── 礼包的奖励项与人群（契约 §2.9.6）──
   const rewards = normalizeRewards(input.rewards);
-  if (kind === "gift" && !hasRewards(rewards)) errors.push("礼包至少要送一项：天数 / GB / 重置本月已用");
+  if (kind === "gift" && !hasRewards(rewards)) errors.push("礼包至少要送一项：天数 / 流量 GB");
 
   const audience = str(input.audience) || "all";
   if (!(AUDIENCES as readonly string[]).includes(audience)) {
@@ -635,7 +635,7 @@ export async function handleAdminPromotions(
           granted: false,
           skipped: "礼包不存在或已不是礼包",
           order_id: null,
-          applied: { days: 0, gb: 0, reset_month: false },
+          applied: EMPTY_REWARDS,
         },
       );
     }
