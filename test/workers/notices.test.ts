@@ -2,8 +2,9 @@
  * 通知（`notices`）= 邮件队列 = 站内消息
  *
  * 要钉住的：
- *   1. **礼包两种送达各写一条通知**，而且**两种文体不同**（催领 vs 收据）；
- *   2. **幂等**：同一次发放重跑不会发第二封；
+ *   1. **只有收据一种通知**（礼包是用户自己点领取的，结果在那一屏同步显示），
+ *      而且 `promotions.notify` 默认**关**——邮件只会晚到且重复，还吃发信配额；
+ *   2. **幂等**：同一次领取重跑不会发第二封（锚点是核销行 id）；
  *   3. **泵**按日配额发，配额用尽就整体顺延到明天（不是每轮空转）；
  *   4. **退订**只影响营销类，且发信时必须带 `List-Unsubscribe` 一键退订头；
  *   5. 硬退 / 被抑制是**终态**，不重试（重试只会继续伤害域名信誉）。
@@ -101,23 +102,22 @@ async function payMonthly(token: string): Promise<void> {
 async function makePromotion(opts: {
   name: string;
   rewards: { days?: number; gb?: number };
-  delivery?: "auto" | "claim";
+  /** 领取后发**收据**邮件（默认不发：结果已经同步显示在那一屏） */
   notify?: boolean;
   badge?: string;
 }): Promise<number> {
   const now = new Date().toISOString();
   const res = await env.DB.prepare(
     `INSERT INTO promotions
-       (auto_apply, name, kind, benefit_type, benefit_value, rewards_json, delivery,
-        claim_valid_days, notify, audience, max_uses_per_customer, badge_label, status,
+       (auto_apply, name, kind, benefit_type, benefit_value, rewards_json,
+        notify, audience, max_uses_per_customer, badge_label, status,
         created_at, updated_at)
-     VALUES (0, ?, 'gift', 'amount', 0, ?, ?, 7, ?, 'all', 1, ?, 'active', ?, ?)`,
+     VALUES (0, ?, 'gift', 'amount', 0, ?, ?, 'all', 1, ?, 'active', ?, ?)`,
   )
     .bind(
       opts.name,
       JSON.stringify({ days: 0, gb: 0, ...opts.rewards }),
-      opts.delivery ?? "auto",
-      opts.notify === false ? 0 : 1,
+      opts.notify === true ? 1 : 0,
       opts.badge ?? null,
       now,
       now,
@@ -126,9 +126,10 @@ async function makePromotion(opts: {
   return Number(res.meta.last_row_id);
 }
 
-const deliver = async (promotionId: number, customerId: number) => {
-  const { deliverGift } = await import("../../src/promotions/gift");
-  return deliverGift(env, { promotionId, customerId, source: "manual" });
+/** 领取 = 唯一的发放入口（拉取模型） */
+const claim = async (promotionId: number, customerId: number) => {
+  const { claimGiftFor } = await import("../../src/promotions/gift");
+  return claimGiftFor(env, { promotionId, customerId });
 };
 
 async function noticesOf(customerId: number) {
@@ -190,40 +191,20 @@ beforeAll(async () => {
   ]);
 });
 
-describe("两种送达 ⇒ 两种文体", () => {
-  it("待领取：催领邮件写明送什么、何时作废、去哪领", async () => {
+describe("收据邮件（默认不发）", () => {
+  it("开了 notify ⇒ 收据写明加了多少 + 新的到期日", async () => {
     const promoId = await makePromotion({
-      name: "催领礼包",
-      rewards: { days: 7, gb: 5 },
-      delivery: "claim",
+      name: "收据礼包",
+      rewards: { days: 7 },
+      notify: true,
       badge: "国庆礼物",
     });
     const token = await login(CLAIM_USER);
     await payMonthly(token);
     const customerId = await customerIdOf(CLAIM_USER);
 
-    const result = await deliver(promoId, customerId);
-    expect(result?.pending).toBe(true);
-
-    const rows = await noticesOf(customerId);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.kind).toBe("gift_claim");
-    expect(rows[0]!.status).toBe("pending");
-    expect(rows[0]!.title).toContain("待领取");
-    // 必填信息一个都不能少：送什么 / 何时作废 / 去哪领
-    expect(rows[0]!.body).toContain("+7 天 · +5 GB");
-    expect(rows[0]!.body).toContain("逾期自动作废");
-    expect(rows[0]!.action_url).toBe("https://vpn.test/account/gifts");
-  });
-
-  it("自动到账：收据写明加了多少 + 新的到期日（不是催领那句话）", async () => {
-    const promoId = await makePromotion({ name: "收据礼包", rewards: { days: 7 } });
-    const token = await login(AUTO_USER);
-    await payMonthly(token);
-    const customerId = await customerIdOf(AUTO_USER);
-
-    const result = await deliver(promoId, customerId);
-    expect(result?.granted).toBe(true);
+    const result = await claim(promoId, customerId);
+    expect(result.state).toBe("granted");
 
     const sub = await env.DB.prepare(
       `SELECT expires_at FROM platform_subscriptions WHERE customer_id = ?`,
@@ -233,39 +214,39 @@ describe("两种送达 ⇒ 两种文体", () => {
 
     const rows = await noticesOf(customerId);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.kind).toBe("gift_auto");
+    expect(rows[0]!.kind).toBe("gift_granted");
+    expect(rows[0]!.status).toBe("pending");
     expect(rows[0]!.title).toContain("已为你送上");
     expect(rows[0]!.body).toContain("+7 天");
     // 收据的关键：新的到期日（用户读得出"到哪天为止"）
     expect(rows[0]!.body).toContain(sub!.expires_at.slice(0, 10));
+    // 不是"催领"：没有作废倒计时那种话
     expect(rows[0]!.body).not.toContain("逾期自动作废");
+    // 锚点是**核销行 id**，不是订单（礼包不产生订单）
+    expect(rows[0]!.ref_id).toBe(String(result.redemption_id));
   });
 
-  it("重跑一次不会发第二封（唯一键幂等）", async () => {
-    const customerId = await customerIdOf(AUTO_USER);
-    const before = await noticesOf(customerId);
-    const promoId = before[0]!.ref_id
-      ? (
-          await env.DB.prepare(
-            `SELECT promotion_id FROM orders WHERE id = ?`,
-          )
-            .bind(Number(before[0]!.ref_id))
-            .first<{ promotion_id: number }>()
-        )?.promotion_id ?? 0
-      : 0;
-    if (promoId) await deliver(promoId, customerId);
-    expect(await noticesOf(customerId)).toHaveLength(before.length);
-  });
-
-  it("关掉通知 ⇒ 只发权益、不写通知", async () => {
-    const promoId = await makePromotion({ name: "静默礼包", rewards: { gb: 2 }, notify: false });
+  it("默认（notify 未开）⇒ 权益到账但不写通知、不发信", async () => {
+    const promoId = await makePromotion({ name: "静默礼包", rewards: { gb: 2 } });
     const token = await login(SILENT_USER);
     await payMonthly(token);
     const customerId = await customerIdOf(SILENT_USER);
 
-    const result = await deliver(promoId, customerId);
-    expect(result?.granted).toBe(true);
+    const result = await claim(promoId, customerId);
+    expect(result.state).toBe("granted");
     expect(await noticesOf(customerId)).toHaveLength(0);
+  });
+
+  it("重跑一次不会发第二封（核销行 id 唯一）", async () => {
+    const token = await login(AUTO_USER);
+    await payMonthly(token);
+    const customerId = await customerIdOf(AUTO_USER);
+    const promoId = await makePromotion({ name: "幂等收据", rewards: { days: 1 }, notify: true });
+
+    expect((await claim(promoId, customerId)).state).toBe("granted");
+    // 再点一次：不会给第二份权益，也不会写第二条通知
+    expect((await claim(promoId, customerId)).state).toBe("already_claimed");
+    expect(await noticesOf(customerId)).toHaveLength(1);
   });
 });
 
@@ -274,10 +255,16 @@ describe("泵：按日配额发，配额用尽顺延", () => {
     const { sendPendingNotices, saveNoticeSettings } = await import("../../src/notices/store");
     await saveNoticeSettings(env, { dailyQuota: 5000, softRatio: 0.9 });
 
-    const claimCustomer = await customerIdOf(CLAIM_USER);
+    const token = await login(OPT_OUT_USER);
+    await payMonthly(token);
+    const claimCustomer = await customerIdOf(OPT_OUT_USER);
     const autoCustomer = await customerIdOf(AUTO_USER);
 
-    // 把自动到账那位标成已退订
+    // 两位都先领一份（都开收据），再把其中一位标成已退订
+    await claim(await makePromotion({ name: "泵-愿收", rewards: { days: 1 }, notify: true }), claimCustomer);
+    await claim(await makePromotion({ name: "泵-退订", rewards: { days: 1 }, notify: true }), autoCustomer);
+
+    // 把 autoCustomer 标成已退订
     await env.DB.prepare(`UPDATE customers SET marketing_opt_out = 1 WHERE id = ?`)
       .bind(autoCustomer)
       .run();
@@ -287,9 +274,11 @@ describe("泵：按日配额发，配额用尽顺延", () => {
     expect(report.skipped).toBeGreaterThanOrEqual(1);
 
     const claimRows = await noticesOf(claimCustomer);
-    expect(claimRows[0]!.status).toBe("sent");
+    expect(claimRows.length).toBeGreaterThanOrEqual(1);
+    expect(claimRows.every((r) => r.status === "sent")).toBe(true);
     const autoRows = await noticesOf(autoCustomer);
-    expect(autoRows[0]!.status).toBe("skipped");
+    expect(autoRows.length).toBeGreaterThanOrEqual(1);
+    expect(autoRows.every((r) => r.status === "skipped")).toBe(true);
 
     // 退订只影响营销通知；验证码走的是另一条路（不读 notices / opt_out）
     const optOut = await env.DB.prepare(
@@ -302,11 +291,11 @@ describe("泵：按日配额发，配额用尽顺延", () => {
 
   it("配额用尽 ⇒ 一条都不发，全部顺延到明天", async () => {
     const { sendPendingNotices, saveNoticeSettings } = await import("../../src/notices/store");
-    const promoId = await makePromotion({ name: "配额礼包", rewards: { days: 1 } });
+    const promoId = await makePromotion({ name: "配额礼包", rewards: { days: 1 }, notify: true });
     const token = await login(QUOTA_USER);
     await payMonthly(token);
     const customerId = await customerIdOf(QUOTA_USER);
-    await deliver(promoId, customerId);
+    await claim(promoId, customerId);
 
     // 配额设成 1、软上限 100% ⇒ 今天已经发过 ⇒ 剩余 0
     await saveNoticeSettings(env, { dailyQuota: 1, softRatio: 1 });
@@ -343,8 +332,8 @@ describe("退订链接", () => {
     expect(await verifyUnsubscribeToken(env, customerId, "deadbeef")).toBe(false);
 
     // 未退订前是 pending
-    const promoId = await makePromotion({ name: "退订礼包", rewards: { days: 1 } });
-    await deliver(promoId, customerId);
+    const promoId = await makePromotion({ name: "退订礼包", rewards: { days: 1 }, notify: true });
+    await claim(promoId, customerId);
     expect((await noticesOf(customerId))[0]!.status).toBe("pending");
 
     // 一键退订（邮件客户端发的就是这个 POST）

@@ -230,21 +230,6 @@ CREATE TABLE `platform_subscriptions` (
 CREATE UNIQUE INDEX `uq_subs_customer` ON `platform_subscriptions` (`customer_id`);--> statement-breakpoint
 CREATE INDEX `idx_subs_due` ON `platform_subscriptions` (`kind`,`period_settled_at`);--> statement-breakpoint
 CREATE INDEX `idx_subs_order` ON `platform_subscriptions` (`order_id`);--> statement-breakpoint
-CREATE TABLE `promotion_claims` (
-	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`promotion_id` integer NOT NULL,
-	`customer_id` integer NOT NULL,
-	`status` text DEFAULT 'pending' NOT NULL,
-	`source` text NOT NULL,
-	`created_at` text NOT NULL,
-	`expires_at` text NOT NULL,
-	`claimed_at` text,
-	`order_id` integer,
-	`granted_json` text DEFAULT '{}' NOT NULL
-);
---> statement-breakpoint
-CREATE UNIQUE INDEX `uq_promotion_claims` ON `promotion_claims` (`promotion_id`,`customer_id`);--> statement-breakpoint
-CREATE INDEX `idx_promotion_claims_customer` ON `promotion_claims` (`customer_id`,`status`);--> statement-breakpoint
 CREATE TABLE `promotion_codes` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`promotion_id` integer NOT NULL,
@@ -260,25 +245,6 @@ CREATE TABLE `promotion_codes` (
 CREATE UNIQUE INDEX `promotion_codes_code_unique` ON `promotion_codes` (`code`);--> statement-breakpoint
 CREATE INDEX `idx_promotion_codes_promotion` ON `promotion_codes` (`promotion_id`);--> statement-breakpoint
 CREATE INDEX `idx_promotion_codes_batch` ON `promotion_codes` (`batch_id`);--> statement-breakpoint
-CREATE TABLE `promotion_runs` (
-	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`promotion_id` integer NOT NULL,
-	`snapshot_max_id` integer NOT NULL,
-	`cursor` integer DEFAULT 0 NOT NULL,
-	`total` integer DEFAULT 0 NOT NULL,
-	`processed` integer DEFAULT 0 NOT NULL,
-	`granted` integer DEFAULT 0 NOT NULL,
-	`pending` integer DEFAULT 0 NOT NULL,
-	`skipped` integer DEFAULT 0 NOT NULL,
-	`failed` integer DEFAULT 0 NOT NULL,
-	`status` text DEFAULT 'running' NOT NULL,
-	`created_at` text NOT NULL,
-	`updated_at` text NOT NULL,
-	`finished_at` text
-);
---> statement-breakpoint
-CREATE INDEX `idx_promotion_runs_promotion` ON `promotion_runs` (`promotion_id`,`id`);--> statement-breakpoint
-CREATE INDEX `idx_promotion_runs_status` ON `promotion_runs` (`status`,`id`);--> statement-breakpoint
 CREATE TABLE `promotion_targets` (
 	`promotion_id` integer NOT NULL,
 	`customer_id` integer NOT NULL,
@@ -307,9 +273,7 @@ CREATE TABLE `promotions` (
 	`max_uses_per_customer` integer DEFAULT 1 NOT NULL,
 	`cooldown_hours` integer,
 	`plan_id` text,
-	`delivery` text DEFAULT 'auto' NOT NULL,
-	`claim_valid_days` integer,
-	`notify` integer DEFAULT 1 NOT NULL,
+	`notify` integer DEFAULT 0 NOT NULL,
 	`badge_label` text,
 	`visible` integer DEFAULT 1 NOT NULL,
 	`referrer_reward_type` text,
@@ -325,6 +289,8 @@ CREATE TABLE `redemptions` (
 	`promotion_id` integer NOT NULL,
 	`customer_id` integer NOT NULL,
 	`order_id` integer,
+	`settled_at` text,
+	`promotion_snapshot` text,
 	`code_id` integer,
 	`discount_minor` integer DEFAULT 0 NOT NULL,
 	`granted_json` text,

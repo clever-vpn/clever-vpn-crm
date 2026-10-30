@@ -646,7 +646,7 @@ describe("礼包（gift）", () => {
       .bind(customerId)
       .first<{ expires_at: string | null; period_extra_gb: number | null }>();
 
-  it("手动发放：加天数加流量、写 0 元订单、再发一次被挡", async () => {
+  it("后台手动发放：加天数加流量、写 gift 变更、**不建订单**、再发被挡", async () => {
     const promoId = await createPromotion({
       name: "国庆礼包",
       kind: "gift",
@@ -677,41 +677,56 @@ describe("礼包（gift）", () => {
     expect((Date.parse(after!.expires_at!) - Date.parse(before!.expires_at!)) / 86_400_000).toBe(7);
     expect(after!.period_extra_gb).toBe((before!.period_extra_gb ?? 0) + 5);
 
-    // ② 账簿上留下了一张 0 元已付订单（否则财务永远解释不了这 7 天）
-    const order = await env.DB.prepare(
-      `SELECT amount_minor, status, source, promotion_id FROM orders
-        WHERE customer_id = ? AND source = 'gift'`,
+    // ② 凭证是**核销行**（含活动快照），不是订单 —— 礼包没走购买流程
+    const redemption = await env.DB.prepare(
+      `SELECT order_id, settled_at, granted_json, promotion_snapshot
+         FROM redemptions WHERE customer_id = ? AND promotion_id = ?`,
     )
-      .bind(customerId)
-      .first<{ amount_minor: number; status: string; source: string; promotion_id: number }>();
-    expect(order).toBeTruthy();
-    expect(order!.amount_minor).toBe(0);
-    expect(order!.status).toBe("paid");
-    expect(order!.promotion_id).toBe(promoId);
+      .bind(customerId, promoId)
+      .first<{
+        order_id: number | null;
+        settled_at: string | null;
+        granted_json: string;
+        promotion_snapshot: string | null;
+      }>();
+    expect(redemption).toBeTruthy();
+    expect(redemption!.order_id).toBeNull();
+    expect(redemption!.settled_at).toBeTruthy();
+    expect(JSON.parse(redemption!.granted_json)).toEqual({ days: 7, gb: 5 });
+    // 快照留住"当时这份礼包长什么样"（活动事后改名也不影响凭证）
+    expect(JSON.parse(redemption!.promotion_snapshot!).name).toBe("国庆礼包");
 
-    // ③ 变更留痕：action = gift
+    // ③ 变更留痕：action = gift，detail 里带得上核销行
     const change = await env.DB.prepare(
-      `SELECT action FROM subscription_changes WHERE customer_id = ? ORDER BY id DESC LIMIT 1`,
+      `SELECT action, detail FROM subscription_changes WHERE customer_id = ? ORDER BY id DESC LIMIT 1`,
     )
       .bind(customerId)
-      .first<{ action: string }>();
+      .first<{ action: string; detail: string }>();
     expect(change?.action).toBe("gift");
+    expect(JSON.parse(change!.detail).promotion_id).toBe(promoId);
 
-    // ④ 再发一次：本人次数用完 ⇒ 跳过，且**不产生第二张订单**
+    // ④ 再发一次：本人次数用完 ⇒ 挡住（already_claimed），权益不再增加
     const again = await adminCall(`/api/admin/promotions/${promoId}/grant`, {
       method: "POST",
       body: { customer_ids: [customerId] },
     });
-    expect(((await again.json()) as { granted: number }).granted).toBe(0);
-    const count = await env.DB.prepare(
+    const againBody = (await again.json()) as { granted: number; results: { state: string }[] };
+    expect(againBody.granted).toBe(0);
+    expect(againBody.results[0]?.state).toBe("already_claimed");
+
+    const same = await snapshotOf(customerId);
+    expect(same!.expires_at).toBe(after!.expires_at);
+
+    // 礼包**一张订单都不该产生**（包括 0 元的）
+    const orders = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift'`,
     )
       .bind(customerId)
       .first<{ n: number }>();
-    expect(Number(count?.n ?? 0)).toBe(1);
+    expect(Number(orders?.n ?? 0)).toBe(0);
   });
 
-  it("没有订阅的人：跳过并给理由，不建订单", async () => {
+  it("没有订阅也没有载体套餐：不发、给理由、不留任何痕迹", async () => {
     const promoId = await createPromotion({
       name: "空订阅礼包",
       kind: "gift",
@@ -729,21 +744,21 @@ describe("礼包（gift）", () => {
     });
     const body = (await res.json()) as {
       granted: number;
-      results: { granted: boolean; skipped: string | null }[];
+      results: { granted: boolean; reason: string | null }[];
     };
     expect(body.granted).toBe(0);
-    expect(body.results[0]?.skipped).toContain("套餐");
+    expect(body.results[0]?.reason).toContain("套餐");
 
-    // 没发出去就**不能留 0 元订单**（否则财务会看到一张对不上权益的单）
-    const orders = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift'`,
+    // 没发出去就**一行都不该留**（占位会挡住他以后再领）
+    const rows = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM redemptions WHERE customer_id = ? AND promotion_id = ?`,
     )
-      .bind(customerId)
+      .bind(customerId, promoId)
       .first<{ n: number }>();
-    expect(Number(orders?.n ?? 0)).toBe(0);
+    expect(Number(rows?.n ?? 0)).toBe(0);
   });
 
-  it("注册礼包（audience=new）：首单开通后自动发，且只发一次", async () => {
+  it("新客礼包（audience=new）：付款后就没有了（拉取模型的语义）", async () => {
     const promoId = await createPromotion({
       name: "新人礼包",
       kind: "gift",
@@ -753,21 +768,43 @@ describe("礼包（gift）", () => {
 
     const email = GIFT_SIGNUP;
     const token = await login(email);
+    const customerId0 = await customerIdOf(email);
+
+    // 还没付过钱 ⇒ 有资格（货架上看得见）
+    const eligible = async (customerId: number) => {
+      const { checkForCustomer } = await import("../../src/promotions/service");
+      const { PROMOTION_COLUMNS, rowToPromotion } = await import("../../src/promotions/model");
+      const row = await env.DB.prepare(
+        `SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`,
+      )
+        .bind(promoId)
+        .first<import("../../src/promotions/model").PromotionRow>();
+      const promo = rowToPromotion(row!);
+      return (await checkForCustomer(env, promo, customerId)).ok;
+    };
+    expect(await eligible(customerId0)).toBe(true);
+
     await payOrder(token, "promo_30d");
     const customerId = await customerIdOf(email);
+    // 付过钱就不是新客了
+    expect(await eligible(customerId)).toBe(false);
+
+    // 礼包不再自动"塞"给他，货架上也不再可领
+    const res = await appCall(`/api/app/v1/me/gifts?promotion_id=${promoId}`, token);
+    const body = (await res.json()) as { items: { promotion_id: number; claimable: boolean }[] };
+    const row = body.items.find((i) => i.promotion_id === promoId);
+    expect(row).toBeTruthy(); // 深链能看到
+    expect(row!.claimable).toBe(false); // 但领不了
 
     const mine = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift' AND promotion_id = ?`,
+      `SELECT COUNT(*) AS n FROM redemptions WHERE customer_id = ? AND promotion_id = ?`,
     )
       .bind(customerId, promoId)
       .first<{ n: number }>();
-    expect(Number(mine?.n ?? 0)).toBe(1);
-
-    const sub = await snapshotOf(customerId);
-    expect(sub!.period_extra_gb).toBe(2);
+    expect(Number(mine?.n ?? 0)).toBe(0);
   });
 
-  /** 订阅全貌（含落账 id 与缓存列），礼包规则用例用 */
+
   const subRow = async (customerId: number) => {
     const row = await env.DB.prepare(
       `SELECT platform_customer_id, expires_at, period_quota_gb, period_extra_gb,
@@ -868,7 +905,7 @@ describe("礼包（gift）", () => {
     expect(after.expires_at).toBe(before.expires_at); // 不碰到期日
   });
 
-  it("不限量套餐不收 GB：直接跳过，连 0 元订单都不建", async () => {
+  it("不限量套餐不收 GB：直接拒绝，连台账都不留", async () => {
     const promoId = await createPromotion({
       name: "加量礼包（对不限量无意义）",
       kind: "gift",
@@ -883,20 +920,20 @@ describe("礼包（gift）", () => {
 
     const body = (await (await grant(promoId, customerId)).json()) as {
       granted: number;
-      results: { skipped: string | null }[];
+      results: { reason: string | null }[];
     };
     expect(body.granted).toBe(0);
-    expect(body.results[0]?.skipped).toContain("不适用");
+    expect(body.results[0]?.reason).toContain("不适用");
 
-    const orders = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift'`,
+    const rows = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM redemptions WHERE customer_id = ? AND promotion_id = ?`,
     )
-      .bind(customerId)
+      .bind(customerId, promoId)
       .first<{ n: number }>();
-    expect(Number(orders?.n ?? 0)).toBe(0);
+    expect(Number(rows?.n ?? 0)).toBe(0);
   });
 
-  it("无限期（永久流量包）不收天数：跳过，不发也不记单", async () => {
+  it("无限期（永久流量包）不收天数：不发放，订阅一点没动", async () => {
     const promoId = await createPromotion({
       name: "延期礼包（对永久包无意义）",
       kind: "gift",
@@ -913,10 +950,10 @@ describe("礼包（gift）", () => {
 
     const body = (await (await grant(promoId, customerId)).json()) as {
       granted: number;
-      results: { skipped: string | null }[];
+      results: { reason: string | null }[];
     };
     expect(body.granted).toBe(0);
-    expect(body.results[0]?.skipped).toContain("不适用");
+    expect(body.results[0]?.reason).toContain("不适用");
 
     expect((await subRow(customerId)).traffic_total_gb).toBe(before.traffic_total_gb);
   });
@@ -952,7 +989,7 @@ describe("兑换码", () => {
       .run();
   };
 
-  it("有订阅：加权益 + 0 元订单；重复兑被挡；码错不抛 5xx", async () => {
+  it("有订阅：加权益 + 核销一行；重复兑被挡；码错不抛 5xx", async () => {
     const promoId = await createPromotion({
       name: "国庆福利",
       kind: "gift",
@@ -994,12 +1031,14 @@ describe("兑换码", () => {
       .first<{ expires_at: string; period_extra_gb: number }>();
     expect((Date.parse(after!.expires_at) - Date.parse(before!.expires_at)) / 86_400_000).toBe(3);
 
-    const giftOrders = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift' AND promotion_id = ?`,
+    // 凭证是核销行（`order_id` 为空 —— 礼包不走购买流程），码用量也靠它计
+    const used = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM redemptions
+        WHERE customer_id = ? AND promotion_id = ? AND settled_at IS NOT NULL`,
     )
       .bind(customerId, promoId)
       .first<{ n: number }>();
-    expect(Number(giftOrders?.n ?? 0)).toBe(1);
+    expect(Number(used?.n ?? 0)).toBe(1);
 
     // 同一人再兑一次 ⇒ 每人次数用完（默认 1），仍然是 200 + reason
     const again = await redeem(token, "GUOQING7");
@@ -1075,12 +1114,12 @@ describe("兑换码", () => {
     expect(body.ok).toBe(false);
     expect(body.reason).toContain("套餐");
 
-    const orders = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM orders WHERE customer_id = ? AND source = 'gift'`,
+    const rows = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM redemptions WHERE customer_id = ?`,
     )
       .bind(customerId)
       .first<{ n: number }>();
-    expect(Number(orders?.n ?? 0)).toBe(0);
+    expect(Number(rows?.n ?? 0)).toBe(0);
   });
 
   it("猜码过频：超过 5 次失败返回 429（带 Retry-After）", async () => {

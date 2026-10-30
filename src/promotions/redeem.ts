@@ -11,7 +11,8 @@
  *      失败 5 次就锁。计数落在 `audit_log`（现成的表），不新增结构。
  */
 import { lookupCode, normalizeCode } from "./codes";
-import { grantGift } from "./gift";
+import { claimGiftFor } from "./gift";
+import { customerSubscription } from "../subscriptions/store";
 
 import type { Env } from "../env";
 import type { GiftRewards } from "./model";
@@ -152,20 +153,21 @@ export async function redeemGiftCode(
     return fail("这个兑换码已经被领完了");
   }
 
-  // ── 3) 发放（人群 / 次数 / 冷却 / 载体套餐开户都在 grantGift 里） ──
-  // 注意这里**故意走 `grantGift` 而不是 `deliverGift`**：输码已经是一个用户动作，
-  // 他要的感知（"我做了什么、我拿到了什么"）在兑换那一刻就已经发生了。
-  // 再让他进「我的礼包」点第二次，是多余的一步。所以凭码礼包恒为立即到账。
+  // ── 3) 发放（人群 / 次数 / 冷却 / 载体套餐开户都在 `claimGiftFor` 里）──
+  // 输码**本身就是**一次领取：用户已经在"拉"了，
+  // 他要知道的结果（拿到了什么 / 为什么不行）必须当场返回，
+  // 所以走同一个 `claimGiftFor`，只是多带一个 `codeId`。
   const promo = hit.promotion;
-  const grant = await grantGift(env, {
+  // 领之前有没有订阅 —— 用来告诉前端"这次是给你新开的户"
+  const hadSub = Boolean(await customerSubscription(env, opts.customerId));
+  const grant = await claimGiftFor(env, {
     promotionId: promo.id,
     customerId: opts.customerId,
-    source: "redeem",
     now,
     codeId: hit.codeId,
   });
-  if (!grant) return fail("兑换码不对，或者这个活动已经结束了");
-  if (!grant.granted) return fail(grant.skipped ?? "这个兑换码现在不可用");
+  if (grant.state === "not_found") return fail("兑换码不对，或者这个活动已经结束了");
+  if (grant.state !== "granted") return fail(grant.message);
 
   await recordSuccess(env, opts.customerId, code, now);
   const view = await snapshot(env, opts.customerId);
@@ -175,7 +177,8 @@ export async function redeemGiftCode(
       ok: true,
       promotion_name: promo.name,
       applied: grant.applied,
-      opened: grant.opened ?? false,
+      // 原本没有订阅、这次用载体套餐开的户（前端据此多说一句"已为你开通体验套餐"）
+      opened: !hadSub,
       expires_at: view.expires_at,
       remaining_gb: view.remaining_gb,
     },

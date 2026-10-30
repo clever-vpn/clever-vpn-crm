@@ -93,9 +93,9 @@ async function makeGift(days: number, gb: number): Promise<number> {
   const iso = new Date().toISOString();
   const res = await env.DB.prepare(
     `INSERT INTO promotions
-       (auto_apply, name, kind, benefit_type, benefit_value, rewards_json, delivery,
+       (auto_apply, name, kind, benefit_type, benefit_value, rewards_json,
         notify, audience, max_uses_per_customer, status, created_at, updated_at)
-     VALUES (0, '视图礼包', 'gift', 'amount', 0, ?, 'auto', 0, 'all', 1, 'active', ?, ?)`,
+     VALUES (0, '视图礼包', 'gift', 'amount', 0, ?, 0, 'all', 1, 'active', ?, ?)`,
   )
     .bind(JSON.stringify({ days, gb }), iso, iso)
     .run();
@@ -139,9 +139,10 @@ beforeAll(async () => {
   orderCode = await payMonthly(token);
   customerId = await customerIdOf(USER);
 
-  // 礼包到账 → 时间线应该多一条 gift
-  const { deliverGift } = await import("../../src/promotions/gift");
-  await deliverGift(env, { promotionId: await makeGift(7, 5), customerId, source: "manual" });
+  // 领一份礼包 → 时间线应该多一条 gift（拉取模型：用户自己领）
+  const { claimGiftFor } = await import("../../src/promotions/gift");
+  const claimed = await claimGiftFor(env, { promotionId: await makeGift(7, 5), customerId });
+  expect(claimed.state).toBe("granted");
 
   // 塞一条 settle 与 hold 进台账（它们**不该**出现在用户时间线里）
   const sub = await env.DB.prepare(
@@ -224,28 +225,38 @@ describe("GET /orders（列表）", () => {
     expect(order.next_poll_after_ms).toBeNull();
   });
 
-  it("金额为 0 时说明来源，不显示 ¥0.00", async () => {
-    const { deliverGift } = await import("../../src/promotions/gift");
-    await deliverGift(env, { promotionId: await makeGift(2, 0), customerId, source: "manual" });
+  it("礼包**不出现在订单历史里**（它没有走购买流程）", async () => {
+    const { claimGiftFor } = await import("../../src/promotions/gift");
+    await claimGiftFor(env, { promotionId: await makeGift(2, 0), customerId });
 
     const body = (await (await appCall("/api/app/v1/orders", token)).json()) as {
       items: { amount_text: string; title: string }[];
     };
-    const gift = body.items.find((i) => i.title.startsWith("礼包"));
-    expect(gift).toBeTruthy();
-    expect(gift!.amount_text).toContain("0 元");
+    // 礼包是"权益层的赠予"，不是一次购买：混进订单历史会让财务口径失真
+    expect(body.items.some((i) => i.title.startsWith("礼包"))).toBe(false);
   });
 });
 
-describe("GET /me/gifts（空态）", () => {
-  it("没有礼包时给 empty_text，前端不拼文案", async () => {
-    const other = await login(EMPTY_USER);
-    const body = (await (await appCall("/api/app/v1/me/gifts", other)).json()) as {
-      gifts: unknown[];
+describe("GET /me/gifts（货架）", () => {
+  it("领过的礼包变成 claimed，且不再可领", async () => {
+    const body = (await (await appCall("/api/app/v1/me/gifts", token)).json()) as {
+      items: { promotion_id: number; state: string; claimable: boolean; rewards_text: string }[];
       empty_text: string | null;
     };
-    expect(body.gifts).toHaveLength(0);
-    expect(body.empty_text).toContain("没有可领的礼包");
+    const claimed = body.items.filter((i) => i.state === "claimed");
+    expect(claimed.length).toBeGreaterThanOrEqual(1);
+    expect(claimed.every((i) => i.claimable === false)).toBe(true);
+  });
+
+  it("没有可领的礼包时给 empty_text，前端不拼文案", async () => {
+    const other = await login(EMPTY_USER);
+    const body = (await (await appCall("/api/app/v1/me/gifts", other)).json()) as {
+      items: unknown[];
+      empty_text: string | null;
+    };
+    // 这个客户没有任何"符合他身份"的活动 ⇒ 列表为空、文案由 CRM 给
+    expect(body.items).toHaveLength(0);
+    expect(body.empty_text).toContain("礼包");
   });
 });
 

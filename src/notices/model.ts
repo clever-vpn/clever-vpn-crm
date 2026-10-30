@@ -4,21 +4,22 @@
  * 一条通知 = 一句话标题 + 一段正文 + 可选动作。文案在**创建时**就定稿（落库），
  * 这样"当时的承诺"不会因为后来改模板而变形，也让 App 与邮件看到同一份东西。
  *
- * 两种礼包通知是**两种文体**，不是同一段话改几个字：
+ * 目前只有一种礼包通知：**收据**（`gift_granted`）——已为你加了什么 · 新的到期日。
  *
- *   gift_claim（有券待领）  = **行动号召**：送什么 · 还剩几天作废 · 去领取
- *   gift_auto（已到账）     = **收据**   ：已为你加了什么 · 新的到期日是哪天
+ * 为什么只需要收据：礼包是**用户自己点的领取**，结果同步显示在那一屏
+ * （"已到账 +7 天"）。收据是**留档**，不是告知，所以默认不发
+ * （`promotions.notify = 0`）——吃发信配额，而那个配额是验证码的命脉。
  *
- * 为什么 auto 也一定要发：悄悄延长 10 天，用户只有到期满那天才发现 —— 那不是营销，
- * 是没人知道的善意。收据把"我给了你什么"变成用户记得住的事实。
+ * 「还有一份礼包待领」这种**催促**属于营销邮件，未来走另一套系统，
+ * 不走 Cloudflare Email Service（群发会打掉域名信誉，验证码登录一起挂）。
  */
 import type { GiftRewards } from "../promotions/model";
 
-/** 目前只有两种礼包通知；以后加（订单成功 / 补偿通知）往这里加 */
-export type NoticeKind = "gift_claim" | "gift_auto";
+/** 目前只有礼包收据；以后加（订单成功 / 补偿通知）往这里加 */
+export type NoticeKind = "gift_granted";
 
 /** 营销类通知：可退订（验证码 / 订单结果不在此列，那是交易必需） */
-export const MARKETING_KINDS: readonly NoticeKind[] = ["gift_claim", "gift_auto"];
+export const MARKETING_KINDS: readonly NoticeKind[] = ["gift_granted"];
 
 export function isMarketingNotice(kind: string): boolean {
   return (MARKETING_KINDS as readonly string[]).includes(kind);
@@ -51,18 +52,13 @@ function dayOf(iso: string): string {
 
 export interface GiftNoticeInput {
   customerId: number;
-  /**
-   * 幂等锚点：`gift_auto` 用 0 元订单 id；`gift_claim` 用 `"{券id}:{截止时间}"`
-   * —— 券过期后重新发一张是**一次新的提醒**，不该被旧的唯一键吞掉。
-   */
+  /** 幂等锚点：用**核销行 id**（一次领取一行，天然唯一） */
   refId: string | number;
   /** 活动角标（用户可见的标题来源）；为空时用中性标题 */
   badgeLabel: string | null;
   rewards: GiftRewards;
-  /** claim：领取截止时间；auto：新的订阅到期时间（可空 = 无限期） */
+  /** 新的订阅到期时间（null = 无限期） */
   expiresAt: string | null;
-  /** claim 模式还剩几天 */
-  daysLeft?: number;
   /** 官网账户页地址（没配 SITE_URL 时为空） */
   siteUrl: string;
 }
@@ -73,32 +69,6 @@ function titleOf(badgeLabel: string | null): string {
 }
 
 /**
- * 待领取：**必须让他现在就知道**（券会过期）。
- */
-export function claimNotice(input: GiftNoticeInput): NoticeDraft {
-  const rewards = rewardsText(input.rewards);
-  const left = input.daysLeft && input.daysLeft > 0 ? input.daysLeft : null;
-  const deadline = input.expiresAt ? dayOf(input.expiresAt) : null;
-  return {
-    customerId: input.customerId,
-    kind: "gift_claim",
-    refId: String(input.refId),
-    title: `你有一份礼物待领取：${titleOf(input.badgeLabel)}`,
-    body: [
-      `送给你的 ${rewards} 还在等你领取。`,
-      deadline
-        ? left
-          ? `请在 ${deadline} 前领取，逾期自动作废（还剩约 ${left} 天）。`
-          : `请在 ${deadline} 前领取，逾期自动作废。`
-        : "逾期未领取会自动作废。",
-      "领取后权益立即生效，可以在「我的礼包」里看到。",
-    ].join("\n"),
-    actionUrl: input.siteUrl ? `${input.siteUrl.replace(/\/$/, "")}/account/gifts` : null,
-    actionText: "去领取",
-  };
-}
-
-/**
  * 已到账：**收据**。必须写清"新到期日 / 加了多少"，否则用户读不出你给了什么。
  */
 export function grantedNotice(input: GiftNoticeInput): NoticeDraft {
@@ -106,7 +76,7 @@ export function grantedNotice(input: GiftNoticeInput): NoticeDraft {
   const until = input.expiresAt ? dayOf(input.expiresAt) : null;
   return {
     customerId: input.customerId,
-    kind: "gift_auto",
+    kind: "gift_granted",
     refId: String(input.refId),
     title: `已为你送上：${titleOf(input.badgeLabel)}`,
     body: [

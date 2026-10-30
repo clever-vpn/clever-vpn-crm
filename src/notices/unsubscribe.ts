@@ -74,7 +74,7 @@ export async function optOutMarketing(env: Env, customerId: number): Promise<voi
   // 顺手把还没发出去的营销通知置为 skipped：不置的话它们会在下一轮继续被泵取到
   await env.DB.prepare(
     `UPDATE notices SET status = 'skipped'
-      WHERE customer_id = ? AND status = 'pending' AND kind IN ('gift_claim', 'gift_auto')`,
+      WHERE customer_id = ? AND status = 'pending' AND kind IN ('gift_granted')`,
   )
     .bind(customerId)
     .run();

@@ -32,8 +32,6 @@ function promo(over: Partial<Promotion> = {}): Promotion {
     limit_plan_kinds: [],
     limit_plan_ids: [],
     rewards: { days: 0, gb: 0 },
-    delivery: "auto",
-    claim_valid_days: null,
     notify: true,
     audience: "all",
     audience_days: null,
