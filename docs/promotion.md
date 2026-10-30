@@ -31,7 +31,7 @@
 | | **优惠券** | **邀请** | **礼包** |
 |---|---|---|---|
 | 生效时机 | 结账时 | 注册时 | 随时（用户自助领取，先到先得） |
-| 改什么 | **订单金额** | **关系** + 首单金额 | **订阅权益**（天数 / 流量） |
+| 改什么 | **订单金额** | **关系** + 对方首单金额 + **自己一份礼包** | **订阅权益**（天数 / 流量） |
 | 归因 | ❌ | ✅ **唯一来源** | ❌ |
 | 是否产生订单 | ✅ 折扣后的正常订单 | ✅ 同上 | ❌（凭证是核销行，礼包不走购买流程） |
 | 分发 | 服务商（有成本） | **用户自己**（零成本） | 用户自助（货架）/ 后台代领 |
@@ -133,11 +133,12 @@ Web 面板时代的产物——用户会登录网站、逛活动页、翻券包�
 ```
 promotions                     一个活动
   kind                         coupon | gift | referral
-  benefit_type                 金额维度：amount | percent（kind=gift 时不用）
-  benefit_value
+  benefit_type                 给买家少收多少：amount | percent
+  benefit_value                coupon = 本单折扣；referral = **被推荐人**首单折扣；gift 不用
   rewards_json                 权益维度：{days, gb}（kind=gift）
   notify                       领取成功后是否发**收据**邮件（默认 0 = 不发）
-  referrer_reward_type/value   kind=referral：给推荐人什么（默认给权益，不给现金）
+  referrer_gift_id             kind=referral：推荐人拿**哪个礼包**（引用一个 gift 活动）
+                               ~~referrer_reward_type/value~~ 作废：只能给一样东西
   min_subtotal_minor           ⚠️ 两家面板都没有，我们必须有
   limit_plan_kinds / limit_plan_ids   限套餐；礼包只认 `limit_plan_ids`（必须精确一致，§3.1）
   starts_at / ends_at
@@ -163,8 +164,16 @@ notices                         通知队列（= 邮件队列 = 站内消息）
   唯一约束：(kind, customer_id, ref_id) —— 同一次领取只通知一次
 
 referrals                      谁邀请了谁（只存关系，不存钱）
-  customer_id（被邀请人）, referrer_id, promotion_id, created_at
+  customer_id（被邀请人）, referrer_id, promotion_id, code, created_at
   唯一约束：customer_id（一个人只能被邀请一次）
+  ⚠️ reward_type / reward_value 作废 —— 兑现改为下面的「奖励卡实例」
+
+referral_rewards               推荐奖励卡 = **每成功邀请一人一张**（推荐人自己来领）
+  referral_id                  唯一：一次邀请只生成一张（回调重放不会多给）
+  referrer_id                  一个推荐人可多行 ⇒ **多拉多得**
+  promotion_id                 引用一个**礼包**模板（奖励内容与规则都在那里）
+  status                       pending | claimed（**没有 void**：送出去的、退款也不收回）
+  claimed_at / granted_json / promotion_snapshot    领取时回填
 
 redemptions                    台账：谁在哪个活动上用掉了一次名额
   promotion_id, customer_id, code_id
@@ -355,14 +364,60 @@ UPDATE redemptions SET settled_at = ?, granted_json = ?, promotion_snapshot = ?
 拉取模型顺带消灭了原来最难的那一段：不需要在 cron 里分页跑上万人 ——
 每个人只在自己的那次请求里花自己的 CPU。
 
-### 3.6 本轮未决（继续讨论）
+### 3.6 推荐（referral）= 关系 + 券（对方）+ 礼包（自己）
 
-| # | 问题 | 当前倾向 |
+邀请不是第三种发放规则，它是**关系**加上两种现成工具的兑现：
+
+| 给谁 | 用什么 | 什么时候到手 |
 |---|---|---|
-| 1 | **兑换码**是否受同一套规则约束（只能给买过的客户用）？ | 倾向"是"——码只是发放渠道，两套规则迟早打架。开了例外必须写明理由 |
-| 2 | 过期用户复活时写平台**绝对值**（= 礼包 gb），会不会抹掉平台侧他还没用的余额？ | 政策上已定"清零"，但要一次实测确认 cf-api 的余额语义，避免"我们以为清零、实际叠加" |
-| 3 | 复活周期内"跳过月度重置"的做法：外推锚点 vs 给订阅打标记 | 实现细节，等 1、2 定了一起做 |
-| 4 | **试用中**的用户要不要允许领礼包？ | 现按"没付过钱 ⇒ 不能领"处理（§3.1）。若要允许，等于承认"试用 + 礼包"可以叠加 |
+| **被推荐人** | **优惠券**（本次活动自己的 `benefit_type/value`） | 结账那一刻自动抵扣 —— 没有"可领的东西"，钱已经少了 |
+| **推荐人** | **礼包**（`referrer_gift_id` 引用一个 gift 活动） | **每成功邀请一人 ⇒ 货架上多一张奖励卡**，他自己点领取 |
+
+为什么这样切：**券是减钱，必须在付款时生效；礼包是加权益，可以让用户自己拉。**
+两条都不需要第三套发放实现。
+
+#### 奖励卡（`referral_rewards`）
+
+礼包的唯一约束是「每人每活动 1 次」，表达不了"拉 5 个人得 5 份"。所以推荐奖励要
+**实例化**：一次成功邀请 = 一行。
+
+| 列 | 作用 |
+|---|---|
+| `referral_id`（唯一） | 一次邀请只生成一张 ⇒ 支付回调重放不会多给 |
+| `referrer_id` | 一个推荐人可多行 ⇒ **多拉多得**（"每人每活动 1 次"不适用于它） |
+| `promotion_id` | 引用礼包模板：内容（天数 / 流量）与规则（限套餐、过期复活…）都在模板里 |
+| `status` | `pending` → `claimed`。**没有 `void`**：送出去的不收回，好友退款也不收回 |
+| `claimed_at` / `granted_json` / `promotion_snapshot` | 领取时回填（实际生效的权益 + 当时的活动快照） |
+
+规则：
+
+- **触发**：被推荐人**首单支付成功**（现有 `settlePaidOrder` 里那一步）。
+- **领取**：`UPDATE ... SET status='claimed' WHERE id=? AND status='pending'`，
+  抢到 `changes=1` 才算 —— 这就是占位，双击 / 重放都只发一次。
+- **加的规则与礼包完全一致**：`applicableRewards` → `applyAdditive` → 推平台 → §3.3 自检。
+  不过自检就把状态改回 `pending`（卡片还在，不是"发了但没用"）。
+- **资格**：推荐人同样要「买过的人」。没买过 ⇒ 卡片**照样显示**但点不动
+  （"需要先订阅"）；已过期 ⇒ 按 §3.2 复活。**不静默吞掉** —— 他邀请过的人是真的。
+- **通知**：卡片生成时发一封「好友已付款，去领取」；属营销类，可退订；发不出去不影响卡片。
+- **退款**：本轮明确**不做收回**。
+
+#### 必须一起修的两处
+
+1. `promotions.referrer_reward_type/value`（只能给一样）与 `referrals.reward_type/value`
+   一起作废，改为 `referrer_gift_id` + 奖励卡实例。
+2. `rewardReferrer` 现在**自己实现了一遍"加天数 / 加流量"**，没走 `applyAdditive`，
+   于是丢了"不限量不收 GB"的保护：给不限量流量包的推荐人发 20GB 会把
+   `traffic_total_gb` 从 `NULL` 写成 `20` ⇒ **他的不限量变成 20GB 上限**。
+   改成走同一套加法后自然消失。
+
+### 3.7 待办与验证（其余需求已定）
+
+| # | 事项 | 状态 |
+|---|---|---|
+| 1 | 过期用户复活时写平台**绝对值**（= 礼包 gb）会不会抹掉平台侧他还没用的余额 | 政策已定"清零"，**需一次实测**确认 cf-api 的余额语义 |
+| 2 | 复活窗口内"跳过月度重置"的具体做法（外推锚点 vs 给订阅打标记） | 实现细节，随 §3.2 一起做 |
+| 3 | 兑换码受同一套规则约束（只能给买过的客户用） | 已定：是 |
+| 4 | 试用中的用户不能领礼包 | 已定：不能（他还没付过钱） |
 
 ## 4. 三条不变量（永久有效，实现时不得违反）
 

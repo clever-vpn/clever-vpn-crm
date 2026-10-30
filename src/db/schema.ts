@@ -597,8 +597,13 @@ export const promotions = sqliteTable(
     /** coupon（改金额） | gift（改权益） | referral（关系）—— 见 `app-crm.md` §2.9 */
     kind: text("kind").notNull().default("coupon"),
     /**
-     * coupon 才有：amount（分） | percent（1–100，表示减掉的百分比）。
-     * gift / referral 不靠它，但列是 NOT NULL，一律写 `amount` + 0。
+     * **给"被推荐人/买家"少收多少钱**：amount（分）| percent（1–100）。
+     *
+     * 两个 kind 用它：
+     *   - `coupon`：这一单的折扣；
+     *   - `referral`：**被推荐人**首单的折扣（推荐人那份在 `referrer_reward_*`）。
+     *
+     * 只有 `gift` 不涉及金额（只改权益）⇒ 一律写 `amount` + 0，后台也不校验它。
      */
     benefit_type: text("benefit_type").notNull(),
     benefit_value: integer("benefit_value").notNull(),
