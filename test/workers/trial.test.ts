@@ -137,7 +137,10 @@ describe("GET /trial（免登录）", () => {
 
     const token = await login(LATE_USER);
     const sub = await appCall("/api/app/v1/subscription", token);
-    expect(((await sub.json()) as { status: string }).status).toBe("none");
+    const view = (await sub.json()) as { status: string; tag: string | null; tag_tone: string | null };
+    expect(view.status).toBe("none");
+    expect(view.tag).toBeNull();
+    expect(view.tag_tone).toBeNull();
   });
 
   it("配好之后返回 CRM 组织好的文案（App 不需要自己拼）", async () => {
@@ -210,10 +213,15 @@ describe("注册自动开通", () => {
     const view = (await (await appCall("/api/app/v1/subscription", token)).json()) as {
       status: string;
       status_text: string;
+      tag: string | null;
+      tag_tone: string | null;
       code?: string;
     };
     expect(view.status).toBe("active");
     expect(view.status_text).toContain("免费试用");
+    // 卡片小标签由 CRM 给：App 只渲染，不判断 isTrial
+    expect(view.tag).toBe("试用中");
+    expect(view.tag_tone).toBe("info");
     expect(view.code).toBeTruthy();
   });
 
@@ -283,6 +291,30 @@ describe("注册自动开通", () => {
     }[];
     const paid = plans.find((p) => p.plan_id === "paid_30d");
     expect(paid?.promo_price_minor).toBe(750);
+  });
+
+  it("试用到期：同一个接口给出「试用已结束」的文案与标签", async () => {
+    const token = await login("trial-expired@test.com");
+    const customerId = await customerIdOf("trial-expired@test.com");
+    // 把它拨到过去（等价于时间流逝）
+    await env.DB.prepare(
+      `UPDATE platform_subscriptions SET expires_at = ?, period_settled_at = ? WHERE customer_id = ?`,
+    )
+      .bind("2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", customerId)
+      .run();
+
+    const view = (await (await appCall("/api/app/v1/subscription", token)).json()) as {
+      status: string;
+      reason: string;
+      status_text: string;
+      tag: string;
+      tag_tone: string;
+    };
+    expect(view.status).toBe("inactive");
+    expect(view.reason).toBe("expired");
+    expect(view.status_text).toContain("试用已于");
+    expect(view.tag).toBe("试用已结束");
+    expect(view.tag_tone).toBe("muted");
   });
 
   it("cf-api 侧真的建了客户（字节单位、quota 恒 NULL）", async () => {
