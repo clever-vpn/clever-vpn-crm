@@ -729,6 +729,57 @@ export const promotionClaims = sqliteTable(
 );
 
 /**
+ * 批量发放任务（"把这个礼包发给一万个人"）。
+ *
+ * 为什么需要一张表而不是一个 `for` 循环：**单次 invocation 有 CPU/墙钟/子请求上限**
+ * （cron 30s CPU、15min 墙钟、付费版 1000 个子请求，同时在飞连接只有 6 个）。
+ * 一次跑一万人必死，所以把"一群人"变成"**一个游标 + 每次只做一小片**"：
+ *
+ *   `snapshot_max_id`  建任务那一刻的 `MAX(customers.id)` —— **冻结范围**
+ *   `cursor`           已经处理到的最大 customer_id（id 游标，不是 OFFSET）
+ *   `status`           running | done | cancelled
+ *
+ * 用 id 游标而不是 `OFFSET`：`OFFSET 9000` 每页都要扫前面 9000 行，越翻越慢；
+ * `WHERE id > cursor ORDER BY id LIMIT 50` 是索引 seek，永远一样快。
+ *
+ * 冻结上界是为了"能跑完"：不冻结的话，跑的过程中新注册的人会让任务永远追不上。
+ * 重跑安全由 `redemptions` 的 `(promotion_id, customer_id)` 唯一索引兜底
+ * （见 `promotions/redemption.ts`），所以中断后从游标重来不会双发。
+ */
+export const promotionRuns = sqliteTable(
+  "promotion_runs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    promotion_id: integer("promotion_id").notNull(),
+    /** 冻结的客户上界（建任务时的 `MAX(customers.id)`） */
+    snapshot_max_id: integer("snapshot_max_id").notNull(),
+    /** 已处理到的最大 customer_id */
+    cursor: integer("cursor").notNull().default(0),
+    /** 冻结范围内的客户总数（进度条分母） */
+    total: integer("total").notNull().default(0),
+    /** 已处理条数（含跳过） */
+    processed: integer("processed").notNull().default(0),
+    /** 权益已到账 */
+    granted: integer("granted").notNull().default(0),
+    /** 只发了一张券（delivery=claim） */
+    pending: integer("pending").notNull().default(0),
+    /** 不符合条件 / 已经领过 / 收不下 —— 跳过 */
+    skipped: integer("skipped").notNull().default(0),
+    /** 抛异常（平台抖动等），下一轮不会自动重试这一人，需要新开任务或人工补 */
+    failed: integer("failed").notNull().default(0),
+    /** running | done | cancelled */
+    status: text("status").notNull().default("running"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+    finished_at: text("finished_at"),
+  },
+  (t) => [
+    index("idx_promotion_runs_promotion").on(t.promotion_id, t.id),
+    index("idx_promotion_runs_status").on(t.status, t.id),
+  ],
+);
+
+/**
  * 邀请关系 = **关系层**（唯一归因来源）。 *
  * 一人只能被邀请一次（`uq_referrals_customer`）。这里**不存钱**：
  * 奖励明细落 `redemptions`，本表只回答"谁拉了谁"。
@@ -919,6 +970,7 @@ export type Customer = typeof customers.$inferSelect;
 export type PromotionRow = typeof promotions.$inferSelect;
 export type PromotionClaimRow = typeof promotionClaims.$inferSelect;
 export type NoticeRow = typeof notices.$inferSelect;
+export type PromotionRunRow = typeof promotionRuns.$inferSelect;
 export type ReferralRow = typeof referrals.$inferSelect;
 export type RedemptionRow = typeof redemptions.$inferSelect;
 export type PromotionTargetRow = typeof promotionTargets.$inferSelect;

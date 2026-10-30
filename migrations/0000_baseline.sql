@@ -260,6 +260,25 @@ CREATE TABLE `promotion_codes` (
 CREATE UNIQUE INDEX `promotion_codes_code_unique` ON `promotion_codes` (`code`);--> statement-breakpoint
 CREATE INDEX `idx_promotion_codes_promotion` ON `promotion_codes` (`promotion_id`);--> statement-breakpoint
 CREATE INDEX `idx_promotion_codes_batch` ON `promotion_codes` (`batch_id`);--> statement-breakpoint
+CREATE TABLE `promotion_runs` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`promotion_id` integer NOT NULL,
+	`snapshot_max_id` integer NOT NULL,
+	`cursor` integer DEFAULT 0 NOT NULL,
+	`total` integer DEFAULT 0 NOT NULL,
+	`processed` integer DEFAULT 0 NOT NULL,
+	`granted` integer DEFAULT 0 NOT NULL,
+	`pending` integer DEFAULT 0 NOT NULL,
+	`skipped` integer DEFAULT 0 NOT NULL,
+	`failed` integer DEFAULT 0 NOT NULL,
+	`status` text DEFAULT 'running' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	`finished_at` text
+);
+--> statement-breakpoint
+CREATE INDEX `idx_promotion_runs_promotion` ON `promotion_runs` (`promotion_id`,`id`);--> statement-breakpoint
+CREATE INDEX `idx_promotion_runs_status` ON `promotion_runs` (`status`,`id`);--> statement-breakpoint
 CREATE TABLE `promotion_targets` (
 	`promotion_id` integer NOT NULL,
 	`customer_id` integer NOT NULL,

@@ -20,6 +20,7 @@ import { handlePayRoutes } from "./payments/routes";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
 import { runExpiringGifts } from "./promotions/triggers";
+import { runNextBatch } from "./promotions/runs";
 import { handleUnsubscribe } from "./notices/unsubscribe";
 import { sendPendingNotices } from "./notices/store";
 import { pollPendingOrders } from "./payments/poll";
@@ -194,6 +195,19 @@ export default {
           if (report.errors.length) console.warn(`[poll] ${report.errors.join(" | ")}`);
         })
         .catch((e: unknown) => console.error("[poll] 查单失败", e)),
+    );
+
+    // ── 门 A：批量发放（每个 tick 处理一小批；没有任务就立刻返回）──
+    ctx.waitUntil(
+      runNextBatch(env)
+        .then((report) => {
+          if (report && report.processed) {
+            console.log(
+              `[run] #${report.runId} processed=${report.processed} granted=${report.granted} pending=${report.pending} skipped=${report.skipped} failed=${report.failed} has_more=${report.hasMore}`,
+            );
+          }
+        })
+        .catch((e: unknown) => console.error("[run] 批量发放失败", e)),
     );
 
     // ── 门 A：通知泵（按日配额；用尽自动顺延次日）──

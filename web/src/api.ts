@@ -270,6 +270,15 @@ export const api = {
       total: number;
       results: GiftGrantResult[];
     }>("POST", `/promotions/${id}/grant`, { customer_ids: customerIds }),
+  /** 批量发放：**只建任务，立刻返回**；真正的发放由 cron 分页做 */
+  broadcastPromotion: (id: number) =>
+    call<{ run: PromotionRunView; already_running: boolean }>("POST", `/promotions/${id}/broadcast`),
+  /** 这个活动最近一次批量任务的进度（前端轮询；文案由 CRM 给） */
+  promotionRun: (id: number) =>
+    call<{ run: PromotionRunView | null }>("GET", `/promotions/${id}/run`),
+  /** 取消批量任务（已发出的不退） */
+  cancelPromotionRun: (runId: number) =>
+    call<{ ok: true }>("POST", `/promotions/runs/${runId}/cancel`),
   /** 用户侧兑换（官网账户页用；App 走同一个端点） */
   redeem: (code: string) =>
     call<{
@@ -350,6 +359,21 @@ export type RewardType = "days" | "gb" | "none";
  */
 /** 礼包的送达方式（与 `src/promotions/model.ts` 的 `GiftDelivery` 一一对应） */
 export type GiftDelivery = "auto" | "claim";
+
+/** 批量发放任务的进度视图（`progress_text` 由 CRM 组织，前端直接显示） */
+export interface PromotionRunView {
+  id: number;
+  promotion_id: number;
+  total: number;
+  processed: number;
+  granted: number;
+  pending: number;
+  skipped: number;
+  failed: number;
+  status: "running" | "done" | "cancelled";
+  progress_text: string;
+  finished_at: string | null;
+}
 
 export interface PromotionView {
   id: number;

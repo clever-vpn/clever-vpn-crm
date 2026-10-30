@@ -155,6 +155,12 @@ promotions                     一个活动 / 一批码
 promotion_targets               audience=specific 的点名名单
   promotion_id, customer_id     唯一约束：(promotion_id, customer_id)
 
+promotion_runs                  批量发放任务（"发给一万个人"）：分批跑 + id 游标
+  snapshot_max_id               建任务那一刻的 MAX(customers.id) —— **冻结范围**
+  cursor / total / processed    进度（id 游标，不是 OFFSET）
+  granted / pending / skipped / failed
+  status                        running | done | cancelled
+
 notices                         通知队列（= 邮件队列 = 站内消息）：礼包两种送达各一种文体
   kind                          gift_claim（催领）| gift_auto（收据）
   ref_id                        gift_claim → "{券id}:{截止时间}"；gift_auto → 0 元订单 id
@@ -237,6 +243,36 @@ UPDATE redemptions SET order_id = ?, granted_json = ?    -- 回填 = 这次核�
   占位超过 5 分钟视为那次失败（进程被杀也能自愈）。
 - 过期**不靠定时任务**：`expires_at <= now` 就是过期。活动再次触发会刷新同一张券的
   截止时间（`ON CONFLICT ... WHERE status != 'claimed'`），已领取的绝不回退。
+
+### 3.2 批量发放（`promotions/runs.ts`）
+
+**上万人不能在一次请求里发完** —— 这是 Cloudflare 的硬约束，也是这里的编程边界：
+
+| 限制 | 值 |
+|---|---|
+| CPU / 次 invocation | 30 s |
+| 墙钟（cron） | 15 min |
+| subrequest（付费） | 1000 / 次 |
+| **同时在飞的连接** | **6** |
+
+一个人要 ~8 次 D1 + 1 次 cf-api HTTP ⇒ 一次最多几十到一百多人。所以：
+
+```
+后台「批量发放」 ──► 只建任务（冻结 MAX(customers.id) 与总数），立刻 202
+cron（每 2 分钟）──► 取一个 running 任务 → 处理 50 人（并发 6）→ 推进游标
+                     一批不满 / 游标到顶 ⇒ done
+```
+
+三个不变式：
+
+1. **每次只做有界的一小片**，撞线就停、下一轮接着来（总时长与总量解耦）；
+2. **进度只在表里**（内存丢了 = 从游标重来）；
+3. **重跑安全**：`redemptions (promotion_id, customer_id)` 唯一 ⇒ 同一个人不会拿两份
+   （这也是 PR 1「核销占位」存在的理由）。
+
+人群筛选**不做 SQL 预筛**：直接枚举客户，符不符合交给 `deliverGift`（内部即
+`checkForCustomer`）。多花一点查询，换来**只有一套判定逻辑** —— 批量与单人绝不会
+给出两个结论。不符合的人计入 `skipped`，不中断整轮。
 
 ## 4. 三条不变量（永久有效，实现时不得违反）
 

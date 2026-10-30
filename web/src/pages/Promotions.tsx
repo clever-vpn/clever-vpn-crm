@@ -14,9 +14,21 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { api, ApiError, type PromotionDraft, type PromotionKind, type PromotionView } from "../api";
+import {
+  api,
+  ApiError,
+  type PromotionDraft,
+  type PromotionKind,
+  type PromotionRunView,
+  type PromotionView,
+} from "../api";
 import { AUDIENCE_OPTIONS, PromotionForm, emptyDraft } from "./promotion/Form";
 import type { CodeMode } from "./promotion/Form";
+
+const message = (err: unknown, fallback: string) =>
+  err instanceof ApiError && err.message && err.message !== err.code
+    ? err.message
+    : fallback;
 
 const PLAN_KINDS: { value: string; label: string }[] = [
   { value: "period", label: "周期套餐" },
@@ -73,6 +85,77 @@ function windowLabel(p: PromotionView): string {
  * 码的形态由「每码可用几次」决定，不用再分"主码/批次码"两种概念：
  *   1 个码 + 可用 N 次 = 共享码；N 个码 + 各 1 次 = 一人一码
  */
+/**
+ * 批量发放面板。
+ *
+ * **不要**在这里等发放完成：上万人要分批跑完（可能几十分钟），前端只负责
+ * "建任务 → 轮询进度 → 显示 CRM 给的文案"。
+ */
+function BroadcastPanel({ promotionId }: { promotionId: number }) {
+  const [run, setRun] = useState<PromotionRunView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api.promotionRun(promotionId);
+      setRun(res.run);
+    } catch {
+      /* 进度读不到不影响主流程 */
+    }
+  }, [promotionId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // 任务在跑时每 5 秒刷一次；跑完自动停
+  useEffect(() => {
+    if (run?.status !== "running") return;
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
+  }, [run?.status, load]);
+
+  async function start() {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await api.broadcastPromotion(promotionId);
+      setRun(res.run);
+      setMsg(res.already_running ? "已经有一个任务在跑" : `已建任务（共 ${res.run.total} 人）`);
+    } catch (err) {
+      setMsg(message(err, "创建失败"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed var(--line)" }}>
+      <div className="row between">
+        <strong>批量发放给全部客户</strong>
+        <span className="hint">后台任务，分批跑；不影响你关掉这个窗口</span>
+      </div>
+      <div className="row" style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
+        <button type="button" onClick={start} disabled={busy || run?.status === "running"}>
+          {run?.status === "running" ? "任务进行中…" : "建批量任务"}
+        </button>
+        {run?.status === "running" && (
+          <button
+            type="button"
+            onClick={() => void api.cancelPromotionRun(run.id).then(load)}
+            disabled={busy}
+          >
+            取消
+          </button>
+        )}
+        {run && <span className="hint">{run.progress_text}</span>}
+      </div>
+      {msg && <p className="hint" style={{ marginTop: 6 }}>{msg}</p>}
+    </div>
+  );
+}
+
 function deliveryLabel(p: PromotionView): string {
   const ways: string[] = [];
   // 礼包关心的是「权益怎么到用户手上」，不是码怎么发
@@ -299,6 +382,8 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
               <strong>手动发放</strong>
               <span className="hint">填客户 ID（逗号分隔）；没有订阅的人会被跳过并说明原因</span>
             </div>
+            {/* 批量发放：只建任务，立刻返回；进度由 cron 推进（上万人不能在一次请求里发完） */}
+            {granting !== null && <BroadcastPanel promotionId={granting} />}
             <div className="row" style={{ gap: 8, marginTop: 8 }}>
               <input
                 value={grantIds}
