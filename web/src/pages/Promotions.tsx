@@ -75,6 +75,16 @@ function windowLabel(p: PromotionView): string {
  */
 function deliveryLabel(p: PromotionView): string {
   const ways: string[] = [];
+  // 礼包关心的是「权益怎么到用户手上」，不是码怎么发
+  if (p.kind === "gift") {
+    ways.push(
+      p.delivery === "claim" ? `待领取（${p.claim_valid_days ?? 7} 天内有效）` : "自动到账",
+    );
+    const stats = p.code_stats;
+    if (stats && stats.codes > 0) ways.push(`${stats.codes} 个码`);
+    if (p.audience === "expiring") ways.push("到期自动");
+    return ways.join(" / ");
+  }
   if (p.auto_apply) {
     ways.push(p.visible ? "站内展示" : "站内自动抵扣");
   } else {
@@ -310,13 +320,19 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
                   }
                   void run(async () => {
                     const r = await api.grantPromotion(granting, ids);
-                    const skipped = r.results.filter((x) => !x.granted);
+                    const skipped = r.results.filter((x) => !x.granted && !x.pending);
+                    // claim 模式下"发出去"是发券，不是到账 —— 结论要分开说，否则会以为
+                    // 权益已经加上了（后台口径和用户手里的东西必须一致）
+                    const parts: string[] = [];
+                    if (r.granted) parts.push(`已到账 ${r.granted} 人`);
+                    if (r.pending) parts.push(`已发券 ${r.pending} 人（等用户自己领）`);
                     if (skipped.length) {
-                      setError(
-                        `已发放 ${r.granted} 人，跳过 ${skipped.length} 人：` +
+                      parts.push(
+                        `跳过 ${skipped.length} 人：` +
                           skipped.map((x) => `#${x.customer_id} ${x.skipped}`).join("；"),
                       );
                     }
+                    if (skipped.length) setError(parts.join("；"));
                   }, "发放完成");
                 }}
               >
@@ -328,7 +344,7 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
 
         <p className="hint" style={{ marginTop: 12 }}>
           {isGift
-            ? "礼包只改权益：不改金额、不改残值。每次发放都会生成一张 0 元已付订单，财务可对账。"
+            ? "礼包只改权益：不改金额、不改残值。自动到账会生成一张 0 元已付订单（财务可对账）；待领取只发券，用户点了才产生订单与核销。"
             : "规则：一次下单最多生效一个折扣（多个命中取更优，不叠加）；核销在支付成功后才记录。"}
         </p>
       </div>

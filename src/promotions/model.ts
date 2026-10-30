@@ -52,6 +52,16 @@ export interface GiftRewards {
 
 export const EMPTY_REWARDS: GiftRewards = { days: 0, gb: 0 };
 
+/**
+ * 礼包的**送达方式**（只对 `kind='gift'` 有意义）。
+ *
+ *   auto   触发即到账。适合"补偿/回馈"：用户不需要知道过程，权益就在那里。
+ *   claim  触发只生成一张「待领取」，用户得在有效期内自己点一下才到账。
+ *          适合**营销**：没有领取动作，福利就变成了用户感知不到的静默改账。
+ */
+export type GiftDelivery = "auto" | "claim";
+
+export const GIFT_DELIVERIES: readonly GiftDelivery[] = ["auto", "claim"];
 /** 礼包是否真的给了什么（全 0 = 空礼包，不允许上线） */
 export function hasRewards(r: GiftRewards): boolean {
   return r.days > 0 || r.gb > 0;
@@ -73,6 +83,13 @@ export interface Promotion {
   limit_plan_ids: string[];
   /** 礼包奖励项（kind=gift 才有意义） */
   rewards: GiftRewards;
+  /**
+   * 礼包的送达方式：`auto` = 触发即到账；`claim` = 触发只生成「待领取」，用户自己领。
+   * 用不到用户感知的（悄悄补一点期限）走 auto；要做营销的走 claim。
+   */
+  delivery: GiftDelivery;
+  /** delivery=claim 时必填：待领取的有效期（天，1–90） */
+  claim_valid_days: number | null;
   /** 人群（取代旧的 first_purchase_only） */
   audience: Audience;
   /** audience=expiring 时必填 */
@@ -106,6 +123,8 @@ export interface PromotionRow {
   limit_plan_kinds: string;
   limit_plan_ids: string;
   rewards_json: string;
+  delivery: string;
+  claim_valid_days: number | null;
   audience: string;
   audience_days: number | null;
   cooldown_hours: number | null;
@@ -123,6 +142,7 @@ export interface PromotionRow {
 }
 
 export const PROMOTION_COLUMNS = `id, auto_apply, name, kind, benefit_type, benefit_value, rewards_json,
+  delivery, claim_valid_days,
   min_subtotal_minor, limit_plan_kinds, limit_plan_ids, audience, audience_days,
   cooldown_hours, plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
   badge_label, visible, referrer_reward_type, referrer_reward_value, status`;
@@ -166,6 +186,8 @@ export function rowToPromotion(row: PromotionRow): Promotion {
     limit_plan_kinds: parseJsonArray(row.limit_plan_kinds) as PlanKind[],
     limit_plan_ids: parseJsonArray(row.limit_plan_ids),
     rewards: parseRewards(row.rewards_json),
+    delivery: row.delivery === "claim" ? "claim" : "auto",
+    claim_valid_days: row.claim_valid_days,
     audience: (AUDIENCES as readonly string[]).includes(row.audience)
       ? (row.audience as Audience)
       : "all",

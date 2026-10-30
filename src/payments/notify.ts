@@ -20,7 +20,7 @@ import {
 import { gatewaySecret } from "./checkout";
 import { provisionOrder } from "../platform/provision";
 import { rewardReferrer } from "../promotions/referral";
-import { grantSignupGifts } from "../promotions/gift";
+import { grantSignupGifts } from "../promotions/triggers";
 import { redeemOrderPromotion } from "../promotions/service";
 import { customerSubscription, freshenTraffic, logChange, upsertSubscription } from "../subscriptions/store";
 import {
@@ -151,8 +151,12 @@ async function grant(env: Env, order: OrderRow, tradeNo: string | null, raw: str
     // 这里已经有钱到账，礼包失败绝不能影响订单结论。
     try {
       const gifts = await grantSignupGifts(env, order.customer_id, now);
-      if (gifts.some((g) => g.granted)) {
-        console.log(`[gift] 注册礼包已发 customer=${order.customer_id} count=${gifts.filter((g) => g.granted).length}`);
+      const done = gifts.filter((g) => g.granted).length;
+      const pending = gifts.filter((g) => g.pending).length;
+      if (done || pending) {
+        console.log(
+          `[gift] 注册礼包已发 customer=${order.customer_id} 到账=${done} 待领取=${pending}`,
+        );
       }
     } catch (e) {
       console.error(`[gift] 注册礼包失败 order=${order.code}: ${e instanceof Error ? e.message : e}`);

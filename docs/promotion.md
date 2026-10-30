@@ -128,7 +128,7 @@ Web 面板时代的产物——用户会登录网站、逛活动页、翻券包�
 
 三条都"是"才做。
 
-## 3. 数据模型（3 张表）
+## 3. 数据模型（4 张表）
 
 ```
 promotions                     一个活动 / 一批码
@@ -137,6 +137,8 @@ promotions                     一个活动 / 一批码
   benefit_type                 金额维度：amount | percent（kind=gift 时不用）
   benefit_value
   rewards_json                 权益维度：{days, gb}（kind=gift）
+  delivery                     auto | claim：礼包触发后直接到账，还是只发一张券（§3.1）
+  claim_valid_days             delivery=claim 时的领取有效期（天，1–90）
   referrer_reward_type/value   kind=referral：给推荐人什么（默认给权益，不给现金）
   min_subtotal_minor           ⚠️ 两家面板都没有，我们必须有
   limit_plan_kinds / limit_plan_ids
@@ -152,6 +154,13 @@ promotions                     一个活动 / 一批码
 promotion_targets               audience=specific 的点名名单
   promotion_id, customer_id     唯一约束：(promotion_id, customer_id)
 
+promotion_claims                待领取的礼包（delivery=claim）：券，不是权益
+  promotion_id, customer_id, source(signup|expiring|manual)
+  status                        pending | claiming（领取中的占位，防双击）| claimed
+  expires_at                    领取截止时间（过期是算出来的，不是状态）
+  order_id / granted_json       领取时产生的 0 元订单与实际生效的权益
+  唯一约束：(promotion_id, customer_id) —— 一个活动对一个人只留一张
+
 referrals                      谁邀请了谁（只存关系，不存钱）
   customer_id（被邀请人）, referrer_id, promotion_id, created_at
   唯一约束：customer_id（一个人只能被邀请一次）
@@ -166,6 +175,33 @@ redemptions                    台账：谁在什么订单上用了什么
 - **`referrals` 只存关系**，钱与权益都走 `redemptions` 的 `granted_json`，便于对账。
 - **`redemptions.order_id` 是"支付成功才写"**，不是下单时写。
 - `code` 允许为空，是"自动活动"与"优惠码"共用一张表的关键——**只有一个概念：活动**。
+
+### 3.1 礼包的两种到账方式（`delivery`）
+
+**「已经发给你了」和「你已经拿到了」是两件事**，所以礼包有一列 `delivery`：
+
+| 值 | 触发之后 | 记账 |
+|---|---|---|
+| `auto`（默认） | 权益立刻写进订阅 | 0 元订单 + `redemptions` 一行，全在触发那一刻产生 |
+| `claim` | 只写一行 `promotion_claims`（待领取的券） | **什么都没产生**：没有订单、没有核销、名额不占 |
+
+为什么必须有 `claim`：**悄悄改账用户感知不到**。把到期日悄悄推后 10 天，用户只会在
+某天发现"居然还能用"，既不知道是谁给的、也不知道给了多少 —— 那是没人知道的善意，
+不是营销。有个"领取"动作，福利才变成看得见、记得住的事。
+
+实现约束：
+
+- 待领取**不是第二套发放逻辑**：领取时仍然调 `grantGift()`（`promotions/gift.ts`），
+  所以「无限期不收天数 / 不限量不收 GB / 送 GB 必须回源平台余额」这些规则一处生效。
+- 建券时就先判一次"这份订阅收不收得下"：收不下**连券都不发**，否则用户会拿到一张
+  永远领不掉的卡。
+- 领取时 `skipCheck`：**不重判人群**。券是按当时身份点名的，用户晚两天回来领，
+  不该因为期间付过费（`audience='new'` 不再成立）而作废。
+- 并发：`pending → claiming` 是一条带条件的 `UPDATE`，`changes=0` 就是别人抢到了；
+  领取失败（平台余额读不到等）把券**还回 `pending`**，不因为一次抖动就让券消失；
+  占位超过 5 分钟视为那次失败（进程被杀也能自愈）。
+- 过期**不靠定时任务**：`expires_at <= now` 就是过期。活动再次触发会刷新同一张券的
+  截止时间（`ON CONFLICT ... WHERE status != 'claimed'`），已领取的绝不回退。
 
 ## 4. 三条不变量（永久有效，实现时不得违反）
 

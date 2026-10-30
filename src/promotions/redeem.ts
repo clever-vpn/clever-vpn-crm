@@ -153,6 +153,9 @@ export async function redeemGiftCode(
   }
 
   // ── 3) 发放（人群 / 次数 / 冷却 / 载体套餐开户都在 grantGift 里） ──
+  // 注意这里**故意走 `grantGift` 而不是 `deliverGift`**：输码已经是一个用户动作，
+  // 他要的感知（"我做了什么、我拿到了什么"）在兑换那一刻就已经发生了。
+  // 再让他进「我的礼包」点第二次，是多余的一步。所以凭码礼包恒为立即到账。
   const promo = hit.promotion;
   const grant = await grantGift(env, {
     promotionId: promo.id,

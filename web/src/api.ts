@@ -243,11 +243,14 @@ export const api = {
   deletePromotion: (id: number) => call<{ ok: true }>("DELETE", `/promotions/${id}`),
   /** 礼包手动发放：返回每个客户的结论（含为什么没发出去） */
   grantPromotion: (id: number, customerIds: number[]) =>
-    call<{ granted: number; total: number; results: GiftGrantResult[] }>(
-      "POST",
-      `/promotions/${id}/grant`,
-      { customer_ids: customerIds },
-    ),
+    call<{
+      /** 已到账人数（auto） */
+      granted: number;
+      /** 已发券人数（claim） */
+      pending: number;
+      total: number;
+      results: GiftGrantResult[];
+    }>("POST", `/promotions/${id}/grant`, { customer_ids: customerIds }),
   /** 用户侧兑换（官网账户页用；App 走同一个端点） */
   redeem: (code: string) =>
     call<{
@@ -308,7 +311,12 @@ export interface PromotionCodeView {
 export interface GiftGrantResult {
   promotion_id: number;
   customer_id: number;
+  /** 权益已经到账（delivery=auto） */
   granted: boolean;
+  /** 券已发出、等用户自己领（delivery=claim） */
+  pending?: boolean;
+  /** claim 模式：这张券的领取截止时间 */
+  claim_expires_at?: string | null;
   skipped: string | null;
   order_id: number | null;
   applied: GiftRewards;
@@ -321,6 +329,9 @@ export type RewardType = "days" | "gb" | "none";
  * 后台视图。`code` 为 null 表示**自动生效**（用户不需要输入任何码）。
  * 与 `src/admin/promotions.ts` 的 `view()` 一一对应。
  */
+/** 礼包的送达方式（与 `src/promotions/model.ts` 的 `GiftDelivery` 一一对应） */
+export type GiftDelivery = "auto" | "claim";
+
 export interface PromotionView {
   id: number;
   /** 优惠券是否「不用码就生效」（礼包 / 邀请恒为 false） */
@@ -335,6 +346,10 @@ export interface PromotionView {
   limit_plan_ids: string[];
   /** 礼包奖励项（kind=gift 才有意义） */
   rewards: GiftRewards;
+  /** 礼包送达方式：auto = 触发即到账；claim = 只发券，用户在有效期内自己领 */
+  delivery: GiftDelivery;
+  /** delivery=claim 时的领取有效期（天） */
+  claim_valid_days: number | null;
   audience: Audience;
   /** audience=expiring 时必填（N 天内到期） */
   audience_days: number | null;

@@ -85,6 +85,9 @@ export function emptyDraft(kind: PromotionKind): PromotionDraft {
     limit_plan_kinds: [],
     limit_plan_ids: [],
     rewards: { days: kind === "gift" ? 7 : 0, gb: 0 },
+    // 礼包默认「待领取」：送权益却不告诉用户，等于没送（营销要靠感知）
+    delivery: kind === "gift" ? "claim" : "auto",
+    claim_valid_days: kind === "gift" ? 7 : null,
     audience: kind === "referral" ? "new" : kind === "gift" ? "new" : "all",
     audience_days: null,
     cooldown_hours: null,
@@ -221,8 +224,13 @@ export function PromotionForm({
   const deliveryHints: string[] = [];
   if (isGift) {
     deliveryHints.push("后台可以随时手动发给指定客户");
-    if (draft.audience === "new") deliveryHints.push("新客首单开通后自动发");
-    if (draft.audience === "expiring") deliveryHints.push(`到期前 ${draft.audience_days ?? 7} 天自动发`);
+    if (draft.audience === "new") deliveryHints.push("新客首单开通后自动触发");
+    if (draft.audience === "expiring") deliveryHints.push(`到期前 ${draft.audience_days ?? 7} 天自动触发`);
+    deliveryHints.push(
+      draft.delivery === "claim"
+        ? `触发后只发一张券，用户需在 ${draft.claim_valid_days ?? 7} 天内自己点「领取」才到账（逾期作废）`
+        : "触发后直接到账 —— 不会通知、也不会有领取动作，用户基本感知不到",
+    );
     if (codesIssued) deliveryHints.push("用户可凭兑换码自助领取");
   }
 
@@ -411,6 +419,55 @@ export function PromotionForm({
               <div className="hint" style={{ lineHeight: 1.7 }}>
                 两个维度互相独立，各改各的。订阅本身没有这项权益时（无限期 / 不限量）会被自动忽略；
                 两项都用不上就不会发出去（也不会留空订单）。
+              </div>
+            </Section>
+          )}
+
+          {/* ── 礼包：怎么送到用户手上 ── */}
+          {isGift && (
+            <Section
+              title="怎么送到用户手上"
+              hint="送得出去 ≠ 用户知道。要做营销就选「待领取」"
+            >
+              <Field
+                label="送达方式"
+                hint="自动到账：静默改账，适合补一点期限这类用户不必知道的事"
+                locked={codesIssued}
+                lockReason={lockReason}
+              >
+                <select
+                  value={draft.delivery}
+                  disabled={codesIssued}
+                  onChange={(e) => {
+                    const delivery = e.target.value as PromotionDraft["delivery"];
+                    patch({
+                      delivery,
+                      claim_valid_days: delivery === "claim" ? (draft.claim_valid_days ?? 7) : null,
+                    });
+                  }}
+                >
+                  <option value="claim">待领取 —— 发一张券，用户自己领（推荐做营销）</option>
+                  <option value="auto">自动到账 —— 触发即加进权益，静默</option>
+                </select>
+              </Field>
+              {draft.delivery === "claim" && (
+                <Field
+                  label="领取有效期（天）"
+                  hint="过期作废，活动再次触发会重新发一张；1–90 天"
+                >
+                  <input
+                    value={draft.claim_valid_days ?? ""}
+                    onChange={(e) =>
+                      patch({ claim_valid_days: e.target.value ? Number(e.target.value) : null })
+                    }
+                    placeholder="7"
+                  />
+                </Field>
+              )}
+              <div className="hint" style={{ lineHeight: 1.7 }}>
+                「待领取」时权益还没进订阅：用户不点，名额不算用掉、也不会生成 0 元订单。
+                这也是唯一能让用户"看见并记住"自己拿到什么的方式 —— 悄悄延长 10 天，
+                他只会到期满那天才发现，那份好意就白送了。
               </div>
             </Section>
           )}

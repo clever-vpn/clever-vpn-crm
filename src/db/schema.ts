@@ -558,6 +558,17 @@ export const promotions = sqliteTable(
      * 给“送多久”。有订阅时这个字段被忽略。
      */
     plan_id: text("plan_id"),
+    /**
+     * 礼包的送达方式：`auto`（触发即到账）| `claim`（触发只生成「待领取」，用户自己点一下）。
+     *
+     * 为什么有两种：给权益这件事**用户感知不到**就等于没做营销 —— 到期日悄悄延长 10 天，
+     * 用户只会在他 VPN 断了的那天才发现「咦还能用」。所以需要「必须亲自领取」的形态：
+     * 用户看见了一张券、点了领取，才知道自己拿到了什么。
+     * 优惠券 / 邀请不使用这一列（恒为 auto）。
+     */
+    delivery: text("delivery").notNull().default("auto"),
+    /** delivery=claim 时必填：待领取的有效期（天，1–90）。过期即作废，重新触发会再发一张 */
+    claim_valid_days: integer("claim_valid_days"),
     /** 角标文案，如"限时 8 折"；NULL = 列表页不展示 */
     badge_label: text("badge_label"),
     /** 是否公开展示（0 = 定向活动，只能靠码命中） */
@@ -589,6 +600,43 @@ export const promotionTargets = sqliteTable(
   (t) => [
     uniqueIndex("uq_promotion_targets").on(t.promotion_id, t.customer_id),
     index("idx_promotion_targets_customer").on(t.customer_id),
+  ],
+);
+
+/**
+ * 待领取的礼包（`promotions.delivery = 'claim'`）。
+ *
+ * 「已经发给你了」和「你已经拿到了」是两件事：这张表记前者。真正的权益在**领取那一刻**
+ * 才写进订阅（并照常留一张 0 元订单 + 一行 `redemptions`）—— 所以财务口径、名额统计
+ * 全都只看 `redemptions`，这张表只是「送达凭证」。
+ *
+ * 状态只有两个：`pending` → `claimed`。**过期不是状态**，是 `expires_at <= now` 的推断 ——
+ * 省掉一个每天跑的定时任务，也不会出现「状态没来得及改」的脏数据。
+ * `claiming` 是领取过程中的短暂占位（防双击），超过 5 分钟视为失败、回到可领。
+ */
+export const promotionClaims = sqliteTable(
+  "promotion_claims",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    promotion_id: integer("promotion_id").notNull(),
+    customer_id: integer("customer_id").notNull(),
+    /** pending | claiming | claimed */
+    status: text("status").notNull().default("pending"),
+    /** 谁给的：signup（注册即送）| expiring（到期前挽回）| manual（后台点名） */
+    source: text("source").notNull(),
+    created_at: text("created_at").notNull(),
+    /** 领取截止时间；过了这一天这张券就没了（可以让活动再次触发） */
+    expires_at: text("expires_at").notNull(),
+    claimed_at: text("claimed_at"),
+    /** 领取时生成的 0 元礼包订单 */
+    order_id: integer("order_id"),
+    /** 实际生效的权益（配置值可能因为无限期 / 不限量被裁掉一项） */
+    granted_json: text("granted_json").notNull().default("{}"),
+  },
+  (t) => [
+    // 同一活动对同一个人只留一张：重放 / 重复触发不该堆出一叠券
+    uniqueIndex("uq_promotion_claims").on(t.promotion_id, t.customer_id),
+    index("idx_promotion_claims_customer").on(t.customer_id, t.status),
   ],
 );
 
@@ -769,6 +817,7 @@ export type SubscriptionRow = typeof platformSubscriptions.$inferSelect;
 export type PlanRow = typeof plans.$inferSelect;
 export type Customer = typeof customers.$inferSelect;
 export type PromotionRow = typeof promotions.$inferSelect;
+export type PromotionClaimRow = typeof promotionClaims.$inferSelect;
 export type ReferralRow = typeof referrals.$inferSelect;
 export type RedemptionRow = typeof redemptions.$inferSelect;
 export type PromotionTargetRow = typeof promotionTargets.$inferSelect;
