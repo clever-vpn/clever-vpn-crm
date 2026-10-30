@@ -128,7 +128,7 @@ Web 面板时代的产物——用户会登录网站、逛活动页、翻券包�
 
 三条都"是"才做。
 
-## 3. 数据模型（4 张表）
+## 3. 数据模型（4 张业务表 + 占位说明见 §3.0）
 
 ```
 promotions                     一个活动 / 一批码
@@ -166,14 +166,42 @@ referrals                      谁邀请了谁（只存关系，不存钱）
   唯一约束：customer_id（一个人只能被邀请一次）
 
 redemptions                    台账：谁在什么订单上用了什么
-  promotion_id, customer_id, order_id, discount_minor, granted_json, created_at
-  唯一约束：(promotion_id, order_id)
+  promotion_id, customer_id, order_id（**可空 = 占位中**）, code_id,
+  discount_minor, granted_json, created_at
+  唯一约束：(promotion_id, order_id)、(promotion_id, customer_id)、(code_id, customer_id)
 ```
 
 设计要点：
 
 - **`referrals` 只存关系**，钱与权益都走 `redemptions` 的 `granted_json`，便于对账。
 - **`redemptions.order_id` 是"支付成功才写"**，不是下单时写。
+- **`(promotion_id, customer_id)` 唯一** = "每人每活动 1 次"落到库上的形式，也是
+  批量发放「重跑不双发」的最后闸门。
+
+### 3.0 核销占位（`order_id IS NULL`）
+
+发放是**三步**，不是两步：`先占位 → 发放 → 回填订单号`。
+
+```
+INSERT OR IGNORE redemptions (... order_id = NULL ...)   -- 抢到 changes=1 才算我们的
+   ↓ 校验全过才走到这里
+建 0 元订单 → 改订阅 → 推平台
+   ↓
+UPDATE redemptions SET order_id = ?, granted_json = ?    -- 回填 = 这次核销完成
+```
+
+为什么必须占位：**"改了订阅"和"写了台账"之间只要崩一次**，重跑时系统数不到那行
+台账，就会认为"他还没领过"→ 再发一份、再多一张 0 元订单。批量发放是"分页 + 重入"
+的（跑上万人），重跑是常态而非例外。
+
+三条配套规则：
+
+- **占位行不算核销**：所有名额/用量统计都加 `order_id IS NOT NULL`
+  （`usageOf`、码用量、后台次数）。否则发放途中的几百毫秒里，这个人会被自己的
+  占位挡成"已经领过"。
+- **占位超过 5 分钟可被接管**（同 `promotion_claims.claiming`）：视为上次崩了，
+  后来者 `UPDATE created_at` 接着发，不新增行。
+- **发放失败必须删占位**：留着的话唯一索引会永久挡住这个人，他再也领不到。
 - `code` 允许为空，是"自动活动"与"优惠码"共用一张表的关键——**只有一个概念：活动**。
 
 ### 3.1 礼包的两种到账方式（`delivery`）
@@ -271,7 +299,7 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 
 | 关注点 | 位置 |
 |---|---|
-| 表 | `promotions`（规则层）、`referrals`（关系层）、`redemptions`（核销台账，`(promotion_id, order_id)` 唯一） |
+| 表 | `promotions`（规则层）、`referrals`（关系层）、`redemptions`（核销台账，`(promotion_id, customer_id)` / `(promotion_id, order_id)` 唯一）、`promotion_claims`（待领取的券） |
 | 纯逻辑 | `src/promotions/model.ts`：时间窗 / 套餐范围 / 门槛 / 次数 / 首单 → `checkPromotion`；`discountOf`；`bestPromotion` |
 | 取数 | `src/promotions/service.ts`：`resolvePromotion`（单套餐，含用户输入的码）、`resolveForPlans`（列表页，一次算完）、`planBadges`（公开角标） |
 | 关系 | `src/promotions/referral.ts`：`ensureReferralCode`（懒生成）、`bindReferral`（静默、幂等）、`referralPanel`、`rewardReferrer` |

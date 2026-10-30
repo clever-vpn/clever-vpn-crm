@@ -65,7 +65,9 @@ export async function lookupCode(env: Env, rawCode: string): Promise<CodeHit | n
     .first<PromotionRow>();
   if (!promoRow || promoRow.status !== "active") return null;
 
-  const used = await env.DB.prepare(`SELECT COUNT(*) AS n FROM redemptions WHERE code_id = ?`)
+  const used = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM redemptions WHERE code_id = ? AND order_id IS NOT NULL`,
+  )
     .bind(meta.id)
     .first<{ n: number }>();
 
@@ -146,7 +148,7 @@ export interface CodeRowView {
 export async function listCodes(env: Env, promotionId: number): Promise<CodeRowView[]> {
   const rows = await env.DB.prepare(
     `SELECT c.id, c.code, c.batch_id, c.max_uses, c.status, c.expires_at, c.note, c.created_at,
-            (SELECT COUNT(*) FROM redemptions r WHERE r.code_id = c.id) AS used
+            (SELECT COUNT(*) FROM redemptions r WHERE r.code_id = c.id AND r.order_id IS NOT NULL) AS used
        FROM promotion_codes c
       WHERE c.promotion_id = ?
       ORDER BY c.id`,

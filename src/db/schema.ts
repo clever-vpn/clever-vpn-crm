@@ -682,7 +682,15 @@ export const redemptions = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     promotion_id: integer("promotion_id").notNull(),
     customer_id: integer("customer_id").notNull(),
-    order_id: integer("order_id").notNull(),
+    /**
+     * 产生的订单；**NULL = 占位中**（已经占下这次核销，但东西还没发完）。
+     *
+     * 为什么允许空：发放是「先占位、后发放、再回填」三步（`promotions/gift.ts`），
+     * 否则“改了订阅但还没来得及记账”的那一刻崩溃，重跑会把同一份额度再发一遍、
+     * 再多建一张 0 元订单 —— 额度是真金白银，不能靠“大概不会崩”。
+     * 占位超过 5 分钟视为上次崩了，允许后来的接管（同 `promotion_claims`）。
+     */
+    order_id: integer("order_id"),
     /** 用的是哪个批次码（`promotion_codes.id`）；用主码或系统发放时为 NULL */
     code_id: integer("code_id"),
     /** 这一单减免了多少（分）；纯赠送型记 0 */
@@ -700,6 +708,10 @@ export const redemptions = sqliteTable(
     // 同一个码，同一个人只能核销一次（码级去重，比"每人每活动 1 次"更贴语义）。
     // 自动发放时 code_id 为 NULL，SQLite 的唯一索引允许多个 NULL ⇒ 不影响那种情况。
     uniqueIndex("uq_redemptions_code_customer").on(t.code_id, t.customer_id),
+    // **一个人对一个活动只能核销一次** —— 这是“每人每活动 1 次”
+    // （`max_uses_per_customer` 恒为 1）从文档落到库上的形式，也是批量发放
+    // 「重跑也不会双发」的最终阑门。占位行（`order_id IS NULL`）同样占这个唯一位。
+    uniqueIndex("uq_redemptions_promo_customer").on(t.promotion_id, t.customer_id),
   ],
 );
 

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d5387cad-3f65-4733-9cc8-40d3f5426299",
+  "id": "740db03b-411e-43ae-88ee-a6402669bf61",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "adjustments": {
@@ -1888,7 +1888,7 @@
           "name": "order_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "code_id": {
@@ -1955,6 +1955,14 @@
           "name": "uq_redemptions_code_customer",
           "columns": [
             "code_id",
+            "customer_id"
+          ],
+          "isUnique": true
+        },
+        "uq_redemptions_promo_customer": {
+          "name": "uq_redemptions_promo_customer",
+          "columns": [
+            "promotion_id",
             "customer_id"
           ],
           "isUnique": true

@@ -281,7 +281,7 @@ CREATE TABLE `redemptions` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`promotion_id` integer NOT NULL,
 	`customer_id` integer NOT NULL,
-	`order_id` integer NOT NULL,
+	`order_id` integer,
 	`code_id` integer,
 	`discount_minor` integer DEFAULT 0 NOT NULL,
 	`granted_json` text,
@@ -293,6 +293,7 @@ CREATE INDEX `idx_redemptions_customer` ON `redemptions` (`customer_id`);--> sta
 CREATE INDEX `idx_redemptions_promotion` ON `redemptions` (`promotion_id`);--> statement-breakpoint
 CREATE INDEX `idx_redemptions_code` ON `redemptions` (`code_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_redemptions_code_customer` ON `redemptions` (`code_id`,`customer_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_redemptions_promo_customer` ON `redemptions` (`promotion_id`,`customer_id`);--> statement-breakpoint
 CREATE TABLE `referrals` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`customer_id` integer NOT NULL,
