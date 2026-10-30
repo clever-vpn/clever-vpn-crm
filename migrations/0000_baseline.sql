@@ -67,11 +67,12 @@ CREATE TABLE `customers` (
 	`password_hash` text,
 	`display_name` text,
 	`status` text DEFAULT 'active' NOT NULL,
-	`cf_customer_id` integer,
+	`referral_code` text,
 	`created_at` text NOT NULL
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `customers_email_unique` ON `customers` (`email`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customers_referral_code` ON `customers` (`referral_code`);--> statement-breakpoint
 CREATE TABLE `email_codes` (
 	`email` text PRIMARY KEY NOT NULL,
 	`code_hash` text NOT NULL,
@@ -89,9 +90,13 @@ CREATE TABLE `orders` (
 	`kind` text NOT NULL,
 	`plan_snapshot` text NOT NULL,
 	`amount_minor` integer NOT NULL,
+	`discount_minor` integer DEFAULT 0 NOT NULL,
+	`promotion_id` integer,
+	`code_id` integer,
 	`currency` text DEFAULT 'CNY' NOT NULL,
 	`source` text DEFAULT 'purchase' NOT NULL,
 	`payment_method` text NOT NULL,
+	`entry` text,
 	`gateway_id` integer,
 	`provider_order_no` text,
 	`provider_trade_no` text,
@@ -178,27 +183,110 @@ CREATE TABLE `platform_subscriptions` (
 	`paid_minor` integer NOT NULL,
 	`currency` text NOT NULL,
 	`licence_limit` integer NOT NULL,
-	`term_days` integer,
-	`quota_gb` real,
+	`period_term_days` integer,
+	`period_quota_gb` real,
+	`period_anchor_day` integer,
+	`period_extra_gb` real,
+	`period_settled_at` text,
 	`traffic_total_gb` real,
-	`validity_days` integer,
+	`traffic_remaining_gb` real,
+	`traffic_synced_at` text,
+	`traffic_validity_days` integer,
 	`line_ids` text DEFAULT '[]' NOT NULL,
 	`started_at` text NOT NULL,
 	`expires_at` text,
-	`anchor_day` integer,
-	`balance_gb` real,
-	`remaining_gb` real,
-	`last_settled_at` text,
 	`platform_customer_id` integer,
-	`code` text,
-	`params_version` integer DEFAULT 0 NOT NULL,
+	`activation_code` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `uq_subs_customer` ON `platform_subscriptions` (`customer_id`);--> statement-breakpoint
-CREATE INDEX `idx_subs_due` ON `platform_subscriptions` (`kind`,`last_settled_at`);--> statement-breakpoint
+CREATE INDEX `idx_subs_due` ON `platform_subscriptions` (`kind`,`period_settled_at`);--> statement-breakpoint
 CREATE INDEX `idx_subs_order` ON `platform_subscriptions` (`order_id`);--> statement-breakpoint
+CREATE TABLE `promotion_codes` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`promotion_id` integer NOT NULL,
+	`code` text NOT NULL,
+	`batch_id` text,
+	`max_uses` integer DEFAULT 1 NOT NULL,
+	`status` text DEFAULT 'active' NOT NULL,
+	`expires_at` text,
+	`note` text,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `promotion_codes_code_unique` ON `promotion_codes` (`code`);--> statement-breakpoint
+CREATE INDEX `idx_promotion_codes_promotion` ON `promotion_codes` (`promotion_id`);--> statement-breakpoint
+CREATE INDEX `idx_promotion_codes_batch` ON `promotion_codes` (`batch_id`);--> statement-breakpoint
+CREATE TABLE `promotion_targets` (
+	`promotion_id` integer NOT NULL,
+	`customer_id` integer NOT NULL,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_promotion_targets` ON `promotion_targets` (`promotion_id`,`customer_id`);--> statement-breakpoint
+CREATE INDEX `idx_promotion_targets_customer` ON `promotion_targets` (`customer_id`);--> statement-breakpoint
+CREATE TABLE `promotions` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`auto_apply` integer DEFAULT 0 NOT NULL,
+	`name` text NOT NULL,
+	`kind` text DEFAULT 'coupon' NOT NULL,
+	`benefit_type` text NOT NULL,
+	`benefit_value` integer NOT NULL,
+	`rewards_json` text DEFAULT '{}' NOT NULL,
+	`min_subtotal_minor` integer DEFAULT 0 NOT NULL,
+	`limit_plan_kinds` text DEFAULT '[]' NOT NULL,
+	`limit_plan_ids` text DEFAULT '[]' NOT NULL,
+	`audience` text DEFAULT 'all' NOT NULL,
+	`audience_days` integer,
+	`new_user_within_days` integer,
+	`starts_at` text,
+	`ends_at` text,
+	`max_uses` integer,
+	`max_uses_per_customer` integer DEFAULT 1 NOT NULL,
+	`cooldown_hours` integer,
+	`plan_id` text,
+	`badge_label` text,
+	`visible` integer DEFAULT 1 NOT NULL,
+	`referrer_reward_type` text,
+	`referrer_reward_value` real,
+	`status` text DEFAULT 'draft' NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `idx_promotions_status` ON `promotions` (`status`,`kind`);--> statement-breakpoint
+CREATE TABLE `redemptions` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`promotion_id` integer NOT NULL,
+	`customer_id` integer NOT NULL,
+	`order_id` integer NOT NULL,
+	`code_id` integer,
+	`discount_minor` integer DEFAULT 0 NOT NULL,
+	`granted_json` text,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_redemptions_order_promo` ON `redemptions` (`promotion_id`,`order_id`);--> statement-breakpoint
+CREATE INDEX `idx_redemptions_customer` ON `redemptions` (`customer_id`);--> statement-breakpoint
+CREATE INDEX `idx_redemptions_promotion` ON `redemptions` (`promotion_id`);--> statement-breakpoint
+CREATE INDEX `idx_redemptions_code` ON `redemptions` (`code_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_redemptions_code_customer` ON `redemptions` (`code_id`,`customer_id`);--> statement-breakpoint
+CREATE TABLE `referrals` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`customer_id` integer NOT NULL,
+	`referrer_id` integer NOT NULL,
+	`promotion_id` integer,
+	`code` text NOT NULL,
+	`rewarded_at` text,
+	`reward_type` text,
+	`reward_value` real,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_referrals_customer` ON `referrals` (`customer_id`);--> statement-breakpoint
+CREATE INDEX `idx_referrals_referrer` ON `referrals` (`referrer_id`);--> statement-breakpoint
 CREATE TABLE `refunds` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`order_id` integer NOT NULL,
@@ -227,8 +315,8 @@ CREATE TABLE `subscription_changes` (
 	`plan_after` text,
 	`expires_before` text,
 	`expires_after` text,
-	`balance_before` real,
-	`balance_after` real,
+	`period_extra_before` real,
+	`period_extra_after` real,
 	`detail` text
 );
 --> statement-breakpoint

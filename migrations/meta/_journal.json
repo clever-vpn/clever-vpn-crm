@@ -5,71 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1792848704672,
+      "when": 1793334725673,
       "tag": "0000_baseline",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1792894871699,
-      "tag": "0001_optimal_fallen_one",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1792907723908,
-      "tag": "0002_classy_vertigo",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1792907740837,
-      "tag": "0003_powerful_rhodey",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1792916050370,
-      "tag": "0004_round_sally_floyd",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "6",
-      "when": 1792929293465,
-      "tag": "0005_damp_thundra",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1792929375651,
-      "tag": "0006_misty_polaris",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "6",
-      "when": 1792932669774,
-      "tag": "0007_moaning_overlord",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "6",
-      "when": 1792932709600,
-      "tag": "0008_left_sharon_ventura",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "6",
-      "when": 1792932722850,
-      "tag": "0009_living_terror",
       "breakpoints": true
     }
   ]

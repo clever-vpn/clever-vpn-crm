@@ -82,12 +82,12 @@ INSERT OR IGNORE INTO customers (email, status, created_at) VALUES
 
 -- 一笔已支付的周期订阅（alice）
 INSERT INTO platform_subscriptions
-  (customer_id, plan_id, kind, hold, paid_minor, currency, licence_limit, term_days,
-   quota_gb, started_at, expires_at, anchor_day, balance_gb, last_settled_at,
-   created_at, updated_at)
+  (customer_id, plan_id, kind, hold, paid_minor, currency, licence_limit, period_term_days,
+   period_quota_gb, period_extra_gb, started_at, expires_at, period_anchor_day,
+   period_settled_at, created_at, updated_at)
 SELECT c.id, 'dev_period_100g', 'period', 'none', 1500, 'CNY', 1, 30,
-       100, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-       strftime('%Y-%m-%dT%H:%M:%fZ','now','+30 days'), 23, 0,
+       100, 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+       strftime('%Y-%m-%dT%H:%M:%fZ','now','+30 days'), 23,
        strftime('%Y-%m-%dT%H:%M:%fZ','now'),
        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
 FROM customers c

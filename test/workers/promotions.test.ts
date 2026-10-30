@@ -566,7 +566,7 @@ describe("邀请码（关系层）", () => {
     expect(referrer?.id).toBeTruthy();
     await env.DB.prepare(
       `INSERT INTO platform_subscriptions (customer_id, plan_id, kind, hold, paid_minor, currency,
-         licence_limit, term_days, quota_gb, line_ids, started_at, expires_at, created_at, updated_at)
+         licence_limit, period_term_days, period_quota_gb, line_ids, started_at, expires_at, created_at, updated_at)
        VALUES (?, 'promo_30d', 'period', 'none', 1200, 'CNY', 1, 30, 100, '[]', ?, ?, ?, ?)`,
     )
       .bind(referrer!.id, now, now, now, now)
@@ -614,10 +614,10 @@ describe("礼包（gift）", () => {
 
   const snapshotOf = async (customerId: number) =>
     env.DB.prepare(
-      `SELECT expires_at, balance_gb FROM platform_subscriptions WHERE customer_id = ?`,
+      `SELECT expires_at, period_extra_gb FROM platform_subscriptions WHERE customer_id = ?`,
     )
       .bind(customerId)
-      .first<{ expires_at: string | null; balance_gb: number | null }>();
+      .first<{ expires_at: string | null; period_extra_gb: number | null }>();
 
   it("手动发放：加天数加流量、写 0 元订单、再发一次被挡", async () => {
     const promoId = await createPromotion({
@@ -648,7 +648,7 @@ describe("礼包（gift）", () => {
     // ① 订阅参数真的变了：+7 天、+5 GB
     const after = await snapshotOf(customerId);
     expect((Date.parse(after!.expires_at!) - Date.parse(before!.expires_at!)) / 86_400_000).toBe(7);
-    expect(after!.balance_gb).toBe((before!.balance_gb ?? 0) + 5);
+    expect(after!.period_extra_gb).toBe((before!.period_extra_gb ?? 0) + 5);
 
     // ② 账簿上留下了一张 0 元已付订单（否则财务永远解释不了这 7 天）
     const order = await env.DB.prepare(
@@ -737,7 +737,7 @@ describe("礼包（gift）", () => {
     expect(Number(mine?.n ?? 0)).toBe(1);
 
     const sub = await snapshotOf(customerId);
-    expect(sub!.balance_gb).toBe(2);
+    expect(sub!.period_extra_gb).toBe(2);
   });
 });
 
@@ -807,10 +807,10 @@ describe("兑换码", () => {
     expect(body.applied.days).toBe(3);
 
     const after = await env.DB.prepare(
-      `SELECT expires_at, balance_gb FROM platform_subscriptions WHERE customer_id = ?`,
+      `SELECT expires_at, period_extra_gb FROM platform_subscriptions WHERE customer_id = ?`,
     )
       .bind(customerId)
-      .first<{ expires_at: string; balance_gb: number }>();
+      .first<{ expires_at: string; period_extra_gb: number }>();
     expect((Date.parse(after!.expires_at) - Date.parse(before!.expires_at)) / 86_400_000).toBe(3);
 
     const giftOrders = await env.DB.prepare(

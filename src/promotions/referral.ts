@@ -236,11 +236,18 @@ export async function rewardReferrer(
             ? new Date(Date.parse(before.expires_at) + value * 86_400_000).toISOString()
             : null,
         }
-      : {
-          ...before,
-          balance_gb: (before.balance_gb ?? 0) + value,
-          remaining_gb: before.remaining_gb === null ? null : before.remaining_gb + value,
-        };
+      : before.kind === "traffic"
+        ? {
+            ...before,
+            // traffic：送 GB = 同时抬高总量与剩余，否则残值比例会越过 1
+            traffic_total_gb: (before.traffic_total_gb ?? 0) + value,
+            traffic_remaining_gb: (before.traffic_remaining_gb ?? 0) + value,
+          }
+        : {
+            ...before,
+            // period：进额外流量池，不动月度额度
+            period_extra_gb: (before.period_extra_gb ?? 0) + value,
+          };
 
   const id = await upsertSubscription(env, after);
   await logChange(env, {

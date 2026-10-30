@@ -22,7 +22,7 @@ import { provisionOrder } from "../platform/provision";
 import { rewardReferrer } from "../promotions/referral";
 import { grantSignupGifts } from "../promotions/gift";
 import { redeemOrderPromotion } from "../promotions/service";
-import { customerSubscription, logChange, upsertSubscription } from "../subscriptions/store";
+import { customerSubscription, freshenTraffic, logChange, upsertSubscription } from "../subscriptions/store";
 import {
   isOver,
   renewSubscription,
@@ -86,10 +86,17 @@ async function grant(env: Env, order: OrderRow, tradeNo: string | null, raw: str
     let next: Subscription;
 
     if (plan.kind === "addon") {
-      // 加购包不产生订阅，只往余额上加 GB（应付里也不含它）
+      // 加购包不产生订阅，只往池子里加 GB（应付里也不含它）
       if (!before) throw new Error("加购包需要一条已存在的订阅");
       action = "addon";
-      next = renewSubscription(before, plan, { paidMinor: paid, now });
+      // 加量 = 往平台余额上加数，**必须**先拿平台的真实剩余：
+      // 用 15 分钟前的缓存会把用户这段时间用掉的流量又还回去。
+      // 读不到就抛 —— 订单留在 provisioning，由重试任务重做，宁可晚开不可错写。
+      const freshened = before.platform_customer_id
+        ? await freshenTraffic(env, before, { now })
+        : before;
+      if (!freshened) throw new Error("读不到平台余额，加量包暂不能落账");
+      next = renewSubscription(freshened, plan, { paidMinor: paid, now });
     } else if (before && !isOver(before, now) && before.plan_id === plan.id) {
       // 续订：同一个套餐再来一份，全款，到期日顺延
       action = "renewal";
@@ -106,6 +113,9 @@ async function grant(env: Env, order: OrderRow, tradeNo: string | null, raw: str
       action = "new";
       next = { ...subscriptionFromPlan(plan, { customerId: order.customer_id, paidMinor: paid, now }), id: 0 };
     }
+
+    // `order_id` 只记“最初让这份权益生效”的那笔单：续费/升级/加量都不覆盖它（那些在台账里）
+    if (action === "new") next.order_id = order.id;
 
     const subscriptionId = await upsertSubscription(env, next);
     await logChange(env, {

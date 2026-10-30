@@ -58,17 +58,17 @@ export function controlParams(sub: Subscription): Record<string, unknown> {
 /**
  * 剩余额度（**字节**）；`null` = 不限量（cf-api 侧等于不计费）。
  *
- * - `traffic`：剩余 GB（未同步时退化为整包容量，宁可多给不可误杀）
- * - `period`：本周期额度 + 加购包余额（不变量 `R = P + B`）
+ * - `traffic`：剩余 GB（尚未同步时退化为整包容量，宁可多给不可误杀）
+ * - `period`：本周期额度 + 额外流量池（不变量 `R = P + B`）
  */
 export function trafficBytes(sub: Subscription): number | null {
   if (sub.kind === "traffic") {
     if (sub.traffic_total_gb === null) return null;
-    const gb = sub.remaining_gb ?? sub.traffic_total_gb;
+    const gb = sub.traffic_remaining_gb ?? sub.traffic_total_gb;
     return Math.max(0, Math.round(gb * GIGA));
   }
-  if (sub.quota_gb === null) return null;
-  const gb = sub.quota_gb + (sub.balance_gb ?? 0);
+  if (sub.period_quota_gb === null) return null;
+  const gb = sub.period_quota_gb + (sub.period_extra_gb ?? 0);
   return Math.max(0, Math.round(gb * GIGA));
 }
 
@@ -153,7 +153,7 @@ export async function provisionOrder(env: Env, orderId: number): Promise<void> {
 
   await env.DB.batch([
     env.DB.prepare(
-      `UPDATE platform_subscriptions SET platform_customer_id = ?, code = ? WHERE id = ?`,
+      `UPDATE platform_subscriptions SET platform_customer_id = ?, activation_code = ? WHERE id = ?`,
     ).bind(provisioned.platformCustomerId, provisioned.code, sub.id),
     env.DB.prepare(
       `UPDATE orders SET status = 'active', provisioned_at = ?, provision_error = NULL, updated_at = ?

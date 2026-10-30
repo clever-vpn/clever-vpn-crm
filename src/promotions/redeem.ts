@@ -78,23 +78,27 @@ async function recordSuccess(env: Env, customerId: number, code: string, now: Da
     .run();
 }
 
-/** 兑换后的展示值（口径与 `/me` 一致） */
+/** 兑换后的展示值（口径与 `/me` 完全一致：period = 额度 + 额外池） */
 async function snapshot(env: Env, customerId: number): Promise<{ expires_at: string | null; remaining_gb: number | null }> {
   const row = await env.DB.prepare(
-    `SELECT kind, expires_at, remaining_gb, quota_gb, balance_gb
+    `SELECT kind, expires_at, traffic_remaining_gb, period_quota_gb, period_extra_gb
        FROM platform_subscriptions WHERE customer_id = ?`,
   )
     .bind(customerId)
     .first<{
       kind: string;
       expires_at: string | null;
-      remaining_gb: number | null;
-      quota_gb: number | null;
-      balance_gb: number | null;
+      traffic_remaining_gb: number | null;
+      period_quota_gb: number | null;
+      period_extra_gb: number | null;
     }>();
   if (!row) return { expires_at: null, remaining_gb: null };
   const remaining =
-    row.kind === "traffic" ? row.remaining_gb : row.quota_gb === null ? null : row.quota_gb + (row.balance_gb ?? 0);
+    row.kind === "traffic"
+      ? row.traffic_remaining_gb
+      : row.period_quota_gb === null
+        ? null
+        : row.period_quota_gb + (row.period_extra_gb ?? 0);
   return { expires_at: row.expires_at, remaining_gb: remaining };
 }
 

@@ -51,40 +51,55 @@ export interface SubscriptionState {
   status_text: string;
 }
 
-/** 一行 `platform_subscriptions`（含创建时的规则快照） */
+/**
+ * 一行 `platform_subscriptions`（含创建时的规则快照）。
+ *
+ * 字段名统一带**类型前缀**：`period_*` 只属于 `kind='period'`，`traffic_*` 只属于
+ * `kind='traffic'`，无前缀的两种都有意义。看名字就知道该不该在这里赋值。
+ */
 export interface Subscription {
   id: number;
   customer_id: number;
+  /**
+   * **最初**让这份权益生效的订单。只在 `action='new'` 时写入，
+   * 续费 / 加量 / 升级**不覆盖**（那些在 `orders` + `subscription_changes` 里查）。
+   */
+  order_id: number | null;
   plan_id: string;
   kind: SubscriptionKind;
   hold: Hold;
   hold_reason: string | null;
   hold_at: string | null;
+  /** 这份权益的成交价（续费覆盖；加量包/赠送**不覆盖**） */
   paid_minor: number;
   currency: string;
   licence_limit: number;
-  term_days: number | null;
+  // ── period 专有 ──
+  period_term_days: number | null;
   /** null = 不限量 */
-  quota_gb: number | null;
+  period_quota_gb: number | null;
+  /** 1..28：结算锚点日（29/30/31 归到 28，避免二月丢失） */
+  period_anchor_day: number | null;
+  /** 额外流量池（加量包+赠送+邀请）：不随月度重置清零 */
+  period_extra_gb: number | null;
+  period_settled_at: string | null;
+  // ── traffic 专有 ──
   traffic_total_gb: number | null;
-  validity_days: number | null;
-  line_ids: number[];
-  started_at: string;
+  /** 平台侧剩余（缓存，TTL 15min；null = 从未同步） */
+  traffic_remaining_gb: number | null;
+  traffic_synced_at: string | null;
+  traffic_validity_days: number | null;
+  // ── 共用 ──
   /** null = 永不过期 */
   expires_at: string | null;
-  /** 1..28：结算锚点日（29/30/31 归到 28，避免二月丢失） */
-  anchor_day: number | null;
-  /** 加购包余额 B（仅 period 主订阅有意义） */
-  balance_gb: number | null;
-  /** traffic：平台侧剩余（由结算/同步任务写入） */
-  remaining_gb: number | null;
-  last_settled_at: string | null;
+  started_at: string;
+  line_ids: number[];
   platform_customer_id: number | null;
   /**
    * 平台激活码（cf-api `customers.code`）。
    * `null` = 还没落账成功（付款后停在 `provisioning`），或换档后旧码已失效。
    */
-  code: string | null;
+  activation_code: string | null;
 }
 
 // ---- 从套餐创建订阅 ----
@@ -113,6 +128,8 @@ export function subscriptionFromPlan(
 
   return {
     customer_id: opts.customerId,
+    // 新快照默认没有开单：真正落库时由 upsertSubscription({ orderId }) 填入
+    order_id: null,
     plan_id: plan.id,
     kind: plan.kind,
     hold: "none",
@@ -121,20 +138,22 @@ export function subscriptionFromPlan(
     paid_minor: paid,
     currency: plan.currency,
     licence_limit: plan.licence_limit,
-    term_days: plan.kind === "period" ? plan.term_days : null,
-    quota_gb: plan.kind === "period" ? plan.monthly_quota_gb : null,
+    period_term_days: plan.kind === "period" ? plan.term_days : null,
+    period_quota_gb: plan.kind === "period" ? plan.monthly_quota_gb : null,
     traffic_total_gb: plan.kind === "period" ? null : plan.traffic_gb,
-    validity_days: plan.kind === "traffic" ? plan.validity_days : null,
+    traffic_validity_days: plan.kind === "traffic" ? plan.validity_days : null,
     line_ids: plan.line_ids,
     started_at: now.toISOString(),
     expires_at: plan.kind === "addon" ? null : expiresAt,
-    anchor_day: plan.kind === "period" ? anchorDayOf(now) : null,
-    balance_gb: 0,
-    remaining_gb: plan.kind === "traffic" ? plan.traffic_gb : null,
-    last_settled_at: plan.kind === "period" ? now.toISOString() : null,
+    period_anchor_day: plan.kind === "period" ? anchorDayOf(now) : null,
+    period_extra_gb: 0,
+    // 新开的 traffic 还没被平台确认：先按“满额”乐观填，`synced_at = null` 表示未经核对
+    traffic_remaining_gb: plan.kind === "traffic" ? plan.traffic_gb : null,
+    traffic_synced_at: null,
+    period_settled_at: plan.kind === "period" ? now.toISOString() : null,
     platform_customer_id: null,
     // 落账成功后才由 provisionOrder 写入；命中该字段前订阅停在 provisioning
-    code: null,
+    activation_code: null,
   };
 }
 
@@ -147,7 +166,10 @@ export function subscriptionFromPlan(
  * 注意：这里只用于**展示与报价**。“能不能连”的权威判定在 cf-api（心跳读自己的余额）。
  */
 export function statusOf(
-  sub: Pick<Subscription, "hold" | "hold_reason" | "expires_at" | "remaining_gb" | "kind" | "anchor_day">,
+  sub: Pick<
+    Subscription,
+    "hold" | "hold_reason" | "expires_at" | "traffic_remaining_gb" | "kind" | "period_anchor_day"
+  >,
   now: Date = new Date(),
 ): SubscriptionState {
   if (sub.hold === "revoked" || sub.hold === "frozen") {
@@ -160,9 +182,10 @@ export function statusOf(
   if (sub.expires_at && Date.parse(sub.expires_at) <= now.getTime()) {
     return { status: "inactive", reason: "expired", status_text: `已于 ${sub.expires_at.slice(0, 10)} 到期` };
   }
-  // `remaining_gb === null` 是“未同步”，不是 0 —— 不能当成已用完
-  if (sub.remaining_gb !== null && sub.remaining_gb <= 0) {
-    const reset = sub.kind === "period" && sub.anchor_day ? `，每月 ${sub.anchor_day} 日重置` : "";
+  // `traffic_remaining_gb === null` 是“未同步”，不是 0 —— 不能当成已用完
+  if (sub.traffic_remaining_gb !== null && sub.traffic_remaining_gb <= 0) {
+    const reset =
+      sub.kind === "period" && sub.period_anchor_day ? `，每月 ${sub.period_anchor_day} 日重置` : "";
     return { status: "inactive", reason: "exhausted", status_text: `本月流量已用完${reset}` };
   }
   return { status: "active", reason: null, status_text: "生效中" };
@@ -173,9 +196,9 @@ export function statusOf(
 /**
  * 续订：**同一套餐再来一份**。
  *
- * - `period`：到期日 = `max(现在, 原到期日) + term_days`（提前续订不丢时间，也不走残值）
- * - `traffic`：整包叠加（`traffic_total_gb` 与 `remaining_gb` 同步加），到期日取两者更晚
- * - `addon`：只加 `balance_gb`，不动到期日
+ * - `period`：到期日 = `max(现在, 原到期日) + period_term_days`（提前续订不丢时间，也不走残值）
+ * - `traffic`：整包叠加（`traffic_total_gb` 与 `traffic_remaining_gb` 同步加），到期日取两者更晚
+ * - `addon`：只加 `period_extra_gb`，不动到期日，**不动 `paid_minor`**
  *
  * 权益列（额度 / 设备数 / 线路 / 锚点）**沿用当前订阅的快照**，不因套餐改版而变化。
  */
@@ -186,19 +209,26 @@ export function renewSubscription(
 ): Subscription {
   const now = opts.now ?? new Date();
   const base = Math.max(now.getTime(), sub.expires_at ? Date.parse(sub.expires_at) : 0);
-  const next = { ...sub, paid_minor: opts.paidMinor };
+  const next = { ...sub };
 
   if (plan.kind === "addon") {
-    next.balance_gb = (sub.balance_gb ?? 0) + (plan.traffic_gb ?? 0);
+    // 加量包是一笔**额外**消费，不是主订阅的成交价：
+    // 若覆盖 paid_minor，残值会按“主订阅价 + 加量包价”计算 ⇒ 升级时多找钱。
+    const gb = plan.traffic_gb ?? 0;
+    next.period_extra_gb = (sub.period_extra_gb ?? 0) + gb;
+    // 池子变多，本周期可用额度也跟着变（缓存值；调用方负责先回源）
+    next.traffic_remaining_gb = sub.traffic_remaining_gb === null ? null : sub.traffic_remaining_gb + gb;
     return next;
   }
+
+  next.paid_minor = opts.paidMinor;
   if (sub.kind === "period") {
-    next.expires_at = new Date(base + (sub.term_days ?? 0) * DAY_MS).toISOString();
+    next.expires_at = new Date(base + (sub.period_term_days ?? 0) * DAY_MS).toISOString();
     return next;
   }
   // traffic：整包叠加，到期日取更晚者
   next.traffic_total_gb = (sub.traffic_total_gb ?? 0) + (plan.traffic_gb ?? 0);
-  next.remaining_gb = (sub.remaining_gb ?? 0) + (plan.traffic_gb ?? 0);
+  next.traffic_remaining_gb = (sub.traffic_remaining_gb ?? 0) + (plan.traffic_gb ?? 0);
   const added = plan.validity_days === null ? null : new Date(base + plan.validity_days * DAY_MS).toISOString();
   const candidates = [sub.expires_at, added].filter((v): v is string => v !== null);
   next.expires_at = candidates.length ? candidates.sort().at(-1)! : null;
@@ -209,7 +239,7 @@ export function renewSubscription(
  * 升级：换成**另一份**套餐（可跨 `kind`）。
  *
  * - 新快照从**今天**起算（旧的剩余时间 / 流量已经折成钱，不叠加）
- * - 加购余额 `balance_gb` **原样带过去**（它是 GB，不折钱）
+ * - 额外流量池 `period_extra_gb` **原样带过去**（它是 GB，不折钱）；目标不是 period 时清为 null
  * - `paid_minor` = 本次实付；后续残值用它 × 剩余比例（已封顶到 1，不会亏本）
  */
 export function upgradeSubscription(
@@ -222,13 +252,20 @@ export function upgradeSubscription(
     paidMinor: opts.paidMinor,
     now: opts.now,
   });
+  // 池子是 GB 不折钱：目标还是 period 就留在池子里；
+  // 目标变成 traffic（池子列无意义）就并进流量包，不能把用户买过的流量丢掉
+  const extra = sub.period_extra_gb ?? 0;
+  if (plan.kind === "traffic" && extra > 0 && fresh.traffic_total_gb !== null) {
+    fresh.traffic_total_gb += extra;
+    fresh.traffic_remaining_gb = (fresh.traffic_remaining_gb ?? 0) + extra;
+  }
   return {
     ...fresh,
     id: sub.id,
     hold: sub.hold,
     hold_reason: sub.hold_reason,
     hold_at: sub.hold_at,
-    balance_gb: sub.balance_gb ?? 0,
+    period_extra_gb: plan.kind === "period" ? extra : null,
   } as Subscription;
 }
 
@@ -243,22 +280,22 @@ export function nextResetAt(anchorDay: number, after: Date): Date {
 
 export interface SettleInput {
   /** 本月额度 P；null = 不限量（无需结算） */
-  quota_gb: number | null;
-  /** 加购包余额 B */
-  balance_gb: number | null;
-  /** 平台侧当前余额 R */
+  period_quota_gb: number | null;
+  /** 额外流量池 B（加量包+赠送+邀请，未用完可留到下月） */
+  period_extra_gb: number | null;
+  /** 平台侧当前余额 R（**必须刚 freshen 过**，不能拿缓存里的旧值算账） */
   platform_balance_gb: number | null;
-  anchor_day: number | null;
-  last_settled_at: string | null;
+  period_anchor_day: number | null;
+  period_settled_at: string | null;
   expires_at: string | null;
 }
 
 export interface SettleResult {
   due: boolean;
-  /** 新的 `last_settled_at`（未到期时原样返回） */
-  last_settled_at: string | null;
-  /** 新的加购包余额 B' */
-  balance_gb: number | null;
+  /** 新的 `period_settled_at`（未到期时原样返回） */
+  period_settled_at: string | null;
+  /** 新的额外流量池 B' */
+  period_extra_gb: number | null;
   /** 要写回平台的新余额 R'（null = 无需写入） */
   platform_balance_gb: number | null;
   /** 跳过了几个结算周期（>1 说明定时任务漏跑过） */
@@ -275,33 +312,33 @@ export interface SettleResult {
 export function settle(input: SettleInput, now: Date = new Date()): SettleResult {
   const unchanged: SettleResult = {
     due: false,
-    last_settled_at: input.last_settled_at,
-    balance_gb: input.balance_gb,
+    period_settled_at: input.period_settled_at,
+    period_extra_gb: input.period_extra_gb,
     platform_balance_gb: null,
     skipped_periods: 0,
   };
 
   // 不限量 / 已到期 / 没有锚点：都不结算
-  if (input.quota_gb === null) return unchanged;
-  if (!input.anchor_day || !input.last_settled_at) return unchanged;
+  if (input.period_quota_gb === null) return unchanged;
+  if (!input.period_anchor_day || !input.period_settled_at) return unchanged;
   if (input.expires_at && Date.parse(input.expires_at) <= now.getTime()) return unchanged;
 
-  const since = new Date(input.last_settled_at);
-  const next = nextResetAt(input.anchor_day, since);
+  const since = new Date(input.period_settled_at);
+  const next = nextResetAt(input.period_anchor_day, since);
   if (next.getTime() > now.getTime()) return unchanged;
 
-  const balance = input.balance_gb ?? 0;
-  const platform = input.platform_balance_gb ?? input.quota_gb;
-  // R 可能为负（用超额）：扣包时视为 0，剩下的欠账由平台继续挡
+  const extra = input.period_extra_gb ?? 0;
+  const platform = input.platform_balance_gb ?? input.period_quota_gb;
+  // R 可能为负（用超额）：扣池时视为 0，剩下的欠账由平台继续挡
   const usable = Math.max(0, platform);
-  const balanceAfter = Math.min(balance, usable);
+  const extraAfter = Math.min(extra, usable);
 
   return {
     due: true,
-    last_settled_at: now.toISOString(),
-    balance_gb: balanceAfter,
-    platform_balance_gb: input.quota_gb + balanceAfter,
-    skipped_periods: periodsBetween(next, now, input.anchor_day),
+    period_settled_at: now.toISOString(),
+    period_extra_gb: extraAfter,
+    platform_balance_gb: input.period_quota_gb + extraAfter,
+    skipped_periods: periodsBetween(next, now, input.period_anchor_day),
   };
 }
 
@@ -318,16 +355,16 @@ function periodsBetween(from: Date, to: Date, anchorDay: number): number {
   return count;
 }
 
-/** 加购：往 balance_gb 上累加（不动额度、不动到期日） */
+/** 加购：往额外流量池上累加（不动月度额度、不动到期日） */
 export function addAddonBalance(subscription: Subscription, addonGb: number): number {
-  return (subscription.balance_gb ?? 0) + addonGb;
+  return (subscription.period_extra_gb ?? 0) + addonGb;
 }
 
 /** 绑定到平台时应该写的余额（period：P + B；traffic：总量） */
 export function bindingBalance(subscription: Subscription): number | null {
   if (subscription.kind === "period") {
-    if (subscription.quota_gb === null) return null; // 不限量
-    return subscription.quota_gb + (subscription.balance_gb ?? 0);
+    if (subscription.period_quota_gb === null) return null; // 不限量
+    return subscription.period_quota_gb + (subscription.period_extra_gb ?? 0);
   }
   return subscription.traffic_total_gb;
 }
@@ -345,7 +382,7 @@ export function isOver(subscription: Subscription, now: Date = new Date()): bool
     return Date.parse(subscription.expires_at) <= now.getTime();
   }
   if (subscription.kind === "traffic") {
-    return (subscription.remaining_gb ?? 0) <= 0;
+    return (subscription.traffic_remaining_gb ?? 0) <= 0;
   }
   return false;
 }

@@ -56,10 +56,10 @@ function makeCurrent(over: Partial<CurrentSubscription> = {}): CurrentSubscripti
     // 标价 1500 / 实付 1500：促销时两者会分叉，升级判定只看前者
     list_price_minor: 1500,
     paid_minor: 1500,
-    term_days: 30,
-    traffic_gb: null,
+    period_term_days: 30,
+    traffic_total_gb: null,
     expires_at: "2026-11-22T00:00:00Z",
-    remaining_gb: null,
+    traffic_remaining_gb: null,
     unlimited: false,
   };
   return { ...base, ...over } as CurrentSubscription;
@@ -194,7 +194,7 @@ describe("residualMinor", () => {
     expect(residualMinor(makeCurrent({ expires_at: "2026-10-01T00:00:00Z" }), NOW)).toBe(0);
   });
   it("traffic 按剩余 GB 折算", () => {
-    const current = makeCurrent({ kind: "traffic", term_days: null, traffic_gb: 200, remaining_gb: 50, expires_at: null });
+    const current = makeCurrent({ kind: "traffic", period_term_days: null, traffic_total_gb: 200, traffic_remaining_gb: 50, expires_at: null });
     expect(residualMinor(current, NOW)).toBe(375); // 1500 × 50/200
   });
 
@@ -291,14 +291,14 @@ describe("quotePurchase", () => {
   });
 
   it("流量用尽后可以买周期套餐", () => {
-    const current = makeCurrent({ kind: "traffic", term_days: null, traffic_gb: 200, remaining_gb: 0, expires_at: null });
+    const current = makeCurrent({ kind: "traffic", period_term_days: null, traffic_total_gb: 200, traffic_remaining_gb: 0, expires_at: null });
     const q = quotePurchase(current, makePlan(), NOW);
     expect(q.allowed).toBe(true);
     expect(q.settlement).toBe("new");
   });
 
   it("流量生效中换更大包：残值抵扣", () => {
-    const current = makeCurrent({ kind: "traffic", term_days: null, traffic_gb: 200, remaining_gb: 100, expires_at: null });
+    const current = makeCurrent({ kind: "traffic", period_term_days: null, traffic_total_gb: 200, traffic_remaining_gb: 100, expires_at: null });
     const target = makePlan({
       id: "p_traffic_400g",
       kind: "traffic",
@@ -332,7 +332,7 @@ describe("quotePurchase", () => {
     expect(ok.expires_at).toBe("2026-11-22T00:00:00.000Z"); // 不动到期日
 
     // 本月流量用完之后照样能买（这正是加购的用途）
-    const exhausted = quotePurchase(makeCurrent({ remaining_gb: 0 }), addon, NOW);
+    const exhausted = quotePurchase(makeCurrent({ traffic_remaining_gb: 0 }), addon, NOW);
     expect(exhausted.allowed).toBe(true);
 
     // 没有主订阅 / 主订阅已结束 ⇒ 无处可挂
@@ -357,7 +357,7 @@ describe("isSubscriptionOver", () => {
   it("流量余额 0 算结束", () => {
     expect(
       isSubscriptionOver(
-        makeCurrent({ kind: "traffic", term_days: null, traffic_gb: 10, remaining_gb: 0, expires_at: null }),
+        makeCurrent({ kind: "traffic", period_term_days: null, traffic_total_gb: 10, traffic_remaining_gb: 0, expires_at: null }),
         NOW,
       ),
     ).toBe(true);

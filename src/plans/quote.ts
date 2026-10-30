@@ -37,13 +37,13 @@ export interface CurrentSubscription {
   /** 该笔订单实际支付金额（最小货币单位） */
   paid_minor: number;
   /** period 才有 */
-  term_days: number | null;
+  period_term_days: number | null;
   /** traffic 才有 */
-  traffic_gb: number | null;
+  traffic_total_gb: number | null;
   /** ISO 时间；null = 永不过期 */
   expires_at: string | null;
-  /** traffic 才有：平台侧当前余额（GB） */
-  remaining_gb: number | null;
+  /** traffic 才有：平台侧当前余额（GB，已扣掉周期内的消耗） */
+  traffic_remaining_gb: number | null;
   /** 不限量（平台 `traffic_balance = NULL`）：周期不限量 或 流量不限量 */
   unlimited: boolean;
 }
@@ -86,7 +86,7 @@ function reject(reason: string): Quote {
 export function isSubscriptionOver(current: CurrentSubscription, now: Date): boolean {
   if (current.unlimited) return current.expires_at === null ? false : Date.parse(current.expires_at) <= now.getTime();
   if (current.kind === "traffic") {
-    return (current.remaining_gb ?? 0) <= 0;
+    return (current.traffic_remaining_gb ?? 0) <= 0;
   }
   if (current.expires_at === null) return false; // 永久
   return Date.parse(current.expires_at) <= now.getTime();
@@ -100,18 +100,18 @@ export function residualMinor(current: CurrentSubscription, now: Date): number {
   if (!current.paid_minor) return 0;
 
   if (current.kind === "period") {
-    if (current.expires_at === null || !current.term_days) return 0;
-    const totalHours = current.term_days * 24;
+    if (current.expires_at === null || !current.period_term_days) return 0;
+    const totalHours = current.period_term_days * 24;
     const remainingHours = Math.max(0, (Date.parse(current.expires_at) - now.getTime()) / HOUR_MS);
     if (remainingHours <= 0) return 0;
     const ratio = Math.min(1, remainingHours / totalHours);
     return Math.floor(current.paid_minor * ratio);
   }
 
-  if (current.traffic_gb === null || current.traffic_gb <= 0) return 0;
+  if (current.traffic_total_gb === null || current.traffic_total_gb <= 0) return 0;
   if (current.unlimited) return 0; // 不限量没有"剩余比例"可言
-  const remaining = Math.max(0, current.remaining_gb ?? 0);
-  const ratio = Math.min(1, remaining / current.traffic_gb);
+  const remaining = Math.max(0, current.traffic_remaining_gb ?? 0);
+  const ratio = Math.min(1, remaining / current.traffic_total_gb);
   return Math.floor(current.paid_minor * ratio);
 }
 
@@ -211,6 +211,6 @@ export function quotePurchase(current: CurrentSubscription | null, target: Plan,
     remaining_hours: current.kind === "period" && current.expires_at
       ? Math.max(0, Math.round((Date.parse(current.expires_at) - now.getTime()) / HOUR_MS))
       : undefined,
-    remaining_gb: current.kind === "traffic" ? current.remaining_gb ?? undefined : undefined,
+    remaining_gb: current.kind === "traffic" ? (current.traffic_remaining_gb ?? undefined) : undefined,
   };
 }
