@@ -52,7 +52,7 @@ VALUES
    strftime('%Y-%m-%dT%H:%M:%fZ','now'),
    strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
--- 套餐：周期 / 流量 / 加量 + 一个礼品包（price=0 且 hidden）
+-- 套餐：周期 / 流量 / 加量（**没有礼品包**：赠送走礼包核销或调整权益）
 -- 售卖渠道必须非空（validatePlan 要求至少一个），否则后台 PATCH 会被判非法。
 -- dev_period_100g 故意三个渠道全开，用于本地验证 Apple/Google 双商品 ID。
 INSERT OR IGNORE INTO plans
@@ -70,9 +70,6 @@ VALUES
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   ('dev_addon_50g',    '加量包 · 50GB',        'addon',    800, 'CNY', 1, NULL, NULL,  50, NULL, '[]',
    '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 30, 'active', 'public',
-   strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  ('dev_gift_20g',     '赠送 · 20GB（礼品包）', 'addon',      0, 'CNY', 1, NULL, NULL,  20, NULL, '[]',
-   '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 90, 'active', 'hidden',
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
 -- 客户（cf_customer_id 留空：本地还没绑定 cf-api 行的场景）
@@ -105,17 +102,6 @@ SELECT 'ORD-DEV-0001', c.id, 'dev_period_100g', 'period',
        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
 FROM customers c WHERE c.email = 'alice@example.com'
   AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.code = 'ORD-DEV-0001');
-
-INSERT INTO orders
-  (code, customer_id, plan_id, kind, plan_snapshot, amount_minor, currency, source,
-   payment_method, status, paid_at, operator, note, created_at, updated_at)
-SELECT 'ORD-DEV-0002', c.id, 'dev_gift_20g', 'addon',
-       '{"name":"赠送 · 20GB（礼品包）","kind":"addon","price_minor":0,"traffic_gb":20}',
-       0, 'CNY', 'gift', 'gift', 'paid',
-       strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'ops@example.com', 'dev 种子：赠送 20GB',
-       strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
-FROM customers c WHERE c.email = 'bob@example.com'
-  AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.code = 'ORD-DEV-0002');
 -- 测试网关（docs/payments.md §5.3）：默认关闭，需 ALLOW_MOCK_PAYMENTS=true 才可见；
 -- 白名单只放 dev 客户 —— 空名单等于向所有真实用户免费开通，这里绝不能留空。
 INSERT INTO payment_gateways

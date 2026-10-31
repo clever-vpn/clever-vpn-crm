@@ -15,6 +15,13 @@
       "when": 1793429678328,
       "tag": "0001_flimsy_eddie_brock",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793439290688,
+      "tag": "0002_sturdy_mystique",
+      "breakpoints": true
     }
   ]
 }

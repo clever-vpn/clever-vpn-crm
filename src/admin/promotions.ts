@@ -108,7 +108,6 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   if (cooldownHours !== null && !(cooldownHours >= 0)) errors.push("cooldown_hours 不能为负");
 
   // 载体套餐：只对礼包有意义。**必须是 hidden** —— 这条要查库，放在 handle() 里校验
-  const planId = kind === "gift" ? str(input.plan_id) || null : null;
 
   const minSubtotal = num(input.min_subtotal_minor) ?? 0;
   if (minSubtotal < 0) errors.push("min_subtotal_minor 不能为负");
@@ -179,7 +178,6 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
       audience: audience as Promotion["audience"],
       audience_days: audience === "expiring" ? Math.round(audienceDays ?? 7) : null,
       cooldown_hours: cooldownHours === null ? null : Math.round(cooldownHours),
-      plan_id: planId,
       new_user_within_days: num(input.new_user_within_days),
       starts_at: startsAt,
       ends_at: endsAt,
@@ -207,7 +205,6 @@ interface PromotionInput {
   audience: Promotion["audience"];
   audience_days: number | null;
   cooldown_hours: number | null;
-  plan_id: string | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
@@ -225,16 +222,16 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
     `INSERT INTO promotions (auto_apply, name, kind, benefit_type, benefit_value, min_subtotal_minor,
        limit_plan_kinds, limit_plan_ids, rewards_json, notify,
        audience, audience_days, cooldown_hours,
-       plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
+       new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
        referrer_reward_type, referrer_reward_value, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
       input.notify ? 1 : 0,
-      input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
+      input.audience, input.audience_days, input.cooldown_hours,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
       input.referrer_reward_type, input.referrer_reward_value, status, now, now,
@@ -248,7 +245,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
     `UPDATE promotions SET auto_apply = ?, name = ?, kind = ?, benefit_type = ?, benefit_value = ?,
        min_subtotal_minor = ?, limit_plan_kinds = ?, limit_plan_ids = ?, rewards_json = ?,
        notify = ?,
-       audience = ?, audience_days = ?, cooldown_hours = ?, plan_id = ?,
+       audience = ?, audience_days = ?, cooldown_hours = ?,
        new_user_within_days = ?, starts_at = ?, ends_at = ?, max_uses = ?, max_uses_per_customer = ?,
        badge_label = ?, visible = ?, referrer_reward_type = ?, referrer_reward_value = ?, updated_at = ?
      WHERE id = ?`,
@@ -258,7 +255,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
       input.min_subtotal_minor, JSON.stringify(input.limit_plan_kinds),
       JSON.stringify(input.limit_plan_ids), JSON.stringify(input.rewards),
       input.notify ? 1 : 0,
-      input.audience, input.audience_days, input.cooldown_hours, input.plan_id,
+      input.audience, input.audience_days, input.cooldown_hours,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
       input.referrer_reward_type, input.referrer_reward_value,
@@ -290,7 +287,6 @@ function view(
     audience: promo.audience,
     audience_days: promo.audience_days,
     cooldown_hours: promo.cooldown_hours,
-    plan_id: promo.plan_id,
     new_user_within_days: promo.new_user_within_days,
     starts_at: promo.starts_at,
     ends_at: promo.ends_at,
@@ -327,7 +323,6 @@ const LOCKED_LABELS: [keyof Promotion, string][] = [
   ["min_subtotal_minor", "最低消费"],
   ["limit_plan_kinds", "适用套餐类型"],
   ["limit_plan_ids", "指定套餐"],
-  ["plan_id", "体验套餐"],
   ["auto_apply", "是否自动生效"],
 ];
 
@@ -354,7 +349,6 @@ async function lockedFields(
     min_subtotal_minor: next.min_subtotal_minor,
     limit_plan_kinds: next.limit_plan_kinds,
     limit_plan_ids: next.limit_plan_ids,
-    plan_id: next.plan_id,
   };
 
   const diffs: string[] = [];
@@ -362,23 +356,6 @@ async function lockedFields(
     if (JSON.stringify(current[key]) !== JSON.stringify(incoming[key])) diffs.push(label);
   }
   return diffs;
-}
-
-/**
- * 载体套餐必须存在、上架、且 `visibility='hidden'`。
- *
- * 公开套餐能被直接买到 —— 拿它当载体等于开了个 0 元购买通道，
- * 所以这里必须挡住（`validate()` 是纯函数，查库放在这一层）。
- */
-async function checkCarrierPlan(env: Env, planId: string | null): Promise<string | null> {
-  if (!planId) return null;
-  const row = await env.DB.prepare(`SELECT visibility, status FROM plans WHERE id = ?`)
-    .bind(planId)
-    .first<{ visibility: string; status: string }>();
-  if (!row) return "载体套餐不存在";
-  if (row.visibility !== "hidden") return "载体套餐必须是「隐藏」套餐（后台赠送专用）";
-  if (row.status !== "active") return "载体套餐已下架";
-  return null;
 }
 
 /**
@@ -436,8 +413,6 @@ export async function handleAdminPromotions(
   if (method === "POST" && path === "/promotions") {
     const result = validate(await readBody(request));
     if (!result.ok) return json({ error: "invalid_promotion", errors: result.errors }, 400);
-    const carrierError = await checkCarrierPlan(env, result.value.plan_id);
-    if (carrierError) return fail(400, "invalid_promotion", carrierError);
     const id = await insertPromotion(env, result.value, "draft");
     await audit(env, actor, "promotion_created", String(id), {
       kind: result.value.kind,
@@ -467,8 +442,6 @@ export async function handleAdminPromotions(
         `已经发出码了，不能再改：${locked.join("、")}。要改请先作废这些码，或新建一个活动。`,
       );
     }
-    const carrierError = await checkCarrierPlan(env, result.value.plan_id);
-    if (carrierError) return fail(400, "invalid_promotion", carrierError);
     await updatePromotion(env, id, result.value);
     await audit(env, actor, "promotion_updated", String(id), {
       kind: result.value.kind,

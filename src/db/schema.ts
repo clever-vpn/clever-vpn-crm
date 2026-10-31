@@ -135,8 +135,9 @@ export const appSessions = sqliteTable(
  * `status`：`draft` 未上架 / `active` 在售 / `retired` 已下架。
  * retirement **只影响能否再卖**，不影响已售（订阅用自己的快照）。
  *
- * `visibility`：`public` 上架可见；`hidden` 仅后台可见 —— **礼品包就是 price=0 的
- * hidden 套餐**（见 domain.md §5），不要为"赠送"再造一个概念。
+ * `visibility`：`public` 上架可见；`hidden` 仅系统可用 —— **免费试用套餐**（见
+ * domain.md §5）是唯一用途。赠送**不是**套餐：它走礼包核销或调整权益，别再为"赠送"
+ * 造一个 0 元套餐。
  */
 export const plans = sqliteTable(
   "plans",
@@ -633,12 +634,6 @@ export const promotions = sqliteTable(
     max_uses_per_customer: integer("max_uses_per_customer").notNull().default(1),
     /** 同一客户同一活动两次核销的最小间隔（小时）；NULL = 不限 */
     cooldown_hours: integer("cooldown_hours"),
-    /**
-     * 载体套餐（契约 §2.9.7）：礼包发给**没有订阅**的客户时，用它 0 元开通。
-     * 必须是 `visibility='hidden'` 的套餐 —— 套餐给“是什么包”，礼包的 `rewards.days`
-     * 给“送多久”。有订阅时这个字段被忽略。
-     */
-    plan_id: text("plan_id"),
     /**
      * 领取成功后**是否给用户发一封收据邮件**（1 = 发，0 = 不发，默认 0）。
      *
