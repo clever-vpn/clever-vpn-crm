@@ -254,8 +254,8 @@ function renderPlans(plans) {
     el.innerHTML = `
       <div class="row" style="justify-content:space-between">
         <span class="name">${p.name}</span>
-        <span class="price">${p.original_price_minor && p.original_price_minor !== p.price_minor
-          ? `<s class="hint">${yuan(p.original_price_minor)}</s> ${yuan(p.price_minor)}`
+        <span class="price">${p.promo_price_minor && p.promo_price_minor !== p.price_minor
+          ? `<s class="hint">${yuan(p.price_minor)}</s> ${yuan(p.promo_price_minor)}`
           : yuan(p.price_minor)}</span>
       </div>
       <div class="row" style="gap:6px">
