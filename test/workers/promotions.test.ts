@@ -1106,7 +1106,6 @@ describe("兑换码", () => {
       code: "TRY7DAYS",
       audience: "all",
       rewards: { days: 7 },
-      plan_id: "trial_7d",
       max_uses: 50,
     });
 
@@ -1220,7 +1219,6 @@ describe("批次码", () => {
       kind: "gift",
       audience: "all",
       rewards: { days: 2 },
-      plan_id: "trial_7d",
     });
     const { codes } = (await (await genCodes(promoId, 2)).json()) as {
       codes: { id: number; code: string }[];
@@ -1259,7 +1257,6 @@ describe("批次码", () => {
       kind: "gift",
       audience: "all",
       rewards: { days: 1 },
-      plan_id: "trial_7d",
     });
     const { codes } = (await (await genCodes(promoId, 1)).json()) as {
       codes: { id: number; code: string }[];

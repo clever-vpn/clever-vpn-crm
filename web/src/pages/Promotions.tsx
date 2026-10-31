@@ -64,7 +64,6 @@ function scopeLabel(p: PromotionView): string {
   }
   if (p.limit_plan_ids.length) parts.push(`${p.limit_plan_ids.length} 个指定套餐`);
   if (p.min_subtotal_minor > 0) parts.push(`满 ¥${yuan(p.min_subtotal_minor)}`);
-  if (p.plan_id) parts.push(`载体 ${p.plan_id}`);
   return parts.length ? parts.join(" · ") : "全部套餐";
 }
 

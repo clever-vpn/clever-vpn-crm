@@ -433,7 +433,7 @@ function PlanForm({
             onChange={(e) => set("visibility", e.target.value as "public" | "hidden")}
           >
             <option value="public">公开（App 与官网可购买）</option>
-            <option value="hidden">隐藏（仅后台，用作礼包的体验套餐）</option>
+            <option value="hidden">隐藏（仅后台，不对外出售）</option>
           </select>
           <small className="hint">
             隐藏套餐不会出现在任何售卖列表里；礼包用它给没有订阅的客户 0 元开户

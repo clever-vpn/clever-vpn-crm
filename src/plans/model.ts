@@ -56,7 +56,7 @@ export interface Plan {
   sort_order: number;
   status: PlanStatus;
   /**
-   * `public` = 上架可见；`hidden` = 仅后台可见（**体验包 / 礼品包**专用）。
+   * `public` = 上架可见；`hidden` = 仅系统可用（**免费试用套餐**专用）。
    * hidden 绝不出现在 `/plans`，也不能被 `POST /orders` 点出来 ——
    * 礼包的「载体套餐」（契约 §2.9.7）必须是 hidden，否则等于开了 0 元购买通道。
    */

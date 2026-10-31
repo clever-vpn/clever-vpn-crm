@@ -85,8 +85,7 @@ export interface Promotion {
   audience_days: number | null;
   /** 同一客户两次核销的最小间隔（小时）；null = 不限 */
   cooldown_hours: number | null;
-  /** 载体套餐（仅 kind=gift 且客户无订阅时生效）：用它 0 元开户 */
-  plan_id: string | null;
+  /** `audience=new` 时：注册 N 天内算新客（NULL = 不看注册时间） */
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
@@ -116,7 +115,6 @@ export interface PromotionRow {
   audience: string;
   audience_days: number | null;
   cooldown_hours: number | null;
-  plan_id: string | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
@@ -132,7 +130,7 @@ export interface PromotionRow {
 export const PROMOTION_COLUMNS = `id, auto_apply, name, kind, benefit_type, benefit_value, rewards_json,
   notify,
   min_subtotal_minor, limit_plan_kinds, limit_plan_ids, audience, audience_days,
-  cooldown_hours, plan_id, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
+  cooldown_hours, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
   badge_label, visible, referrer_reward_type, referrer_reward_value, status`;
 
 function parseJsonArray(raw: string): string[] {
@@ -180,7 +178,6 @@ export function rowToPromotion(row: PromotionRow): Promotion {
       : "all",
     audience_days: row.audience_days,
     cooldown_hours: row.cooldown_hours,
-    plan_id: row.plan_id,
     new_user_within_days: row.new_user_within_days,
     starts_at: row.starts_at,
     ends_at: row.ends_at,

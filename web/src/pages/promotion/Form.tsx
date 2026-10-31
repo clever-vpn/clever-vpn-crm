@@ -91,7 +91,6 @@ export function emptyDraft(kind: PromotionKind): PromotionDraft {
     audience: kind === "referral" ? "new" : kind === "gift" ? "new" : "all",
     audience_days: null,
     cooldown_hours: null,
-    plan_id: null,
     new_user_within_days: null,
     starts_at: null,
     ends_at: null,
@@ -590,24 +589,6 @@ export function PromotionForm({
               />
             </Field>
           </Section>
-
-          {isGift && (
-            <Section title="没订阅的人怎么办" hint="礼包只能加在订阅上；新客需要一个「载体」">
-              <Field
-                label="体验套餐（客户没有订阅时，用它 0 元开通）"
-                hint="必须是「隐藏」套餐；有订阅的客户会忽略这个字段"
-                locked={codesIssued}
-                lockReason={lockReason}
-              >
-                <input
-                  value={draft.plan_id ?? ""}
-                  disabled={codesIssued}
-                  onChange={(e) => patch({ plan_id: e.target.value.trim() || null })}
-                  placeholder="trial_7d"
-                />
-              </Field>
-            </Section>
-          )}
 
           <Section title="适用范围" hint="留空 = 全部套餐">
             {PLAN_KINDS.map((k) => (

@@ -158,7 +158,7 @@ npm run db:migrate:local   # 只 apply（不清库）
 ```
 
 重置后直接可用：管理员 `ops@example.com` / `crm-admin-2026`，另有 4 个套餐
-（含一个 0 元隐藏的礼品包）、2 个客户、1 个订阅、2 张订单。
+、2 个客户、1 个订阅、1 张订单。
 
 改了 `src/db/schema.ts` 之后：
 

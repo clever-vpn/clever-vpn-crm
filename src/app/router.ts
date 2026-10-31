@@ -230,7 +230,7 @@ async function loadActivePlans(env: Env): Promise<Plan[]> {
     `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
        traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
        store_product_id, sort_order, status, retired_at, trial
-     -- 只卖"公开"的套餐：hidden（礼品包 / 试用套餐）只能由后台发放或系统开通，
+     -- 只卖"公开"的套餐：hidden（免费试用套餐）只能由系统在注册时开通，
      -- 绝不能出现在 App 列表里，也不能被 POST /orders 直接点出来。
      FROM plans WHERE status = 'active' AND visibility = 'public'
      ORDER BY sort_order, created_at`,

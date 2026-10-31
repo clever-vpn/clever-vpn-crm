@@ -36,7 +36,6 @@ function promo(over: Partial<Promotion> = {}): Promotion {
     audience: "all",
     audience_days: null,
     cooldown_hours: null,
-    plan_id: null,
     new_user_within_days: null,
     starts_at: null,
     ends_at: null,

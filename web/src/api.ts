@@ -107,7 +107,7 @@ export interface PlanView {
   sales_channels: PlanChannel[];
   store_product_id: { apple?: string; google?: string };
   status: PlanStatus;
-  /** public = 上架可见；hidden = 仅后台（体验包 / 礼品包，用于礼包载体） */
+  /** public = 上架可见；hidden = 仅系统可用（免费试用套餐，不对外出售） */
   visibility: "public" | "hidden";
   /** 免费试用套餐（全库最多一个）：0 元 + hidden，注册后自动开通，不能被购买 */
   trial: boolean;
@@ -345,8 +345,6 @@ export interface PromotionView {
   /** audience=expiring 时必填（N 天内到期） */
   audience_days: number | null;
   cooldown_hours: number | null;
-  /** 载体套餐（仅礼包）：客户没订阅时用它 0 元开户；必须是 hidden 套餐 */
-  plan_id: string | null;
   new_user_within_days: number | null;
   starts_at: string | null;
   ends_at: string | null;
