@@ -336,6 +336,7 @@ UPDATE redemptions SET settled_at = ?, granted_json = ?, promotion_snapshot = ?
 | `available` | 符合人群 + 有名额 | 「可以领取（还剩 N 份）」+ 按钮 |
 | `sold_out` | 符合人群但名额用完 | 「来晚了一步，这份礼包已经被抢完了」 |
 | `claimed` | 我已有完成的核销 | 「已领取（2026-10-30）」 |
+| （红点数） | `available_count` = `state='available'` 的条数 | **只在 `GET /me/gifts`**：不上 `/me`，避免同一份资格判定算两遍 |
 | （不出现） | 不符合人群 / 订阅收不下 | — |
 
 `?promotion_id=` 是**深链**：那条一定出现，并说明为什么不能领
