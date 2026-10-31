@@ -75,9 +75,10 @@ Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测�
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `promotions` | 促销活动 / 礼包规则（`kind`=coupon/gift/referral） | `rewards_json`、`audience`、`plan_id`（载体套餐）、`notify`（领取后是否发收据，默认 0）、`visible`（是否在货架上公开） |
+| `promotions` | 促销活动 / 礼包规则（`kind`=coupon/gift/referral） | `rewards_json`、`audience`、`limit_plan_ids`（**礼包的"限套餐"必须精确一致**）、`notify`（领取后是否发收据，默认 0）、`visible`（是否在货架上公开）、`referrer_gift_id`（邀请：推荐人拿哪个礼包）<br/>`plan_id`（载体套餐）、`referrer_reward_type/value`：**待删** |
 | `plans` | 可售商品定义（**可变目录**，历史靠快照） | `kind`(period/traffic/addon)、`price_minor`、`visibility`(public/hidden)、`status`(draft/active/retired)、`trial`（免费试用，全库最多一个）、`retired_at` |
 | `platform_subscriptions` | **订阅**（当前权益，**一个客户一行**：`uq_subs_customer`） | `kind`、`order_id`、`period_quota_gb`/`period_extra_gb`/`period_anchor_day`/`period_settled_at`（period 专有）、`traffic_total_gb`/`traffic_remaining_gb`/`traffic_synced_at`/`traffic_validity_days`（traffic 专有）、`expires_at`、`hold`/`hold_reason`（手工控制位）、`activation_code`、`trial`（快照：这份权益是不是试用） |
+| `referral_rewards` | **推荐奖励卡**（每成功邀请一人一张，推荐人自己来领） | `referral_id` unique（一次邀请一张）、`referrer_id`（一人可多行 = 多拉多得）、`promotion_id`（来源模板，领取时不读）、`rewards_json`（**生成时的快照**）、`status`(pending/claiming/claimed，**没有 void**)、`claiming_at`（占位，超 5 分钟可接管）、`claimed_at`/`granted_json`/`promotion_snapshot` |
 | `redemptions` | **核销台账**（谁在哪个活动上用掉了一次名额；`(promotion_id, customer_id)` 唯一 = 每人每活动 1 次） | `order_id`（有值 = 支付时核销的券；**NULL = 礼包**，本来就没有订单）、`settled_at`（**NULL = 占位中**：已占下这次核销，还没发完；超 5 分钟可被接管）、`code_id`、`granted_json`（实际生效）、`promotion_snapshot`（当时的名称/角标/配置） |
 | `notices` | **通知队列**（= 邮件队列 = 站内消息）：`(kind, customer_id, ref_id)` 唯一 = 同一次领取只通知一次 | `kind`(gift_granted=收据)、`ref_id`（核销行 id）、`title`/`body`（创建时定稿）、`action_url`、`status`(pending/sent/failed/suppressed/skipped)、`attempts`、`next_attempt_at` |
 | `settings` | 运行期配置（键值对）：`mail_daily_quota` / `mail_soft_ratio` | `key` PK、`value`、`updated_at` |
