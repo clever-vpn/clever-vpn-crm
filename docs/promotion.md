@@ -59,7 +59,7 @@ XBoard 叫礼品卡（gift card），因为它是**可转赠的预付凭证**（
 |---|---|
 | 共享码（一码多人，`max_uses` 限量 + 每人 1 次） | ✅ v16 |
 | 一码一渠道（建多个活动，核销数各自统计） | ✅ 天然成立，不需要批次表 |
-| 载体套餐：没订阅的新客用隐藏套餐 0 元开户（= 免费体验） | ✅ v16 |
+| ~~载体套餐：没订阅的新客用隐藏套餐 0 元开户~~ | ❌ **已删除**（没订阅就领不了，送新客走免费试用） |
 | 防撞库（同客户每小时 5 次失败即锁） | ✅ v16 |
 | 一码一人批次 / CSV 导出 / 实体卡 | ❌ 不做（那是批发分销的业务） |
 
@@ -144,7 +144,6 @@ promotions                     一个活动
   max_uses / max_uses_per_customer
   audience / audience_days     人群（all/new/existing/expiring/expired/specific）
   cooldown_hours               同一客户两次核销的最小间隔
-  plan_id                      载体套餐（仅礼包）：无订阅时用它 0 元开户（必须 hidden）
   new_user_within_days         额外的"注册 N 天内"闸门（与 audience 正交）
   badge_label                  "限时 8 折"，直接给 UI 展示
   visible                      是否在用户的货架上公开出现
@@ -305,6 +304,24 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 | P3 | 营销报表（按活动看核销 / 实收 / 让利） | ⬜ 台账已有，只差聚合 |
 | ❌ | 券包、盲盒、多级分销、佣金提现 | 见 §1 |
 | ❌ | 送余额（没有钱包）、送设备数（`licence_limit` 不可改） | 见 §4 |
+
+### 6.1 过期订阅 = **复活**（不是"往上加"）
+
+礼包只加在已有订阅上，而"已有"可以是一份**已经过期**的订阅。这时加天数如果按
+"原到期日 + N 天"算，过期那天往后挪 7 天**还是过期** —— 用户点完一切照旧。
+
+所以过期走复活（`subscriptions/entitlement.ts` 的 `reviveSnapshot` / `pushRevival`）：
+
+| 字段 | 复活后 |
+|---|---|
+| `expires_at` | `领取时间 + days`（**丢弃原到期日**） |
+| `started_at` | 领取时间（计费天数重新起算） |
+| `paid_minor` | **0** ⇒ 残值 = 0，不能拿去抵换购 |
+| `period_extra_gb` / `traffic_total_gb` | 先清零，再放礼包给的那一份 |
+| 平台 `traffic_balance` | 直接写礼包那份（**差值写法在这里是错的**） |
+
+**前提：礼包里天数与流量缺一不可**。只给天数 ⇒ 复活出来的订阅额度是 0，等于没送；
+只给流量 ⇒ 订阅还是过期的。两者缺一就 `not_applicable`，并且**一行都不写**。
 
 ## 7. 已知的坑（实现时注意）
 

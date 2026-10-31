@@ -9,8 +9,9 @@
  *   - **领取 = 一次条件插入**：名额还有 + 我还没领过 + 占下来，一条语句完成。
  *
  * 三条硬规则（与优惠券共享）：
- *   1. **必须有地方放**：有订阅 ⇒ 加到订阅上；没订阅 ⇒ 用礼包的「载体套餐」0 元开户。
- *   2. **两个维度互相独立、都是「加」不是「替换」**（实现共用 `subscriptions/entitlement.ts`）。
+ *   1. **必须有地方放**：只加在**已有订阅**上；没订阅就领不了（要送新客东西走免费试用）。
+ *   2. **两个维度互相独立、都是「加」不是「替换」**（实现共用 `subscriptions/entitlement.ts`）；
+ *      唯一例外是**过期订阅 ⇒ 复活**（`expires_at = 领取时间 + days`、旧权益清零）。
  *   3. **订阅没有这个权益就不改**：无限期不收天数、不限量不收 GB；两项都不适用就直接拒绝，
  *      并且**不动任何一行**。
  */
@@ -26,7 +27,14 @@ import {
 } from "./reward";
 import { createNotice } from "../notices/store";
 import { grantedNotice } from "../notices/model";
-import { applicableAdditive, applyAdditive, pushAdditive } from "../subscriptions/entitlement";
+import {
+  applicableAdditive,
+  applyAdditive,
+  isExpired,
+  pushAdditive,
+  pushRevival,
+  reviveSnapshot,
+} from "../subscriptions/entitlement";
 import { customerSubscription, freshenTraffic, logChange, upsertSubscription } from "../subscriptions/store";
 
 import type { Env } from "../env";
@@ -194,14 +202,30 @@ export async function claimGiftFor(
   }
 
   const target = before;
+  const expired = isExpired(target, now);
+  // 契约 §2.9.6 硬规则 3：过期用户领礼包 = **复活**，所以礼包里天数与流量缺一不可
+  // —— 只给一样，复活出来的订阅要么额度是 0、要么马上又过期，等于没送。
+  if (expired && (promo.rewards.days <= 0 || promo.rewards.gb <= 0)) {
+    return claimResult(
+      "not_applicable",
+      "你的订阅已经结束：这份礼包要能「复活」订阅，必须同时含天数与流量",
+      { title },
+    );
+  }
+
   const applied = applicableRewards(target, promo.rewards);
   if (!hasRewards(applied)) {
     return claimResult("not_applicable", STATE_TEXT.not_applicable, { title });
   }
+  // 过期复活的流量来自礼包本身（旧余额作废），所以"不限量套餐收不下 GB"时也不能领
+  if (expired && applied.gb <= 0) {
+    return claimResult("not_applicable", STATE_TEXT.not_applicable, { title });
+  }
 
-  // 送 GB 必须落在**平台真实剩余**上：读不到就不发（拿旧缓存加，会把已用流量还回去）
+  // 送 GB 必须落在**平台真实剩余**上：读不到就不发（拿旧缓存加，会把已用流量还回去）。
+  // 复活例外：余额整体作废、直接写礼包那一份，不需要读旧余额。
   let platformRemainingGb: number | undefined;
-  if (applied.gb > 0 && before?.platform_customer_id) {
+  if (!expired && applied.gb > 0 && before?.platform_customer_id) {
     const fresh = await freshenTraffic(env, before);
     if (!fresh || fresh.traffic_remaining_gb === null) {
       return claimResult("not_applicable", "平台的剩余流量暂时读不到，礼包稍后再领", { title });
@@ -285,9 +309,13 @@ async function applyToSubscription(
   },
 ): Promise<{ applied: GiftRewards; after: Subscription }> {
   const before = opts.before;
-  const next = applyAdditive(before, opts.applied, {
-    platformRemainingGb: opts.platformRemainingGb,
-  });
+  // 过期 ⇒ 复活（覆盖而不是叠加）：契约 §2.9.6 / §2.9.9
+  const revived = isExpired(before, opts.now);
+  const next = revived
+    ? reviveSnapshot(before, opts.applied, opts.now)
+    : applyAdditive(before, opts.applied, {
+        platformRemainingGb: opts.platformRemainingGb,
+      });
 
   const id = await upsertSubscription(env, next);
   const after = { ...next, id };
@@ -307,7 +335,8 @@ async function applyToSubscription(
   });
 
   try {
-    await pushAdditive(env, after, opts.applied, opts.platformRemainingGb, next.expires_at);
+    if (revived) await pushRevival(env, after, opts.applied);
+    else await pushAdditive(env, after, opts.applied, opts.platformRemainingGb, next.expires_at);
   } catch (e) {
     // 本地账已记；推特失败交给月结/人工补齐，不影响领取结论
     console.error(

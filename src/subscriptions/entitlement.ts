@@ -9,6 +9,10 @@
  *   1. **维度独立**：无限期（`expires_at = null`）收了天数没意义，不限量收了 GB 也没意义；
  *   2. **写平台只能写差值**：period 的 `traffic_balance = 额度 + 池子` 是绝对值，
  *      拿它去 PATCH 会把用户本月已经用掉的流量还回去。
+ *
+ * 还有一件事必须在**这一层**分叉：**订阅已经过期时是"复活"不是"往上加"**
+ * （契约 §2.9.6/§2.9.9）。在原到期日上加天数等于没加 —— 过期那天 + 7 天还是过期。
+ * 复活的口径：`expires_at = 领取时间 + days`，并把旧权益清零 ⇒ 这份权益**残值 = 0**。
  */
 import { GIGA, updateCustomer } from "../platform/client";
 
@@ -21,6 +25,67 @@ const DAY_MS = 86_400_000;
 export interface Additive {
   days: number;
   gb: number;
+}
+
+/** 已经过期了吗（`expires_at = null` = 永不过期，不算） */
+export function isExpired(sub: Pick<Subscription, "expires_at">, now: Date = new Date()): boolean {
+  return sub.expires_at !== null && Date.parse(sub.expires_at) <= now.getTime();
+}
+
+/**
+ * **复活**：把过期订阅当成一张新开的权益（契约 §2.9.6）。
+ *
+ * 与 `applyAdditive` 的区别只有一处 —— 加法的基点是"原到期日 / 当前余额"，
+ * 复活**丢弃旧基点**：
+ *
+ * | 字段 | 复活后 |
+ * |---|---|
+ * | `expires_at` | `now + days`（**不从原到期日算**） |
+ * | `started_at` | `now`（计费天数从今天重新起算） |
+ * | `paid_minor` | **0** ⇒ 残值 = 0，不能拿去抵换购 |
+ * | `period_extra_gb` / `traffic_total_gb` | 先清零，再放礼包给的那一份 |
+ * | `traffic_remaining_gb` | `gb`（旧余额作废） |
+ *
+ * `gb = 0` 时不动流量字段：调用方（礼包）已经要求过期用户必须天数 + 流量齐备，
+ * 而"只给天数"的路径（推荐奖励卡）宁可留着旧额度，也不能把它写成 0 或 NULL
+ * —— 写成 NULL 等于凭空给了不限量。
+ */
+export function reviveSnapshot(
+  sub: Subscription,
+  add: Additive,
+  now: Date = new Date(),
+): Subscription {
+  const next: Subscription = { ...sub };
+  next.expires_at = new Date(now.getTime() + Math.max(0, add.days) * DAY_MS).toISOString();
+  next.started_at = now.toISOString();
+  next.paid_minor = 0;
+
+  if (add.gb > 0) {
+    if (next.kind === "traffic") {
+      next.traffic_total_gb = add.gb;
+    } else {
+      next.period_extra_gb = add.gb;
+      // 新一期从今天开始算，别让月结立刻再补一次额度
+      next.period_settled_at = now.toISOString();
+    }
+    next.traffic_remaining_gb = add.gb;
+    next.traffic_synced_at = now.toISOString();
+  }
+
+  return next;
+}
+
+/**
+ * 复活后要推到平台的字段 —— **绝对值**，不是差值。
+ *
+ * 差值写法（`平台剩余 + gb`）在这里是错的：复活的前提就是"旧余额作废"。
+ * `gb = 0` 时**不碰** `traffic_balance`（见 `reviveSnapshot` 的说明）。
+ */
+export async function pushRevival(env: Env, sub: Subscription, add: Additive): Promise<void> {
+  if (!sub.platform_customer_id || !sub.expires_at) return;
+  const patch: Record<string, unknown> = { expire_date: sub.expires_at.slice(0, 10) };
+  if (add.gb > 0) patch.traffic_balance = Math.round(add.gb * GIGA);
+  await updateCustomer(env, sub.platform_customer_id, patch);
 }
 
 /**
