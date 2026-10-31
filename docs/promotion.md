@@ -30,11 +30,11 @@
 
 | | **优惠券** | **邀请** | **礼包** |
 |---|---|---|---|
-| 生效时机 | 结账时 | 注册时 | 随时（注册 / 到期 / 手动） |
+| 生效时机 | 结账时 | 注册时 | **用户自己在货架上领**（注册后 / 到期前 / 随时） |
 | 改什么 | **订单金额** | **关系** + 首单金额 | **订阅权益**（天数 / 流量） |
 | 归因 | ❌ | ✅ **唯一来源** | ❌ |
-| 是否产生订单 | ✅ 折扣后的正常订单 | ✅ 同上 | ✅ **0 元已付订单**（留痕用） |
-| 分发 | 服务商（有成本） | **用户自己**（零成本） | 系统自动 / 后台手动 |
+| 是否产生订单 | ✅ 折扣后的正常订单 | ✅ 同上 | ❌ **一张都不产生**（凭证是核销行） |
+| 分发 | 服务商（有成本） | **用户自己**（零成本） | **用户自己从货架领**（没有推送，也没有代领） |
 
 **邀请与优惠券的本质区别**：优惠券是**匿名**的（谁用都一样），邀请是**实名关系**
 （必须绑定两个人）。邀请可以带优惠，但**优惠券永远不产生归因**。
@@ -69,7 +69,7 @@ XBoard 叫礼品卡（gift card），因为它是**可转赠的预付凭证**（
 
 | 选项 | 落库 | 语义 |
 |---|---|---|
-| 不发码 | 0 行 | 只能后台手动 / 系统自动发出 |
+| 不发码 | 0 行 | 只走货架：够格的人看得见，定向礼包只有被点名的人看得见 |
 | 共享码 · 多少人可用（默认 100） | 1 行 `max_uses = N` | 一个码贴到群里，前 N 人 |
 | 一人一码 · 发 N 个（默认 1） | N 行 `max_uses = 1` | 一码一渠道 / 实体卡 |
 
@@ -234,7 +234,8 @@ UPDATE redemptions SET settled_at = ?, granted_json = ?, promotion_snapshot = ?
 - **诚实的坏消息**：抢完了就告诉他抢完了，而不是让他在三周后发现"这里什么都没有"。
 
 发放逻辑只有一处：`claimGiftFor()`（`promotions/gift.ts`）。
-用户点领取、输兑换码（带 `codeId`）、后台手动发放，走的**都是它**。
+**入口只有两个**：用户点领取、用户输兑换码（带 `codeId`）。没有「管理员代领」——
+替客户点一下领取这件事本身就是多余的，**定向礼包直接出现在那位客户的货架上**。
 
 ### 3.2 领取的并发边界（Cloudflare 硬限制）
 
@@ -244,8 +245,9 @@ UPDATE redemptions SET settled_at = ?, granted_json = ?, promotion_snapshot = ?
 | subrequest（付费） | 1000 / 次 |
 | **同时在飞的连接** | **6** |
 
-一次领取 = ~10 次 D1 + 1 次 cf-api HTTP，所以后台"手动发放"**一次最多 20 个客户**
-（`GRANT_BATCH_LIMIT`），要更多就分批调用。
+一次领取 = ~10 次 D1 + 1 次 cf-api HTTP，全部发生在**那一个用户自己的请求**里。
+这也是「批量发放」被去掉的技术理由：一个后台请求替 20 个人领，等于把 20 份开销
+压进同一次 invocation（6 条在飞连接 / 30 s CPU）。
 
 拉取模型顺带消灭了原来最难的那一段：不需要在 cron 里分页跑上万人 ——
 每个人只在自己的那次请求里花自己的 CPU。
@@ -296,9 +298,9 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 | P1 | 邀请（注册绑定 + 首单双向奖励） | ✅ |
 | P2 | 礼包（送天数 / 送流量） | ✅ |
 | P2 | 人群六值 + 冷却 + 点名名单（`promotion_targets`） | ✅ |
-| P2 | 注册礼包（首单后自动）/ 到期挽回礼包（每日定时） | ✅ |
+| P2 | ~~注册礼包（首单后自动）/ 到期挽回礼包（每日定时）~~ | ❌ **已删除**（改拉取模型：货架自领） |
 | P2 | 兑换码（共享码 + 官网/App 兑换入口 + 防撞库） | ✅ v16 |
-| P2 | 载体套餐（隐藏套餐 0 元开户 = 免费体验） | ✅ v16 |
+| P2 | ~~载体套餐（隐藏套餐 0 元开户）~~ | ❌ **已删除**（礼包只加在已有订阅上） |
 | P3 | 兑换码批次（一码一人、CSV 导出、实体卡） | ⬜ 见 §1「为什么不做」 |
 | P3 | 营销报表（按活动看核销 / 实收 / 让利） | ⬜ 台账已有，只差聚合 |
 | ❌ | 券包、盲盒、多级分销、佣金提现 | 见 §1 |
@@ -322,10 +324,10 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 | 纯逻辑 | `src/promotions/model.ts`：时间窗 / 套餐范围 / 门槛 / 次数 / 首单 → `checkPromotion`；`discountOf`；`bestPromotion` |
 | 取数 | `src/promotions/service.ts`：`resolvePromotion`（单套餐，含用户输入的码）、`resolveForPlans`（列表页，一次算完）、`planBadges`（公开角标） |
 | 关系 | `src/promotions/referral.ts`：`ensureReferralCode`（懒生成）、`bindReferral`（静默、幂等）、`referralPanel`、`rewardReferrer` |
-| 礼包 | `src/promotions/gift.ts`：`grantGift`（幂等发放）、`grantSignupGifts`（首单后发 `audience=new`）、`runExpiringGifts`（每日扫 `audience=expiring`） |
+| 礼包 | `src/promotions/gift.ts`：`claimGiftFor`（唯一的发放函数：判态 + 占位 + 发放 + 落账）、`listGiftShelf`（货架，含定向礼包）、`claimRewardCard`（推荐奖励卡） |
 | 兑换 | `src/promotions/redeem.ts`：`redeemGiftCode`（码归一 → 限流 → 找活动 → 发放），失败一律 `ok:false` + 整句原因 |
 | 人群判定 | `model.ts` 的 `checkAudience`（六值）、冷却判定；取数在 `service.ts` 的 `customerFacts` / `targetedOf` |
-| 后台 | `src/admin/promotions.ts`：`GET/POST /api/admin/promotions`、`PATCH /:id`、`POST /:id/publish|end`、`POST /:id/grant`（礼包手动发放）、`GET/PUT /:id/targets`（点名名单） |
+| 后台 | `src/admin/promotions.ts`：`GET/POST /api/admin/promotions`、`PATCH /:id`、`POST /:id/publish|end`、`GET/PUT /:id/targets`（点名名单 —— 这就是「只给这几个人」的全部手段） |
 | 核销 | 只在 `src/payments/notify.ts` 的 `grant()` 里调（钱到账之后），`INSERT OR IGNORE` |
 | 金额 | `payable = max(0, price − discount − residual)`；`orders.amount_minor` 是实收，`orders.discount_minor` 只记促销那部分 |
 

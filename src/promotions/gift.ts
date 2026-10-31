@@ -137,7 +137,7 @@ async function usedOf(env: Env, promotionId: number): Promise<number> {
 }
 
 /**
- * **领取一个礼包**（用户点"领取"、输兑换码、后台手动发放 —— 全走这里）。
+ * **领取一个礼包**（用户点"领取"、输兑换码 —— 全走这里；**没有第三条路**）。
  *
  * 顺序刻意固定：**所有只读校验做完，才动钱**。
  * 占位之后任一步抛错都要把占位还回去，否则这个人永远领不到（唯一索引挡着）。
@@ -449,11 +449,14 @@ export async function listGiftShelf(
 ): Promise<GiftShelf> {
   const deepLink = opts.promotionId ?? null;
 
-  // 货架 = **公开可见**的生效礼包。深链不会放开这个过滤 ——
-  // 否则一条 `visible=0` 的定向活动被拿链接猜出来就成了人人可见。
+  // 货架 = 公开可见的生效礼包 **+ 点名给这个人的**礼包。
+  // 后者只多放 `audience='specific'` 这一类，而且下面 `checkAllForCustomer` 会按名单
+  // 再判一次 —— 不在名单里的人查到了也不会出现，更领不了。
+  // 深链不放开这个过滤 —— 否则一条 `visible=0` 的活动被拿链接猜出来就成了人人可见。
   const rows = await env.DB.prepare(
     `SELECT ${PROMOTION_COLUMNS} FROM promotions
-      WHERE kind = 'gift' AND status = 'active' AND visible = 1
+      WHERE kind = 'gift' AND status = 'active'
+        AND (visible = 1 OR audience = 'specific')
       ORDER BY id DESC`,
   ).all<PromotionRow>();
   const promos = (rows.results ?? []).map(rowToPromotion);

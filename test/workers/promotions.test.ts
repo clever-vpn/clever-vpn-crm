@@ -676,10 +676,13 @@ describe("邀请码（关系层）", () => {
 });
 
 /**
- * 礼包（契约 `app-crm.md` §2.9.6）
+ * 礼包（契约 `docs/contracts/app-crm/promotion.md` §2.9.6）
  *
- * 要钉住的是"**权益**这条线"：一次发放 = 一张 0 元已付订单 + 订阅参数真的变了，
- * 并且重复发放不会发第二次。
+ * 要钉住的是"**权益**这条线"：一次领取 = 一行核销 + 订阅参数真的变了，
+ * 重复领取不发第二次，**而且一张订单都不产生**（礼包不走购买流程）。
+ *
+ * 入口只有一个：用户自己在货架上点领取。**没有"管理员代领"**
+ * （`/api/admin/promotions/{id}/grant` 已删除），所以这些用例都走 App 端点。
  */
 describe("礼包（gift）", () => {
   const customerIdOf = async (email: string): Promise<number> => {
@@ -697,7 +700,7 @@ describe("礼包（gift）", () => {
       .bind(customerId)
       .first<{ expires_at: string | null; period_extra_gb: number | null }>();
 
-  it("后台手动发放：加天数加流量、写 gift 变更、**不建订单**、再发被挡", async () => {
+  it("用户自己领：加天数加流量、写 gift 变更、**不建订单**、再领被挡", async () => {
     const promoId = await createPromotion({
       name: "国庆礼包",
       kind: "gift",
@@ -714,14 +717,11 @@ describe("礼包（gift）", () => {
     const before = await snapshotOf(customerId);
     expect(before?.expires_at).toBeTruthy();
 
-    const granted = await adminCall(`/api/admin/promotions/${promoId}/grant`, {
-      method: "POST",
-      body: { customer_ids: [customerId] },
-    });
+    const granted = await claimGift(promoId, token);
     expect(granted.status).toBe(200);
-    const result = (await granted.json()) as { granted: number; total: number };
-    expect(result.granted).toBe(1);
-    expect(result.total).toBe(1);
+    const result = (await granted.json()) as { ok: boolean; state: string };
+    expect(result.ok).toBe(true);
+    expect(result.state).toBe("granted");
 
     // ① 订阅参数真的变了：+7 天、+5 GB
     const after = await snapshotOf(customerId);
@@ -756,14 +756,11 @@ describe("礼包（gift）", () => {
     expect(change?.action).toBe("gift");
     expect(JSON.parse(change!.detail).promotion_id).toBe(promoId);
 
-    // ④ 再发一次：本人次数用完 ⇒ 挡住（already_claimed），权益不再增加
-    const again = await adminCall(`/api/admin/promotions/${promoId}/grant`, {
-      method: "POST",
-      body: { customer_ids: [customerId] },
-    });
-    const againBody = (await again.json()) as { granted: number; results: { state: string }[] };
-    expect(againBody.granted).toBe(0);
-    expect(againBody.results[0]?.state).toBe("already_claimed");
+    // ④ 再领一次：本人次数用完 ⇒ 挡住（already_claimed），权益不再增加
+    const again = await claimGift(promoId, token);
+    const againBody = (await again.json()) as { ok: boolean; state: string };
+    expect(againBody.ok).toBe(false);
+    expect(againBody.state).toBe("already_claimed");
 
     const same = await snapshotOf(customerId);
     expect(same!.expires_at).toBe(after!.expires_at);
@@ -786,19 +783,14 @@ describe("礼包（gift）", () => {
     });
 
     const email = GIFT_NO_SUB;
-    await login(email); // 只注册，不买
+    const token = await login(email); // 只注册，不买
     const customerId = await customerIdOf(email);
 
-    const res = await adminCall(`/api/admin/promotions/${promoId}/grant`, {
-      method: "POST",
-      body: { customer_ids: [customerId] },
-    });
-    const body = (await res.json()) as {
-      granted: number;
-      results: { granted: boolean; reason: string | null }[];
-    };
-    expect(body.granted).toBe(0);
-    expect(body.results[0]?.reason).toContain("套餐");
+    const res = await claimGift(promoId, token);
+    const body = (await res.json()) as { ok: boolean; state: string; result_text: string };
+    expect(body.ok).toBe(false);
+    expect(body.state).toBe("not_applicable");
+    expect(body.result_text).toContain("套餐");
 
     // 没发出去就**一行都不该留**（占位会挡住他以后再领）
     const rows = await env.DB.prepare(
@@ -884,11 +876,9 @@ describe("礼包（gift）", () => {
       : c.traffic_balance / GIGA;
   };
 
-  const grant = (promoId: number, customerId: number) =>
-    adminCall(`/api/admin/promotions/${promoId}/grant`, {
-      method: "POST",
-      body: { customer_ids: [customerId] },
-    });
+  /** 礼包**没有第三条路**：用户在货架上自己点领取（管理员不代领）。 */
+  const claimGift = (promoId: number, token: string) =>
+    appCall(`/api/app/v1/me/gifts/${promoId}/claim`, token, { method: "POST" });
 
   it("只送天数：只改到期日，**绝不碰平台流量**（已用掉的不还回去）", async () => {
     const promoId = await createPromotion({
@@ -913,7 +903,7 @@ describe("礼包（gift）", () => {
       .bind(customerId)
       .run();
 
-    expect(((await (await grant(promoId, customerId)).json()) as { granted: number }).granted).toBe(1);
+    expect(((await (await claimGift(promoId, token)).json()) as { ok: boolean }).ok).toBe(true);
 
     // 平台一点没动 —— 旧实现会写 `额度 + 池子` = 100，等于把用掉的 60 还回去
     expect(platformGb(pid)).toBe(40);
@@ -945,7 +935,7 @@ describe("礼包（gift）", () => {
       .bind(customerId)
       .run();
 
-    await grant(promoId, customerId);
+    await claimGift(promoId, token);
 
     // 40 + 5 = 45；如果用缓存（100）去加就会变成 105 —— 那是凭空造流量
     expect(platformGb(pid)).toBe(45);
@@ -969,12 +959,12 @@ describe("礼包（gift）", () => {
     const customerId = await customerIdOf(GIFT_UNLIMITED);
     expect((await subRow(customerId)).period_quota_gb).toBeNull(); // 确认是不限量
 
-    const body = (await (await grant(promoId, customerId)).json()) as {
-      granted: number;
-      results: { reason: string | null }[];
+    const body = (await (await claimGift(promoId, token)).json()) as {
+      ok: boolean;
+      result_text: string;
     };
-    expect(body.granted).toBe(0);
-    expect(body.results[0]?.reason).toContain("不适用");
+    expect(body.ok).toBe(false);
+    expect(body.result_text).toContain("不适用");
 
     const rows = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM redemptions WHERE customer_id = ? AND promotion_id = ?`,
@@ -999,12 +989,12 @@ describe("礼包（gift）", () => {
     const before = await subRow(customerId);
     expect(before.expires_at).toBeNull(); // 确认是永久
 
-    const body = (await (await grant(promoId, customerId)).json()) as {
-      granted: number;
-      results: { reason: string | null }[];
+    const body = (await (await claimGift(promoId, token)).json()) as {
+      ok: boolean;
+      result_text: string;
     };
-    expect(body.granted).toBe(0);
-    expect(body.results[0]?.reason).toContain("不适用");
+    expect(body.ok).toBe(false);
+    expect(body.result_text).toContain("不适用");
 
     expect((await subRow(customerId)).traffic_total_gb).toBe(before.traffic_total_gb);
   });
@@ -1319,5 +1309,22 @@ describe("批次码", () => {
       codes: { used: number }[];
     };
     expect(listed.codes[0]?.used).toBe(1);
+  });
+});
+
+/**
+ * 「后台代领」这个需求**不存在**。
+ *
+ * 删掉的不是一个按钮，是整条路：礼包只能由用户自己在货架上点领取
+ * （`POST /me/gifts/{id}/claim`）。管理员想"给他一份"，
+ * 做法是建一条定向礼包 —— 它只会出现在被点名那位客户的货架上。
+ */
+describe("没有「管理员代领」这条路", () => {
+  it("`POST /promotions/{id}/grant` 已不是端点：调它只会 404", async () => {
+    const res = await adminCall(`/api/admin/promotions/1/grant`, {
+      method: "POST",
+      body: { customer_ids: [1] },
+    });
+    expect(res.status).toBe(404);
   });
 });

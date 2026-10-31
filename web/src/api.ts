@@ -260,19 +260,6 @@ export const api = {
   endPromotion: (id: number) => call<{ ok: true }>("POST", `/promotions/${id}/end`),
   /** 只有「草稿 + 无码 + 无核销」能删 */
   deletePromotion: (id: number) => call<{ ok: true }>("DELETE", `/promotions/${id}`),
-  /**
-   * 礼包手动发放 = **替这个客户点一下「领取」**（拉取模型下没有"批量推"）。
-   *
-   * 一次最多 20 个客户（后台按批调用）：每个都要改订阅 + 调 cf-api，
-   * Workers 单次调用只有 6 个在飞连接、30 秒 CPU。
-   */
-  grantPromotion: (id: number, customerIds: number[]) =>
-    call<{
-      /** 成功到账人数 */
-      granted: number;
-      total: number;
-      results: GiftGrantResult[];
-    }>("POST", `/promotions/${id}/grant`, { customer_ids: customerIds }),
   /** 用户侧兑换（官网账户页用；App 走同一个端点） */
   redeem: (code: string) =>
     call<{
@@ -329,16 +316,6 @@ export interface PromotionCodeView {
   expires_at: string | null;
   note: string | null;
   created_at: string;
-}
-export interface GiftGrantResult {
-  promotion_id: number;
-  customer_id: number;
-  granted: boolean;
-  /** granted / already_claimed / sold_out / not_eligible / not_applicable / busy */
-  state: string;
-  /** 没发出去的原因（给后台看的中文整句） */
-  reason: string | null;
-  applied: GiftRewards;
 }
 export type PromotionStatus = "draft" | "active" | "ended";
 export type BenefitType = "amount" | "percent";

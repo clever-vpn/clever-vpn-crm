@@ -153,8 +153,13 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
     errors.push("自动生效的券必须有角标文案（用户只能通过它在定价页看到这个活动）");
   }
   // 凭码券一律不进定价页：摆上去等于把渠道专属（博主 / 实体卡）变成人人都有。
-  // 租户选择的 `visible` 只在自动券上有意义，其余一律落库为 0。
-  const visible = autoApply && kind === "coupon" && input.visible !== false;
+  // 礼包相反 —— **货架是它唯一的入口**（没有推送、也没有"管理员替他领"），
+  // 所以租户选什么就落什么：勾「站内展示」= 够格的人都能在货架看到；
+  // 不勾 = 只出现在被点名那位客户的货架上（`audience='specific'`，见 gift.ts）。
+  const visible =
+    kind === "gift"
+      ? input.visible !== false
+      : autoApply && kind === "coupon" && input.visible !== false;
 
   if (errors.length) return { ok: false, errors };
 
@@ -630,65 +635,8 @@ export async function handleAdminPromotions(
     return json({ ok: true });
   }
 
-  // ── 手动发放（礼包）：**直接走用户领取那条路** ──
-  //  拉取模型下没有"批量发一万份券"这回事：礼包是货架上的一条活动，
-  //  用户自己来领。后台的"发给指定客户"只是**替某个人点一下领取**，
-  //  所以它和 `POST /me/gifts/{id}/claim` 是同一个函数，同一套名额与幂等。
-  const grant = path.match(/^\/promotions\/(\d+)\/grant$/);
-  if (method === "POST" && grant) {
-    const id = Number(grant[1]);
-    const ids = readIdList((await readBody(request)).customer_ids);
-    if (ids === null || !ids.length) {
-      return fail(400, "invalid_request", "customer_ids 必须是非空整数数组");
-    }
-
-    const row = await env.DB.prepare(`SELECT ${PROMOTION_COLUMNS} FROM promotions WHERE id = ?`)
-      .bind(id)
-      .first<PromotionRow>();
-    if (!row) return fail(404, "promotion_not_found");
-    const promo = rowToPromotion(row);
-    if (promo.kind !== "gift") return fail(409, "not_gift", "只有礼包能直接发放（优惠券请让用户输码）");
-
-    // 一次请求能处理的客户数是有上限的：每个都要改订阅 + 调 cf-api。
-    // 超过就分批调用（后台前端按页发），而不是让一次 invocation 硬扛。
-    if (ids.length > GRANT_BATCH_LIMIT) {
-      return fail(
-        400,
-        "too_many",
-        `一次最多 ${GRANT_BATCH_LIMIT} 个客户；请分批发放`,
-      );
-    }
-
-    const results = [];
-    for (const customerId of ids) {
-      const r = await claimGiftFor(env, { promotionId: id, customerId });
-      results.push({
-        promotion_id: id,
-        customer_id: customerId,
-        granted: r.state === "granted",
-        state: r.state,
-        reason: r.state === "granted" ? null : r.message,
-        applied: r.applied,
-      });
-    }
-    const granted = results.filter((r) => r.granted).length;
-    await audit(env, actor, "promotion_granted", String(id), {
-      granted,
-      total: results.length,
-    });
-    return json({ granted, total: results.length, results });
-  }
-
   return null;
 }
-
-/**
- * 一次手动发放的客户上限。
- *
- * 每个客户都要改订阅 + 调 cf-api，Workers 单次调用只有 6 个在飞连接、
- * 30 秒 CPU —— 分批是**硬约束**，不是保守。
- */
-export const GRANT_BATCH_LIMIT = 20;
 
 /** 把 `[1,2,3]` 归一成去重后的正整数数组；含非法值返回 null（整体拒绝） */
 function readIdList(raw: unknown): number[] | null {

@@ -125,8 +125,6 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [granting, setGranting] = useState<number | null>(null);
-  const [grantIds, setGrantIds] = useState("");
 
   const isGift = kind === "gift";
 
@@ -272,17 +270,6 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
                       <button disabled={busy} onClick={() => edit(p)}>
                         编辑
                       </button>
-                      {isGift && p.status === "active" && (
-                        <button
-                          disabled={busy}
-                          onClick={() => {
-                            setGranting(granting === p.id ? null : p.id);
-                            setGrantIds("");
-                          }}
-                        >
-                          {granting === p.id ? "收起" : "发放"}
-                        </button>
-                      )}
                       {p.status === "draft" && (
                         <button className="primary" disabled={busy} onClick={() => void run(() => api.publishPromotion(p.id), "已上线")}>
                           上线
@@ -301,58 +288,9 @@ export default function Promotions({ kind }: { kind: PromotionKind }) {
           </div>
         )}
 
-        {granting !== null && (
-          <div className="notice" style={{ marginTop: 12 }}>
-            <div className="row between">
-              <strong>替指定客户发放</strong>
-              <span className="hint">
-                填客户 ID（逗号分隔，一次最多 20 个）—— 等于替他们点一下「领取」；
-                没有订阅、也没配体验套餐的人会被拒绝并说明原因
-              </span>
-            </div>
-            <div className="row" style={{ gap: 8, marginTop: 8 }}>
-              <input
-                value={grantIds}
-                onChange={(e) => setGrantIds(e.target.value)}
-                placeholder="12, 34"
-                style={{ flex: 1 }}
-              />
-              <button
-                className="primary"
-                disabled={busy || !grantIds.trim()}
-                onClick={() => {
-                  const ids = grantIds
-                    .split(/[,，\s]+/)
-                    .map((x) => Number(x))
-                    .filter((n) => Number.isInteger(n) && n > 0);
-                  if (!ids.length) {
-                    setError("请填写至少一个合法客户 ID");
-                    return;
-                  }
-                  void run(async () => {
-                    const r = await api.grantPromotion(granting, ids);
-                    const failed = r.results.filter((x) => !x.granted);
-                    const parts: string[] = [];
-                    if (r.granted) parts.push(`已发放 ${r.granted} 人`);
-                    if (failed.length) {
-                      parts.push(
-                        `未发放 ${failed.length} 人：` +
-                          failed.map((x) => `#${x.customer_id} ${x.reason}`).join("；"),
-                      );
-                    }
-                    if (failed.length) setError(parts.join("；"));
-                  }, "发放完成");
-                }}
-              >
-                确认发放
-              </button>
-            </div>
-          </div>
-        )}
-
         <p className="hint" style={{ marginTop: 12 }}>
           {isGift
-            ? "礼包只改权益：不改金额、不改残值，也不产生订单。凭证是核销行（含活动快照），历史在订阅变更里。"
+            ? "礼包只改权益：不改金额、不改残值，也不产生订单。凭证是核销行（含活动快照），历史在订阅变更里。入口只有货架 —— 用户在 App 里自己点领取，后台不代领。"
             : "规则：一次下单最多生效一个折扣（多个命中取更优，不叠加）；核销在支付成功后才记录。"}
         </p>
       </div>
