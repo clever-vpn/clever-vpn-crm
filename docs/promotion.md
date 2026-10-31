@@ -283,7 +283,7 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 
 | 层 | 字段 | 用途 |
 |---|---|---|
-| `/plans[]` | `original_price_minor`, `promo_badge`, `payable_minor` | 划线价 + 活动标签 |
+| `/plans[]` | `promo_price_minor`, `promo_badge`, `payable_minor` | 活动价 + 活动标签 |
 | `/quote` | 入参 `promo_code`；响应 `discount_minor`, `discount_label`, `applied_promotions` | 唯一的应付金额来源 |
 | `/auth/verify` | 入参 `referral_code`（**选填，永不必填**） | 建立归因 |
 | `/me` | `referral: { code, invited, reward_days, reward_gb }` | 邀请面板 |

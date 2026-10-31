@@ -2,7 +2,7 @@
  * 集成测试：促销两层（优惠码 / 邀请码）跑在真 D1 + 真路由上
  *
  * 要钉住的行为（契约 `app-crm.md` §2.9）：
- *   - `/plans` 的 `original_price_minor` / `promo_badge` 是**公开**信息；个人应付只给登录用户
+ *   - `/plans` 的 `price_minor` / `promo_price_minor` / `promo_badge` 是**公开**信息；个人应付只给登录用户
  *   - `/quote` 是唯一金额来源：带码折扣、错码拒绝（200 + allowed:false，不是 5xx）
  *   - `/orders` 下单时**重新校验**，金额按促销后收，并把 `promotion_id` 落单
  *   - **支付成功才核销**：`redemptions` 只在回调里写，重放不重复
@@ -319,7 +319,6 @@ describe("后台建活动", () => {
 describe("/plans 的促销展示位", () => {
   type PlanItem = {
     plan_id: string;
-    original_price_minor: number;
     promo_price_minor: number | null;
     promo_badge: string | null;
     payable_minor: number | null;
@@ -333,7 +332,6 @@ describe("/plans 的促销展示位", () => {
     expect(plan?.action).toBe("login_required");
     // 匿名不知道访客是不是新客 ⇒ 按"该人群最优情形"算，条件写进前缀
     expect(plan?.promo_badge).toBe("限新用户 · 首单立减 3 元");
-    expect(plan?.original_price_minor).toBe(1500);
     expect(plan?.promo_price_minor).toBe(1200);
     // 但"这个人要付多少"必须等登录：限人群的券不能当报价
     expect(plan?.payable_minor).toBeNull();

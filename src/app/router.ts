@@ -558,7 +558,6 @@ async function route(request: Request, env: Env, path: string, method: string): 
       const best = promos.get(plan.id);
       const promo = {
         // 划线价：就是套餐标价
-        original_price_minor: plan.price_minor,
         // 活动价（满足活动条件时的价）：只给**宣传位**用，不代表这个人的应付
         promo_price_minor: best?.promo_price_minor ?? null,
         // null = 没有公开活动；文案由 CRM 给（含人群前缀），App 不拼
