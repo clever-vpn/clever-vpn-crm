@@ -36,6 +36,8 @@ const GIFT_DAYS_ONLY = "gift-days-only@test.com";
 const GIFT_GB_BASE = "gift-gb-base@test.com";
 const GIFT_UNLIMITED = "gift-unlimited@test.com";
 const GIFT_FOREVER = "gift-forever@test.com";
+const GIFT_REVIVE = "gift-revive@test.com";
+const GIFT_REVIVE_DAYS_ONLY = "gift-revive-days@test.com";
 /** 兑换码用例的收件人（网关白名单一并放行） */
 const REDEEM_WITH_SUB = "redeem-sub@test.com";
 const REDEEM_NEW_USER = "redeem-new@test.com";
@@ -131,12 +133,14 @@ async function grantSub(email: string, planId = "promo_30d"): Promise<void> {
     .first<{ id: number }>();
   expect(c?.id).toBeTruthy();
   const now = new Date().toISOString();
+  // 到期日必须是**未来**：订阅写 now 等于"刚建就过期"，会走到复活那条路（§2.9.6）
+  const later = new Date(Date.now() + 30 * 86_400_000).toISOString();
   await env.DB.prepare(
     `INSERT INTO platform_subscriptions (customer_id, plan_id, kind, hold, paid_minor, currency,
        licence_limit, period_term_days, period_quota_gb, line_ids, started_at, expires_at, created_at, updated_at)
      VALUES (?, ?, 'period', 'none', 1200, 'CNY', 1, 30, 100, '[]', ?, ?, ?, ?)`,
   )
-    .bind(c!.id, planId, now, now, now, now)
+    .bind(c!.id, planId, now, later, now, now)
     .run();
 }
 
@@ -191,6 +195,7 @@ beforeAll(async () => {
       JSON.stringify([
         PAYER, FRIEND, REFERRER, GIFT_TO, GIFT_SIGNUP, GIFT_NO_SUB,
         GIFT_DAYS_ONLY, GIFT_GB_BASE, GIFT_UNLIMITED, GIFT_FOREVER,
+        GIFT_REVIVE, GIFT_REVIVE_DAYS_ONLY,
         REDEEM_WITH_SUB, REDEEM_NEW_USER, REDEEM_NO_PLAN, REDEEM_BRUTE,
         BATCH_A, BATCH_B, BATCH_C, BATCH_COUPON,
       ]),
@@ -997,6 +1002,90 @@ describe("礼包（gift）", () => {
     expect(body.result_text).toContain("不适用");
 
     expect((await subRow(customerId)).traffic_total_gb).toBe(before.traffic_total_gb);
+  });
+  it("过期订阅 ⇒ 复活：到期日从**今天**算、旧额度作废、残值清零", async () => {
+    const promoId = await createPromotion({
+      name: "复活礼包",
+      kind: "gift",
+      audience: "expired",
+      rewards: { days: 7, gb: 20 },
+    });
+
+    const token = await login(GIFT_REVIVE);
+    await payOrder(token, "promo_30d");
+    const customerId = await customerIdOf(GIFT_REVIVE);
+    const pid = (await subRow(customerId)).platform_customer_id!;
+
+    // 造一个"用过、已过期"的人：到期日在一个月前、池子里还剩 5 GB、当时付了 1200
+    const past = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    await env.DB.prepare(
+      `UPDATE platform_subscriptions
+          SET expires_at = ?, period_extra_gb = 5, paid_minor = 1200
+        WHERE customer_id = ?`,
+    )
+      .bind(past, customerId)
+      .run();
+    cf.customers.get(pid)!.traffic_balance = 3 * GIGA; // 平台只剩 3 GB
+
+    const res = (await (await claimGift(promoId, token)).json()) as { ok: boolean };
+    expect(res.ok).toBe(true);
+
+    const after = await subRow(customerId);
+    // ① 从**今天**算 7 天 —— 不是"过期日 + 7 天"（那样领完还是过期）
+    const days = (Date.parse(after.expires_at!) - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(6.9);
+    expect(days).toBeLessThan(7.1);
+    // ② 旧额度作废：拿到的就是礼包那 20 GB（3 + 20 = 23 是错的）
+    expect(after.period_extra_gb).toBe(20);
+    expect(after.traffic_remaining_gb).toBe(20);
+    expect(platformGb(pid)).toBe(20);
+    // ③ 残值清零：成交价归 0，不能拿去抵换购
+    const paid = await env.DB.prepare(
+      `SELECT paid_minor FROM platform_subscriptions WHERE customer_id = ?`,
+    )
+      .bind(customerId)
+      .first<{ paid_minor: number }>();
+    expect(paid!.paid_minor).toBe(0);
+
+    // ④ 台账仍然是一条 gift（凭证可查）
+    const change = await env.DB.prepare(
+      `SELECT action FROM subscription_changes WHERE customer_id = ? ORDER BY id DESC LIMIT 1`,
+    )
+      .bind(customerId)
+      .first<{ action: string }>();
+    expect(change?.action).toBe("gift");
+  });
+
+  it("过期订阅 + 礼包只有天数 ⇒ 领不了，且一行都不留", async () => {
+    const promoId = await createPromotion({
+      name: "只送天数的复活礼包",
+      kind: "gift",
+      audience: "expired",
+      rewards: { days: 7 },
+    });
+
+    const token = await login(GIFT_REVIVE_DAYS_ONLY);
+    await payOrder(token, "promo_30d");
+    const customerId = await customerIdOf(GIFT_REVIVE_DAYS_ONLY);
+    await env.DB.prepare(`UPDATE platform_subscriptions SET expires_at = ? WHERE customer_id = ?`)
+      .bind(new Date(Date.now() - 86_400_000).toISOString(), customerId)
+      .run();
+
+    const res = (await (await claimGift(promoId, token)).json()) as {
+      ok: boolean;
+      state: string;
+      result_text: string;
+    };
+    expect(res.ok).toBe(false);
+    expect(res.state).toBe("not_applicable");
+    expect(res.result_text).toContain("天数与流量");
+
+    const rows = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM redemptions WHERE customer_id = ? AND promotion_id = ?`,
+    )
+      .bind(customerId, promoId)
+      .first<{ n: number }>();
+    expect(Number(rows?.n ?? 0)).toBe(0);
   });
 });
 
