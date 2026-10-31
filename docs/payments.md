@@ -518,214 +518,173 @@ v1:<base64(iv(12B) || AES-GCM 密文+tag)>
 
 ## 10. 商店内购（Apple App Store / Google Play）
 
-> **状态：需求讨论中（2026-10-31），未实现。** 本节先定"要什么、边界在哪"，
-> 具体 driver 与字段等结论落地后再写。
+> **状态：需求已定（2026-10-31），未实现。** 本节定的是**轻方案**：把内购压成
+> "一次性购买"，与网页收银台共用同一套订单与发放链路。
 
 ### 10.0 一句话
 
-商店内购**不是第三种网关协议**，而是**同一条"查单定论"轨道的两个新 driver**：
-没有 `create`，只有 `query` + `notify`（`poll.ts` 已经按这个形状预留了位置）。
+**内购不是新流程，是"一次性购买"的另一个渠道。** 没有下单、没有续费、没有对账：
+用户付完把钱和凭据交给我们，我们**去商店查一次**，然后走与网页**完全相同**的那条
+`settlePaidOrder()` 发放链路。
 
-但**有三件事是 Web 收单里根本不存在的**，它们才是真正的需求：
+三条前提（决定了后面全部简化）：
 
-1. **谁先动手**：Web 是我们建单→用户付；IAP 是用户在商店里付完→来找我们认领。
-2. **钱和我们的单怎么对上**：Apple 不会回传我们的单号，只有 `appAccountToken` 能对上。
-3. **我们欠商店一个动作**：Google 一次性商品 3 天不 `acknowledge` 会**自动退款**。
+1. **商品类型选"一次性"** —— Apple `Non-Renewing Subscription` / Google 一次性商品；
+   `traffic` / `addon` 用 Apple `Consumable`。
+2. **权限的唯一来源是 CRM**，StoreKit / Play Billing 只提供凭据，不提供"是否已购买"。
+3. **内购用户极少**，所以它可以"比网页更笨"，但**绝不能**让网页那条路变复杂。
 
-### 10.1 两次收单，形状完全不同
+### 10.1 为什么是"一次性"，而不是自动续期订阅
 
-| | Web 收银台（epay / stripe / paypal） | 商店内购（Apple / Google） |
+| | 自动续期订阅 | **一次性（本节采用）** |
 |---|---|---|
-| 谁收钱 | 网关/服务商，钱进我们的商户号 | **商店**，钱先进商店，月中结算给我们 |
-| 有没有"下单" | 有（`create` → `pay_url`） | **没有**（支付在客户端由 StoreKit / Play Billing 发起） |
-| 靠什么把回调对到订单 | 我们下发的 `provider_order_no`（原样回传） | **`appAccountToken`**（Apple）/ **`obfuscatedAccountId`**（Google） |
-| 通知内容 | 通常已含单号 + 金额 | 只有 `transactionId` / `purchaseToken`（金额要再查） |
-| 权威来源 | 查单接口 | **查商店 API**（通知只是线索） |
-| 价格谁定 | 我们（`plans.price_minor`） | **商店**（App Store Connect / Play Console 的价目表） |
-| 退款谁发起 | 我们 | **用户找商店**，我们只能收通知 |
-| 订阅续期 | 我们（`renewal`） | **商店**，我们只是跟随 |
+| 到期日 | 商店给 `expiresDate`（权威） | **我们自己算**：付款时间 + `plan.term_days` |
+| 续费 | 商店自动扣款 | **没有**，用户到期手动再买 |
+| 我们要做 | 续订、宽限期、扣款失败重试、续费对账、月度边界对齐 | **全部不用** |
+| 折扣 | intro offer / promo code / offer code | **商店侧不能打折**（只能建第二个更便宜的商品） |
+| 恢复购买 | 系统级 | 不需要（权限在 CRM） |
 
-**为什么必须在 App 里用商店支付**：Apple / Google 都禁止在 App 内引导去站外付款
-（anti-steering）。反过来，Web 上也**不能用** IAP。所以这不是"可选的支付方式"，
-而是**渠道决定的**——这正是 `plans.sales_channels`（`web_checkout` / `apple_iap` /
-`google_iap`）存在的理由。
+代价说白了：**放弃自动续费与商店原生折扣**。换来的是"到期算法与网页逐字相同"——
+`settle()`、`subscriptionFromPlan()`、月结、残值、升级全都一行不改。
 
-### 10.2 关联键：让"钱"能对上"我们的单"
+> 如果哪天内购变成主渠道、且需要自动续费，再切回自动续期订阅。那时才需要
+> `expiresDate` 权威、续订通知、月度边界对齐那一整套。
 
-Apple 的通知里**没有我们的单号**（除非我们用 `appAccountToken` 主动塞进去）。
-所以：
+### 10.2 两次收单的形状差异
 
-| | 关联键 | 怎么来 | 约束 |
-|---|---|---|---|
-| Apple | `appAccountToken` | **我们生成一个 UUID**，随购买一起传给 StoreKit | 必须是 UUID；**支付后不可改** |
-| Google | `obfuscatedAccountId` | 同一个 UUID 传给 Billing | ≤ 64 字符，稳定不变 |
+| | 网页收银台 | 商店内购 |
+|---|---|---|
+| 谁收钱 | 网关，钱进我们商户号 | **商店**，月中结算给我们 |
+| 有没有"下单" | 有（`create` → `pay_url`） | **没有**（支付在客户端发起） |
+| 订单何时创建 | 用户点支付时 | **付完之后**（`POST /orders/iap` 一落地就是"待确认"） |
+| 靠什么对上人 | 登录态 | 登录态 + `appAccountToken` |
+| 金额谁定 | 我们（含促销） | **商店**（含区域货币） |
+| 权威来源 | 网关查单 | **商店 API**（通知只是线索） |
 
-规则：
+**为什么不预建单**：商品由 `product_id` 决定、价格由商店决定，"下单"这一步对内购没有
+任何内容可填。预建单只会产生一批永远不付的垃圾 pending 单，客服还得挨个分辨。
 
-- 订单在**发起购买之前**就存在，并把这个 UUID 写在该订单上（`app_account_token`）——
-  它是"这笔钱属于哪一单/哪个人"的唯一凭据。
-- 认领时**两边都要校验**：商店回传的 token 必须等于订单上的；否则拒绝（防串单/伪造）。
-- 同时反向也要能查：**`productId` → `plan_id`**。现在 `plans.store_product_id` 是
-  JSON（`{apple, google}`），认领时按 `productId` 反查套餐，需要一条索引视图。
+### 10.3 关联键：`appAccountToken` = **用户**的 UUID（不是订单的）
 
-### 10.3 真理来源：**通知是线索，查询是结论**
+| | 字段 | 值 |
+|---|---|---|
+| Apple | `appAccountToken` | 该 CRM 用户的 UUID（`customers` 上的稳定 UUID，不是自增 id） |
+| Google | `obfuscatedAccountId` | 同上 |
 
-这条与仓库现有原则完全一致（`poll.ts`：主动查单才是判据），只是"查的对象"变了：
+- 交易因此绑定到**人**，而"这属于哪张单"由我们建单时决定 —— 人与单本来就是一对一
+  的登录关系，不需要额外的订单 token。
+- 认领时**必须校验**：凭据里的 token 等于当前登录用户的 UUID，否则 `403`。
+- 通知里若带 token，可以据此反查用户（补认领）。
+
+**一笔交易只能归一个用户、一张单**（`(platform, 解析出的事务号)` 唯一）：
+这是失去"Apple ID ↔ 账号"天然绑定之后，我们自己必须守住的等价物。
+否则同一个 `transactionId` 被两个账号各领一次权益，就是白送。
+
+### 10.4 真理来源：**通知是线索，查询是结论**
+
+与仓库既有原则完全一致，只是"查的对象"换了：
 
 | | 通知 | 查询（结论） |
 |---|---|---|
-| Apple | App Store Server Notifications **V2**（`signedPayload` = JWS，需验签 + 校验 `bundleId` / `environment`） | App Store Server API `GET /inApps/v1/transactions/{transactionId}`；订阅态用 `/inApps/v1/subscriptions/{originalTransactionId}` |
-| Google | **RTDN**（Pub/Sub push，payload 只有 `purchaseToken` + 事件类型，需校验 OIDC token / 共享密钥） | Play Developer API `purchases.subscriptionsv2.get` / `purchases.products.get` |
+| Apple | App Store Server Notifications **V2**（`signedPayload` JWS，验签 + 校验 `bundleId`/`environment`） | `GET /inApps/v1/transactions/{transactionId}` |
+| Google | **RTDN**（Pub/Sub push，payload 只有 `purchaseToken` + 事件类型） | `purchases.products.get`（**一次性商品**，不是 `subscriptionsv2`） |
 
-查的时机有**三个**，缺一不可：
+查的时机三个，缺一不可：
 
-1. **App 回传时**（用户刚付完）—— 同步查一次，让他立刻能用，不等通知；
-2. **通知到达时** —— 只当作"有变化了"的信号，仍以查询结果为准；
-3. **cron 定期对账** —— 续订、漏通知、掉单。**这是"最终结果"的真正含义**：
-   不只是一次收款，而是**每次续费都要能自己查回来**。
+1. **App 交凭据时** —— 同步查，让他立刻能用，不等通知；
+2. **通知到达时** —— 只当"有变化了"，仍以查询结果为准；
+3. **cron 查单** —— 复用现有 `pollPendingOrders` 的退避曲线（`next_poll_at`）。
+   内购没有续费，所以这里**只兜"漏掉的首次确认"**，不做续费对账。
 
-### 10.4 我们欠商店的动作（漏了会丢钱）
-
-两个平台的义务**不一样**，这一点常被忽略：
+### 10.5 我们欠商店的动作（漏了会丢钱）
 
 | | 谁做 | 不做的后果 |
 |---|---|---|
-| Apple `Transaction.finish()` | **客户端**（服务端没有对应 API） | 同一笔交易会被反复投递 ⇒ 认领必须幂等 |
-| Google `purchases.*.acknowledge` / `consume` | **服务端**（我们） | **3 天后自动退款**（用户白嫖） |
+| Apple `Transaction.finish()` | **客户端**（服务端没有这个 API） | 同一笔交易被反复投递 ⇒ 认领必须幂等 |
+| Google `purchases.products.consume` / `acknowledge` | **服务端**（我们） | **3 天后自动退款**（用户白嫖，权益已经发出去了） |
 
-推论：
+- Google 的 consume 必须放在**确认收款并落库之后**，失败要重试（不能只打日志）。
+- Apple 侧我们只回一个 `can_finish: true`，由 App 自己 finish。
+- 两者都要求认领接口**幂等**：App 会重试、通知会重投、用户可能手动再点一次。
 
-- Google 的 ack 必须放在**认领成功之后**（权益落库 → 再 ack），
-  且失败要能重试；不能"记个日志就算了"。
-- Apple 侧我们要做的是：**把"可以 finish 了"这个结论同步返回给 App**，
-  让它在拿到权益后自己 finish。
-- 两者都要求**认领接口幂等**（App 会重试、通知会重投）。
+### 10.6 金额与币种：**记商店返回的原币，不换算**
 
-### 10.5 价格与币种以商店为准 —— 促销在 IAP 上基本失效
+| 项 | 做法 |
+|---|---|
+| `orders.amount_minor` / `currency` | **原样记商店返回的金额与币种**（Google 是 `micros` + `currencyCode`） |
+| 汇率换算 | **不做**。Apple/Google 按 App 的可用地区自动折算，全球上架就一定会收到非 CNY |
+| 残值 / 升级 | **内购订单不参与折残值**（升级按全价）。避免任何汇率计算进入残值公式 |
+| 报表 | 按币种分开看；不合成单一"营收"数字 |
 
-| 项 | Web | IAP |
+理由：`currency` 列本来就写着"仅快照、不参与任何计算"，这条完全顺着既有约定走。
+
+### 10.7 促销在内购上**没有执行点**
+
+价格是商店定的，我们改不了。所以：
+
+- `/quote` 与定价页对 `apple_iap` / `google_play` 渠道**不展示、不计算任何券**；
+- 内购订单 `discount_minor` 恒为 `0`、`promotion_id` 恒为 `NULL`；
+- 想在内购渠道打折，只有两条路：建一个更便宜的商品 ID，或引导去网页（App 内不能引导）。
+
+### 10.8 权限只由 CRM 决定（StoreKit 不是权限来源）
+
+| | 谁决定 |
+|---|---|
+| 用户能不能用（取码、连接） | **CRM / cf-api**（登录即知） |
+| 交易是否真实 | 商店凭据 + **服务端查询** |
+| 钱从哪收 | Apple / Google 的审核规则管（App 内必须用 IAP） |
+
+由此的四条硬约束：
+
+1. **必须登录才能认领**（凭据要和当前用户对上）。
+2. App **不调** `AppStore.sync()`、**不需要**"恢复购买"按钮 —— 换机 = 登录 = 权益随账号。
+3. App **不读** `Transaction.currentEntitlements` 来决定功能开关。
+4. `Transaction.updates` 仍要监听，但只用来"补报未 finish 的交易"，不做任何决策。
+
+### 10.9 退款：只有"单笔"，所以语义变简单
+
+内购没有订阅链（非续期 / 消耗型），所以退款只有一种形态：**退某一笔**。
+
+| 场景 | 动作 |
+|---|---|
+| Apple `REFUND` / Google 单笔作废 | 找到该 `transaction_id` 对应的订单 ⇒ 走**模式 A**（`refund_and_void`）：作废订单 + 回滚那一次 `subscription_changes`（即撤掉这笔买来的那 N 天） |
+| Google `voidedPurchases` | 没有推送，必须主动拉；低频，纳入定时对账或人工 |
+| 消耗型（流量包/加购包）已用掉一部分 | 只能作废剩余额度；是否退钱由运营决定 |
+
+- 之前担心的"撤销订阅链某一期"**不存在**了 —— 每笔内购就是一条独立订单 + 一次独立变更，
+  回滚那一次即可（这正是模式 A 的定义）。
+- Apple 会重投退款通知 ⇒ 按 `transaction_id` 幂等。
+
+### 10.10 配置落在哪（几乎全复用）
+
+| 位置 | 现状 | 需要什么 |
 |---|---|---|
-| 金额来源 | 我们算（含促销） | **商店返回**（Google 是 `micros` + `currencyCode`） |
-| `expected_payable_minor` 校验 | 有意义 | **不适用**（客户端决定不了价格） |
-| 优惠券 / 礼包 | 生效 | **不生效**——价格是商店定的，我们改不了 |
-| 想打折只能 | 我们配券 | 用**商店侧的** offer / promo code（配置在 App Store Connect / Play Console） |
+| `payment_gateways.driver` | `epay_v1` / `generic_json_v1` / `stripe` / `paypal` / `manual` / `mock` | 新增 `apple_iap` / `google_iap`（**只有 query，没有 create**） |
+| `secret_enc`（AES-GCM 加密） | 已有 | Apple：`.p8` 私钥；Google：服务账号 JSON |
+| `mapping` | 已有 | Apple：`{issuer_id, key_id, bundle_id, environment}`；Google：`{package_name}` |
+| `plans.store_product_id` | `{"apple": "...", "google": "..."}` | 已有；补类型校验 |
+| `plans.sales_channels` | `web_checkout` | 增加 `apple_iap` / `google_play` |
+| `orders` | `provider_order_no` / `provider_trade_no` | `provider_trade_no` = 商店事务号（Apple `transactionId` / Google `purchaseToken`）；`source` 增加 `iap` |
+| 商品类型映射 | — | `period` → 非续期订阅 / 一次性；`traffic`·`addon` → consumable |
 
-这里有一个**必须现在决定的口径问题**：商店返回的是**用户所在地区的货币**
-（美国用户付 USD），而本仓库是单币种 CNY（`currency` 只作快照）。
+### 10.11 明确"不做"的（这是方案能简单的根本）
 
-可选：
+| 不做 | 为什么可以不做 |
+|---|---|
+| 自动续费、`DID_RENEW`、续费对账 | 非续期 / 一次性商品 |
+| 月度边界与商店对齐 | 到期 = 付款时间 + `term_days`，与网页相同 |
+| 家庭共享（Apple `FAMILY_SHARED`） | 拒绝或人工处理 |
+| 汇率换算 | 记原币、不参与残值 |
+| 内购渠道的促销 | 商店价格我们改不了 |
+| Google `voidedPurchases` 定时拉取 | 低频，通知 + 人工兜底 |
+| 服务端 `finish` | Apple 只允许客户端 finish |
+| Restore Purchases 专用接口 | 权限在 CRM，登录即恢复 |
 
-- (a) **允许异币种**：`orders` 增加"实收金额 + 实收币种"，记账/残值仍换算成 CNY；
-- (b) **只用 CNY 定价区**：App Store / Play 只卖 CNY 区（海外用户按商店汇率折算），
-  我们只记商店给的 CNY 金额，不做换算；
-- (c) 只记"商店实收"，残值与升级**不参与**（IAP 订阅不能折残值升级）。
+### 10.12 待定（只剩客户端话术）
 
-### 10.6 订阅生命周期归商店，我们只是跟随
-
-`period` 套餐在 IAP 上是**商店托管订阅**：续订、升降级、暂停、退款都在商店发生。
-
-| 事项 | 谁说了算 | 我们要做的 |
+| # | 问题 | 倾向 |
 |---|---|---|
-| 到期时间 | 商店的 `expiresDate` / `expiryTimeMillis` | 覆盖 `platform_subscriptions.expires_at` |
-| 续订 | 商店自动扣款 | 收 `DID_RENEW` / `SUBSCRIPTION_RENEWED` → 回查 → 延长 |
-| 退款 / 撤销 | 用户找商店 | 收 `REFUND` / `REVOKE` → **必须收回权益**（钱退了，与"礼包不收回"是两回事） |
-| 暂停 / 欠费 | 商店 | 收 `DID_FAIL_TO_RENEW` / `ON_HOLD` → 先不动权益，按 `expiresDate` 自然过期 |
+| 1 | 认领失败（网络 / 5xx）时 App 怎么表现 | 重试 3 次后给真话：「已付款，权益正在开通，稍后自动到账」，**不要让用户以为失败而重复支付** |
 
-两个必须现在定的点：
-
-1. **我们的月结怎么跟商店的计费周期对齐？**（不是"跑不跑"，是"边界听谁的"）
-
-   月结做的事是**把额度写回 `period_quota_gb`**（外加按实际用量折算后的额外池），
-   判据是"从 `period_settled_at` 起，锚点日已越过"。Web 的锚点来自**下单日**；
-   IAP 若也取下单日，就会与商店的周期错位：
-
-   | 场景 | 后果 |
-   |---|---|
-   | 年付 365 天 + 每月 100GB | 商店一年只续费一次。若"跟着商店不重置"，用户一年只有 100GB —— **比承诺少 1100GB** |
-   | 扣款失败后重试，续期日从 15 号挪到 23 号 | 我们仍在 15 号满额重置 ⇒ 商店周期才过 8 天又给一次 ⇒ **超发** |
-   | 升级 / 降级（商店给 proration + 新周期起点） | 商店周期起点变了，锚点没变 ⇒ 同样错位 |
-
-   正确规则：**锚点与次数都由商店的周期决定，不由我们猜**
-   - `period_settled_at` 初值 = 商店这一期的**起点**（Apple `recentSubscriptionStartDate` /
-     Google `startTime`），不是付款时刻；
-   - `period_anchor_day` = 该起点的日号；
-   - 商店续期（`DID_RENEW` / `SUBSCRIPTION_RENEWED`）到达 ⇒ 把锚点与 `period_settled_at`
-     一同对齐到新周期，并立刻重置一次；
-   - 一期覆盖几个月就重置几次（年付 = 12 期），次数由周期长度决定。
-
-   Web 与 IAP 因此复用**同一段 `settle()`**，差别只在"锚点从哪来 / 续期由谁驱动"。
-2. **家庭共享**（Apple `inAppOwnershipType = FAMILY_SHARED`）认不认？倾向：**不认**（或单独标记），
-   否则一份订阅能给多个人开权益。
-
-另外要防一个真实风险：**沙盒收据是可伪造的**（任何人装个 StoreKit Test 就能造）。
-所以生产环境必须**拒绝 `environment = Sandbox`**，除非在白名单里（沿用 `allowed_emails` 的思路）。
-
-#### 商店发起的退款 → 映射到我们的 A / B
-
-我们自己的两种退款（`domain.md` §6）：
-
-| 模式 | 名称 | 订单 | 订阅 |
-|---|---|---|---|
-| **A** | `refund_and_void` | 作废（`voided_at`），可部分退也整单作废 | `hold='revoked'`，cf-api 回滚到**购买前快照** |
-| **B** | `refund_only` | 继续有效（`refunded_minor` 累加） | **继续有效**，cf-api 不动 |
-
-IAP 下**我们没有"选模式"的权力** —— 钱是用户找商店退的，我们只是收到通知。
-所以要做的是"把商店的撤销语义翻译成 A 或 B"：
-
-| 商店事件 | 含义 | 建议动作 |
-|---|---|---|
-| Apple `REFUND` / Google 单笔作废 | 退**某一次**交易（可能只是最近一期） | 该期权益作废（按 A 处理），订阅链上其它期不受影响 |
-| Apple `REVOKE`（家庭共享被撤销）、Google `SUBSCRIPTION_REVOKED` | **整条订阅链**被撤销 | A：订阅 `revoked` + 回滚 |
-| Google `voidedPurchases` | **没有推送**，必须主动拉"某段时间内的作废购买" | 纳入定时对账（又一次"以查询为准"） |
-| 消耗型（流量包 / 加购包）退款 | 额度可能已经被用掉 | 只能"作废剩余"；或选 B（退钱但保留权益）—— 需拍板 |
-
-两个陷阱：
-
-- **模式 A 的"回滚到购买前快照"在订阅链上不成立**：那个快照是"上一期"，
-  而 IAP 是连续链。要单独定义"**撤销某一期**"的语义（`expires_at` 减一期？还是只标记该期作废）。
-- Apple 会对同一笔交易**重投退款通知** ⇒ 退款处理必须幂等（按 `transactionId` 去重）。
-
-### 10.7 配置落在哪（尽量复用现成字段）
-
-| 位置 | 现状 | 需要补的 |
-|---|---|---|
-| `payment_gateways.driver` | `epay_v1` / `generic_json_v1` / `stripe` / `paypal` / `manual` / `mock` | 新增 `apple_iap` / `google_iap`（都是"只有 query"的 driver） |
-| 密钥 | `secret_enc`（AES-GCM） | Apple：`.p8` + `issuer id` + `key id` + `bundleId`；Google：service account JSON + `packageName` |
-| `plans.store_product_id` | `{"apple": "...", "google": "..."}` | 已有，够用（再加类型校验） |
-| `plans.sales_channels` | `web_checkout` | 增加 `apple_iap` / `google_iap` |
-| 商品类型映射 | — | `period` → 自动续期订阅；`traffic` / `addon` → **一次性消耗品**（Apple Consumable / Google one-time） |
-| `orders` | `provider_order_no`（回调定位） | 加 `app_account_token`；`source` 增加 `iap`；记录 `store` + `environment` |
-
-### 10.8 App 侧契约（新增端点）
-
-App 付完必须把凭证交给我们，并且**当场拿到结论**：
-
-```
-POST /api/app/v1/iap/verify
-{ "store": "apple" | "google",
-  "product_id": "...",
-  "transaction_id": "...",   // Apple
-  "purchase_token": "..." }  // Google
-→ { ok, order_code, status_text, can_finish: true, expires_at }
-```
-
-要求：幂等（App 会重试）、必须校验 `bundleId` / `packageName` / `productId` 属于我们、
-认领成功后再 ack（Google）、返回 `can_finish` 让客户端 finish（Apple）。
-
-### 10.9 对账与报表
-
-- 商店要抽成（30% / 15%），所以"实收"≠"到账"：`amount_minor` 记**用户支付的金额**，
-  净额另算（先不做到 CRM 里，避免两套数打架）。
-- `source = iap` 让"自助 / 赠送 / 后台补单 / 商店"四类在报表上分得开。
-- 沙盒交易必须能从报表里剔除。
-
-### 10.10 待定（等拍板）
-
-| # | 问题 | 我的倾向 |
-|---|---|---|
-| 1 | 订单在**付款前**建（带 `appAccountToken`）还是**付款后**建？ | 付款前建：token 是唯一能对上单的东西，且客服排查/入口统计都要它 |
-| 2 | 异币种怎么办（USD 用户） | 见 §10.5 (b)：只卖 CNY 区，记商店返回的 CNY 金额；不做汇率 |
-| 3 | 优惠券在 IAP 上无效，要不要在定价页对 IAP 渠道隐藏券？ | 要，否则用户以为能用 |
-| 4 | IAP 的月度重置边界 | **照旧要重置**，但锚点与次数跟商店周期走（见 §10.6） |
-| 5 | 家庭共享认不认 | 不认（或单独标记后人工处理） |
-| 6 | 商店发起的退款怎么映射到我们的**模式 A / B** | 见 §10.6 之后新增的「退款」一节：单期退款 vs 整链撤销要分开定 |
+> 其余需求均已定：商品类型、不自动续费、记原币、内购无促销、权限只由 CRM 决定、
+> 退款走模式 A、生产拒绝 Sandbox（除非白名单）。
