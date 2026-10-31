@@ -9,6 +9,8 @@
  *      一定出现并解释原因（用户是拿着链接来的）；
  *   4. 领过 ⇒ `claimed`，不再可领；
  *   5. 并发抢**最后一份** ⇒ 恰好一个人拿到，另一个明确 `sold_out`，绝不超发。
+ *   6. **定向礼包**（`audience=specific` + 不公开）出现在**被点名那位**的货架上 ——
+ *      这是删掉「管理员代领」之后它唯一的入口。
  */
 import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -315,5 +317,52 @@ describe("并发抢最后一份", () => {
       .bind(id)
       .first<{ n: number }>();
     expect(Number(row!.n)).toBe(1);
+  });
+});
+
+/**
+ * 定向礼包：**没有"管理员代领"这条路**（`POST /api/admin/promotions/{id}/grant` 已删除）。
+ *
+ * 所以「只给这几个人」必须靠货架自己成立：被点名的人在货架上看得见、点得动；
+ * 名单外的人既看不见，硬调接口也只会得到 `not_eligible`。
+ * 后台里这个开关就叫「定向可见」（`visible=false` + `audience=specific`）。
+ */
+describe("定向礼包（货架是唯一入口）", () => {
+  it("名单内的人不用深链就能看见并自己领；名单外看不见也领不到", async () => {
+    const id = await makePromotion({
+      name: "客服补偿礼包",
+      rewards: { days: 5 },
+      audience: "specific",
+      visible: false,
+    });
+    const targetId = await customerIdOf(LATE);
+    await env.DB.prepare(
+      `INSERT INTO promotion_targets (promotion_id, customer_id, created_at) VALUES (?, ?, ?)`,
+    )
+      .bind(id, targetId, new Date().toISOString())
+      .run();
+
+    // ① 名单内：货架上就有（不需要 `?promotion_id=` 深链），状态是"可以领取"
+    const mine = (await shelf(lateToken)).find((i) => i.promotion_id === id);
+    expect(mine?.state).toBe("available");
+    expect(mine!.claimable).toBe(true);
+
+    // ② 名单外：**不出现**（不是"看得见但点不动"）
+    const others = await shelf(shelfToken);
+    expect(others.some((i) => i.promotion_id === id)).toBe(false);
+
+    // ③ 硬调接口：只是"不符合资格"，不会把礼包发给不在名单里的人
+    const blocked = (await (await claim(id, shelfToken)).json()) as { ok: boolean; state: string };
+    expect(blocked.ok).toBe(false);
+    expect(blocked.state).toBe("not_eligible");
+
+    // ④ 名单内本人领：正常到账（名额、幂等、订阅检查全走同一条路）
+    const res = (await (await claim(id, lateToken)).json()) as { ok: boolean; state: string };
+    expect(res.ok).toBe(true);
+    expect(res.state).toBe("granted");
+
+    // ⑤ 领完他自己也看不到第二份
+    const after = (await shelf(lateToken)).find((i) => i.promotion_id === id);
+    expect(after?.state).toBe("claimed");
   });
 });

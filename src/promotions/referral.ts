@@ -12,12 +12,10 @@
  * 奖励给的是**推荐人**，触发条件是**被邀请人首单支付成功**（未付款不结奖，防刷）。
  */
 import { PROMOTION_COLUMNS, rowToPromotion } from "./model";
-import { provisionSubscription } from "../platform/provision";
-import { customerSubscription, logChange, upsertSubscription } from "../subscriptions/store";
+import { createRewardCard } from "./reward";
 
 import type { Env } from "../env";
 import type { Promotion, PromotionRow } from "./model";
-import type { Subscription } from "../plans/subscription";
 
 /**
  * 去掉 I / O / 0 / 1：邀请码要靠人念、靠手输，形近字符必须排除。
@@ -220,53 +218,27 @@ export async function rewardReferrer(
     return { referrer_id: ref.referrer_id, type, value: 0, applied: false };
   }
 
-  const before = await customerSubscription(env, ref.referrer_id);
-  if (!before) {
-    // 推荐人自己没订阅：先把奖励记在案上（客服可手工补），不要静默吞掉
-    await markRewarded(env, ref.id, type, value, now);
-    return { referrer_id: ref.referrer_id, type, value, applied: false };
-  }
-
-  const after: Subscription =
-    type === "days"
-      ? {
-          ...before,
-          // 永不过期（expires_at = null）不动：给期限没意义
-          expires_at: before.expires_at
-            ? new Date(Date.parse(before.expires_at) + value * 86_400_000).toISOString()
-            : null,
-        }
-      : before.kind === "traffic"
-        ? {
-            ...before,
-            // traffic：送 GB = 同时抬高总量与剩余，否则残值比例会越过 1
-            traffic_total_gb: (before.traffic_total_gb ?? 0) + value,
-            traffic_remaining_gb: (before.traffic_remaining_gb ?? 0) + value,
-          }
-        : {
-            ...before,
-            // period：进额外流量池，不动月度额度
-            period_extra_gb: (before.period_extra_gb ?? 0) + value,
-          };
-
-  const id = await upsertSubscription(env, after);
-  await logChange(env, {
-    customer_id: ref.referrer_id,
-    subscription_id: id,
-    action: "gift",
-    before,
-    after: { ...after, id },
-    detail: { source: "referral", referral_id: ref.id, type, value, referred_customer_id: opts.referredCustomerId },
+  // ── v23：不直接改推荐人的订阅，而是**发一张卡**让他自己来领（§2.9.9）──
+  //
+  // 为什么不直接加：直接加有两个毛病 ——
+  //   1. 推荐人不知道发生了什么（权益悄悄变了）；
+  //   2. 绕过了礼包那套「这份订阅收不收得下」的判断，给不限量用户送 GB
+  //      会把不限量写成"20GB 上限"（真实事故）。
+  const cardId = await createRewardCard(env, {
+    referralId: ref.id,
+    referrerId: ref.referrer_id,
+    // 来源活动：就是这条邀请关系命中的活动（`referrer_reward_*` 在它上面）
+    promotionId: ref.promotion_id ?? promo?.id ?? 0,
+    rewards: { days: type === "days" ? value : 0, gb: type === "gb" ? value : 0 },
+    promotionName: promo?.name ?? null,
+    promotionBadge: promo?.badge_label ?? null,
+    now,
   });
+
+  // 记下"已经发过卡"，让本函数对重复通知幂等（`referrals.rewarded_at IS NULL`）
   await markRewarded(env, ref.id, type, value, now);
 
-  // 落账到 cf-api：送的是天数 ⇒ expire_date，送的是流量 ⇒ traffic_balance
-  try {
-    await provisionSubscription(env, { ...after, id });
-  } catch (e) {
-    // 本地账已经记了；落账失败由结算/重试任务补齐，不把回调打挂
-    console.error(`[referral] 推荐人奖励落账失败 referrer=${ref.referrer_id}: ${e instanceof Error ? e.message : e}`);
-  }
-
-  return { referrer_id: ref.referrer_id, type, value, applied: true };
+  // 「好友已付款，去领取」这封提醒邮件本轮**不发**（契约 §2.9.9：可以发，发不出去
+  // 不影响卡片）。等 `notices` 增加 reward_ready 类型时再接，别复用验证码/收据模板。
+  return { referrer_id: ref.referrer_id, type, value, applied: cardId !== null };
 }

@@ -711,6 +711,51 @@ export const referrals = sqliteTable(
 );
 
 /**
+ * 推荐奖励卡 = **推荐人还没领的那份奖励**（契约 `app-crm.md` §2.9.9）。
+ *
+ * v23 之前推荐人奖励是"好友付首单 ⇒ 立刻改推荐人的订阅"，两个问题：
+ *   1. 推荐人根本不知道发生了什么（权益悄悄变了）；
+ *   2. 它绕过了礼包那套「能不能收下」的判断，给不限量用户送 GB 会把
+ *      不限量写成"20GB 上限"。
+ *
+ * 现在拆成两步：**先发一张卡**（本表），**推荐人自己点领取**才动订阅 ——
+ * 与礼包走同一段发放代码（`promotions/reward.ts` → `subscriptions/entitlement.ts`）。
+ *
+ * 三态：`pending`（可领）→ `claiming`（发放中，5 分钟占位）→ `claimed`。
+ * 占位不是为了性能，是为了防"两个设备同时点"发两份。
+ */
+export const referralRewards = sqliteTable(
+  "referral_rewards",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** 一条邀请关系只发一张卡（幂等的唯一来源） */
+    referral_id: integer("referral_id").notNull(),
+    /** 谁的卡 = 推荐人 */
+    referrer_id: integer("referrer_id").notNull(),
+    /** 兑现时用的礼包活动 */
+    promotion_id: integer("promotion_id").notNull(),
+    /** 这张卡**配置**值多少（`{days,gb}`），与"实际到账"可能不同 */
+    rewards_json: text("rewards_json").notNull(),
+    /** 活动快照（名称/角标）：活动改名删除后，用户仍能看到"我领的是什么" */
+    promotion_snapshot: text("promotion_snapshot"),
+    /** pending | claiming | claimed */
+    state: text("state").notNull().default("pending"),
+    /** 占位时间；超过 5 分钟可被下一请求接管 */
+    claiming_at: text("claiming_at"),
+    claimed_at: text("claimed_at"),
+    /** 兑现后写下的核销行（台账追溯） */
+    redemption_id: integer("redemption_id"),
+    /** **实际到账**的权益（不限量只收得下天数时，这里会比配置少） */
+    granted_json: text("granted_json"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_referral_rewards_referral").on(t.referral_id),
+    index("idx_referral_rewards_referrer").on(t.referrer_id),
+  ],
+);
+
+/**
  * 核销台账 = **"谁在哪个活动上用掉了一次名额"**（礼包的"领取事实"就在这里）。
  *
  * 三种核销来源，靠 `order_id` 区分：

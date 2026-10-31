@@ -17,17 +17,20 @@
 import { EMPTY_REWARDS, PROMOTION_COLUMNS, hasRewards, rowToPromotion } from "./model";
 import { checkAllForCustomer, checkForCustomer } from "./service";
 import { releaseRedemption, reserveRedemption, settleRedemption } from "./redemption";
+import {
+  findRewardCard,
+  listRewardCards,
+  releaseRewardCard,
+  settleRewardCard,
+  takeRewardCard,
+} from "./reward";
 import { createNotice } from "../notices/store";
 import { grantedNotice } from "../notices/model";
-import { provisionSubscription } from "../platform/provision";
 import { applicableAdditive, applyAdditive, pushAdditive } from "../subscriptions/entitlement";
 import { customerSubscription, freshenTraffic, logChange, upsertSubscription } from "../subscriptions/store";
-import { rowToPlan } from "../plans/model";
-import { subscriptionFromPlan } from "../plans/subscription";
 
 import type { Env } from "../env";
 import type { GiftRewards, Promotion, PromotionRow } from "./model";
-import type { Plan, PlanRow } from "../plans/model";
 import type { Subscription } from "../plans/subscription";
 
 /**
@@ -134,30 +137,7 @@ async function usedOf(env: Env, promotionId: number): Promise<number> {
 }
 
 /**
- * 读礼包的**载体套餐**（客户还没有订阅时用它 0 元开户）。
- *
- * 只允许 `visibility='hidden'` 的套餐：公开套餐能被直接买到，
- * 拿它当载体等于开了个 0 元购买通道。
- */
-async function loadCarrierPlan(env: Env, planId: string): Promise<Plan | null> {
-  const row = await env.DB.prepare(
-    `SELECT id, name, kind, price_minor, currency, licence_limit, term_days, monthly_quota_gb,
-       traffic_gb, validity_days, line_ids, up_mbps, down_mbps, sales_channels,
-       store_product_id, sort_order, status, retired_at, trial, visibility
-     FROM plans WHERE id = ?`,
-  )
-    .bind(planId)
-    .first<PlanRow & { visibility: string }>();
-  if (!row) return null;
-  if (row.visibility !== "hidden" || row.status !== "active") return null;
-
-  const plan = rowToPlan(row);
-  if (plan.kind === "addon") return null; // 加购包不产生订阅
-  return plan;
-}
-
-/**
- * **领取一个礼包**（用户点"领取"、输兑换码、后台手动发放 —— 全走这里）。
+ * **领取一个礼包**（用户点"领取"、输兑换码 —— 全走这里；**没有第三条路**）。
  *
  * 顺序刻意固定：**所有只读校验做完，才动钱**。
  * 占位之后任一步抛错都要把占位还回去，否则这个人永远领不到（唯一索引挡着）。
@@ -205,25 +185,15 @@ export async function claimGiftFor(
   }
 
   // ── 2) 有没有"地方可放" ──
+  // v23：礼包只加在**已有订阅**上，**不再用载体套餐 0 元开户**（§2.9.7）。
+  // 想给没买过的人一份权益，那是「免费试用」或「优惠券」的事 —— 两套机制并存
+  // 只会让用户问"到底哪个算"，也会凭空造出 0 元订单。
   const before = await customerSubscription(env, opts.customerId);
-  let plan: Plan | null = null;
   if (!before) {
-    if (!promo.plan_id) {
-      return claimResult(
-        "not_applicable",
-        "还需要先有套餐；这个礼包没有配置体验套餐，请联系客服",
-        { title },
-      );
-    }
-    plan = await loadCarrierPlan(env, promo.plan_id);
-    if (!plan) {
-      return claimResult("not_applicable", "礼包的体验套餐已不可用，请联系客服", { title });
-    }
+    return claimResult("not_applicable", "需要先有套餐才能领这份礼包", { title });
   }
 
-  // 先算"目标订阅快照"，再判断礼包**对它有没有意义**
-  const target =
-    before ?? subscriptionFromPlan(plan as Plan, { customerId: opts.customerId, paidMinor: 0, now });
+  const target = before;
   const applied = applicableRewards(target, promo.rewards);
   if (!hasRewards(applied)) {
     return claimResult("not_applicable", STATE_TEXT.not_applicable, { title });
@@ -259,23 +229,14 @@ export async function claimGiftFor(
 
   // ── 4) 发放（从这一刻起会动钱）──
   try {
-    const result = before
-      ? await applyToSubscription(env, {
-          before,
-          applied,
-          promo,
-          redemptionId: reservation.id,
-          platformRemainingGb,
-          now,
-        })
-      : await openFromCarrierPlan(env, {
-          planId: promo.plan_id as string,
-          base: target,
-          applied,
-          promo,
-          redemptionId: reservation.id,
-          now,
-        });
+    const result = await applyToSubscription(env, {
+      before,
+      applied,
+      promo,
+      redemptionId: reservation.id,
+      platformRemainingGb,
+      now,
+    });
 
     // 回填：完成时间 + **实际生效**的权益 + 活动快照（凭证不跟着活动改名而变）
     await settleRedemption(env, reservation.id, {
@@ -315,8 +276,10 @@ async function applyToSubscription(
     before: Subscription;
     /** 已过 `applicableRewards` 过滤 */
     applied: GiftRewards;
-    promo: Promotion;
-    redemptionId: number;
+    /** 只用来写台账与日志：奖励卡只需要 id + 名字 */
+    promo: Pick<Promotion, "id" | "name">;
+    /** 礼包有核销行；奖励卡不占名额，传 null */
+    redemptionId?: number | null;
     platformRemainingGb?: number | null;
     now: Date;
   },
@@ -338,7 +301,7 @@ async function applyToSubscription(
     detail: {
       promotion_id: opts.promo.id,
       promotion_name: opts.promo.name,
-      redemption_id: opts.redemptionId,
+      redemption_id: opts.redemptionId ?? null,
       rewards: opts.applied,
     },
   });
@@ -349,57 +312,6 @@ async function applyToSubscription(
     // 本地账已记；推特失败交给月结/人工补齐，不影响领取结论
     console.error(
       `[gift] 落账失败 customer=${before.customer_id} promo=${opts.promo.id}: ${
-        e instanceof Error ? e.message : e
-      }`,
-    );
-  }
-
-  return { applied: opts.applied, after };
-}
-
-/** 用载体套餐 0 元开户，并把已过滤过的奖励叠上去 */
-async function openFromCarrierPlan(
-  env: Env,
-  opts: {
-    planId: string;
-    base: Omit<Subscription, "id">;
-    applied: GiftRewards;
-    promo: Promotion;
-    redemptionId: number;
-    now: Date;
-  },
-): Promise<{ applied: GiftRewards; after: Subscription }> {
-  const customerId = opts.base.customer_id;
-
-  // 0 元开户：套餐给骨架，礼包在**它之上累加**（不是覆盖）——
-  // 载体套餐自己有 30 天、礼包再送 7 天，用户拿到的是 37 天。
-  const next = applyAdditive({ ...opts.base, id: 0 }, opts.applied);
-
-  const id = await upsertSubscription(env, next);
-  const after = { ...next, id };
-
-  await logChange(env, {
-    customer_id: customerId,
-    subscription_id: id,
-    action: "new",
-    before: null,
-    after,
-    paid_minor: 0,
-    detail: {
-      promotion_id: opts.promo.id,
-      promotion_name: opts.promo.name,
-      redemption_id: opts.redemptionId,
-      carrier_plan_id: opts.planId,
-      rewards: opts.applied,
-    },
-  });
-
-  try {
-    // 新开户要**建客户**，所以走全量落账
-    await provisionSubscription(env, after);
-  } catch (e) {
-    console.error(
-      `[gift] 开户落账失败 customer=${customerId} plan=${opts.planId}: ${
         e instanceof Error ? e.message : e
       }`,
     );
@@ -456,7 +368,16 @@ async function notifyReceipt(
 export type GiftShelfState = "available" | "sold_out" | "claimed" | "ended";
 
 export interface GiftShelfItem {
-  promotion_id: number;
+  /**
+   * 货架上两样东西：
+   *   - `promotion` 礼包活动（有名额池、一个活动一个仓）
+   *   - `referral_reward` 推荐奖励卡（**一人多张**，每张独立 `reward_id`）
+   */
+  type: "promotion" | "referral_reward";
+  /** `type='promotion'` 时有值 */
+  promotion_id: number | null;
+  /** `type='referral_reward'` 时有值；发放实例 id，不是活动 id */
+  reward_id: number | null;
   title: string;
   /** 角标（`badge_label`，可能与人群前缀拼在一起） */
   badge: string | null;
@@ -477,6 +398,8 @@ export interface GiftShelfItem {
 
 export interface GiftShelf {
   items: GiftShelfItem[];
+  /** 红点数字 = `items` 里 `state='available'` 的条数（契约 §2.9.8 ①） */
+  available_count: number;
   /** 列表为空时给用户看的话（内容由服务端决定，前端只渲染） */
   empty_text: string | null;
 }
@@ -526,11 +449,14 @@ export async function listGiftShelf(
 ): Promise<GiftShelf> {
   const deepLink = opts.promotionId ?? null;
 
-  // 货架 = **公开可见**的生效礼包。深链不会放开这个过滤 ——
-  // 否则一条 `visible=0` 的定向活动被拿链接猜出来就成了人人可见。
+  // 货架 = 公开可见的生效礼包 **+ 点名给这个人的**礼包。
+  // 后者只多放 `audience='specific'` 这一类，而且下面 `checkAllForCustomer` 会按名单
+  // 再判一次 —— 不在名单里的人查到了也不会出现，更领不了。
+  // 深链不放开这个过滤 —— 否则一条 `visible=0` 的活动被拿链接猜出来就成了人人可见。
   const rows = await env.DB.prepare(
     `SELECT ${PROMOTION_COLUMNS} FROM promotions
-      WHERE kind = 'gift' AND status = 'active' AND visible = 1
+      WHERE kind = 'gift' AND status = 'active'
+        AND (visible = 1 OR audience = 'specific')
       ORDER BY id DESC`,
   ).all<PromotionRow>();
   const promos = (rows.results ?? []).map(rowToPromotion);
@@ -547,39 +473,27 @@ export async function listGiftShelf(
   }
 
   const all = extra ? [...promos, extra] : promos;
-  if (!all.length) return { items: [], empty_text: "暂时没有可以领取的礼包" };
+  // 奖励卡与礼包同处一个货架：用户看到的都是"有东西可以领"
+  const cards = await listRewardCards(env, customerId);
 
   const ids = all.map((p) => p.id);
   const marks = ids.map(() => "?").join(",");
 
-  // 没有订阅的人能不能领，取决于礼包有没有**可用的载体套餐**（0 元开户）。
-  // 不预先算清楚，货架就会显示"可以领取"、点下去却说"需要先有套餐" ——
-  // 那种自相矛盾比不显示更伤信任。
-  const carrierIds = [...new Set(all.map((p) => p.plan_id).filter((v): v is string => Boolean(v)))];
-
-  const [checks, remaining, mine, sub, carriers] = await Promise.all([
+  const [checks, remaining, mine, sub] = await Promise.all([
     checkAllForCustomer(env, all, customerId, now),
     remainingOf(env, all),
     // 我领过哪些（**只算已完成**：占位中不算"领过"）
-    env.DB.prepare(
-      `SELECT promotion_id, settled_at FROM redemptions
-        WHERE customer_id = ? AND promotion_id IN (${marks}) AND settled_at IS NOT NULL
-        ORDER BY id DESC`,
-    )
-      .bind(customerId, ...ids)
-      .all<{ promotion_id: number; settled_at: string }>(),
-    customerSubscription(env, customerId),
-    carrierIds.length
+    ids.length
       ? env.DB.prepare(
-          `SELECT id FROM plans
-            WHERE id IN (${carrierIds.map(() => "?").join(",")})
-              AND visibility = 'hidden' AND status = 'active' AND kind <> 'addon'`,
+          `SELECT promotion_id, settled_at FROM redemptions
+            WHERE customer_id = ? AND promotion_id IN (${marks}) AND settled_at IS NOT NULL
+            ORDER BY id DESC`,
         )
-          .bind(...carrierIds)
-          .all<{ id: string }>()
-      : Promise.resolve({ results: [] as { id: string }[] }),
+          .bind(customerId, ...ids)
+          .all<{ promotion_id: number; settled_at: string }>()
+      : Promise.resolve({ results: [] as { promotion_id: number; settled_at: string }[] }),
+    customerSubscription(env, customerId),
   ]);
-  const usableCarrier = new Set((carriers.results ?? []).map((r) => r.id));
 
   const claimedAt = new Map<number, string>();
   for (const r of mine.results ?? []) claimedAt.set(r.promotion_id, r.settled_at);
@@ -591,7 +505,9 @@ export async function listGiftShelf(
     const claimedOn = claimedAt.get(promo.id);
     const action = `/me/gifts/${promo.id}/claim`;
     const base: Omit<GiftShelfItem, "state" | "status_text" | "claimable"> = {
+      type: "promotion",
       promotion_id: promo.id,
+      reward_id: null,
       title: promo.name,
       badge: promo.badge_label,
       rewards_text: rewardsText(promo.rewards),
@@ -618,9 +534,8 @@ export async function listGiftShelf(
     }
 
     // 3) 资格（人群 / 时间窗 / 冷却）+ 适用性
-    const applicable = sub
-      ? hasRewards(applicableRewards(sub, promo.rewards))
-      : Boolean(promo.plan_id && usableCarrier.has(promo.plan_id));
+    // v23：没有订阅 ⇒ 收不下 —— **不要**显示"可以领取"再点下去才说不行。
+    const applicable = sub ? hasRewards(applicableRewards(sub, promo.rewards)) : false;
     const blocked = !check?.ok
       ? blockText(promo, check?.reason ?? STATE_TEXT.not_found, now)
       : !applicable
@@ -641,5 +556,154 @@ export async function listGiftShelf(
     });
   }
 
-  return { items, empty_text: items.length ? null : "暂时没有可以领取的礼包" };
+  // ── 推荐奖励卡（§2.9.9）：与礼包并排，用户不用去第二个入口找 ──
+  for (const card of cards) {
+    const snap = parseSnapshot(card.promotion_snapshot);
+    const claimed = card.state === "claimed";
+    const granted = parseRewards(claimed ? card.granted_json : card.rewards_json);
+    items.push({
+      type: "referral_reward",
+      promotion_id: null,
+      reward_id: card.id,
+      title: snap.name ?? "好友已付款",
+      badge: snap.badge ?? null,
+      // 已领的显示**实际到账**（不限量只收得下天数时，会比配置少）
+      rewards_text: rewardsText(granted),
+      state: claimed ? "claimed" : "available",
+      status_text: claimed
+        ? `已领取（${(card.claimed_at ?? "").slice(0, 10)}）`
+        : "好友已完成付款，可以领取",
+      remaining: null,
+      ends_at: null,
+      claimable: !claimed,
+      claim_action: `/me/rewards/${card.id}/claim`,
+    });
+  }
+
+  return {
+    items,
+    available_count: items.filter((i) => i.state === "available").length,
+    empty_text: items.length ? null : "暂时没有可以领取的礼包",
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 推荐奖励卡（§2.9.9）—— 与礼包共用同一段发放代码
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 卡上的活动快照（`{name,badge,rewards}`）；坏数据不抛错，当作空快照 */
+function parseSnapshot(json: string | null): { name: string | null; badge: string | null } {
+  if (!json) return { name: null, badge: null };
+  try {
+    const v = JSON.parse(json) as { name?: unknown; badge?: unknown };
+    return {
+      name: typeof v.name === "string" ? v.name : null,
+      badge: typeof v.badge === "string" ? v.badge : null,
+    };
+  } catch {
+    return { name: null, badge: null };
+  }
+}
+
+/** `{days,gb}` 的宽容读取：缺字段按 0，负数归 0 */
+function parseRewards(json: string | null): GiftRewards {
+  if (!json) return EMPTY_REWARDS;
+  try {
+    const v = JSON.parse(json) as { days?: unknown; gb?: unknown };
+    const days = typeof v.days === "number" && v.days > 0 ? v.days : 0;
+    const gb = typeof v.gb === "number" && v.gb > 0 ? v.gb : 0;
+    return { days, gb };
+  } catch {
+    return EMPTY_REWARDS;
+  }
+}
+
+/** 领取结果 + 卡 id（前端据此判断"领的是哪张"） */
+export interface RewardClaimResult extends GiftClaimResult {
+  reward_id: number | null;
+}
+
+/**
+ * **领一张推荐奖励卡**（`POST /me/rewards/{reward_id}/claim`）。
+ *
+ * 与 `claimGiftFor` 的区别只有三处（契约 §2.9.9 ③）：
+ *   - 路径参数是**发放实例 id**，不是活动 id（一人可以有多张卡）；
+ *   - 没有名额概念，所以**没有** `sold_out`；
+ *   - 不写 `redemptions`（不占活动名额），凭证是卡本身 + `subscription_changes`。
+ */
+export async function claimRewardCard(
+  env: Env,
+  opts: { rewardId: number; customerId: number; now?: Date },
+): Promise<RewardClaimResult> {
+  const now = opts.now ?? new Date();
+
+  const card = await findRewardCard(env, opts.rewardId, opts.customerId);
+  // 不是自己的卡 ⇒ 一律当不存在：用 403 区分等于告诉别人"这张卡存在"
+  if (!card) return { ...claimResult("not_found", STATE_TEXT.not_found), reward_id: null };
+
+  const snap = parseSnapshot(card.promotion_snapshot);
+  const title = snap.name ?? "好友已付款";
+  const withId = (r: GiftClaimResult): RewardClaimResult => ({ ...r, reward_id: card.id });
+
+  if (card.state === "claimed") {
+    return withId(
+      claimResult("already_claimed", `这张奖励卡已经领过了（${(card.claimed_at ?? "").slice(0, 10)}）`, {
+        title,
+      }),
+    );
+  }
+
+  const before = await customerSubscription(env, opts.customerId);
+  if (!before) {
+    return withId(claimResult("not_eligible", "需要先有套餐才能领取这份奖励", { title }));
+  }
+
+  const applied = applicableRewards(before, parseRewards(card.rewards_json));
+  if (!hasRewards(applied)) {
+    return withId(claimResult("not_applicable", STATE_TEXT.not_applicable, { title }));
+  }
+
+  // 占位：一条 UPDATE 完成"判状态 + 占位"，防两个设备同时点发两份
+  if (!(await takeRewardCard(env, card.id, now))) {
+    return withId(claimResult("busy", STATE_TEXT.busy, { title }));
+  }
+
+  // 送 GB 必须落在**平台真实剩余**上（同礼包的规矩）
+  let platformRemainingGb: number | undefined;
+  if (applied.gb > 0 && before.platform_customer_id) {
+    const fresh = await freshenTraffic(env, before);
+    if (!fresh || fresh.traffic_remaining_gb === null) {
+      await releaseRewardCard(env, card.id);
+      return withId(
+        claimResult("not_applicable", "平台的剩余流量暂时读不到，这张卡稍后再领", { title }),
+      );
+    }
+    platformRemainingGb = fresh.traffic_remaining_gb;
+  }
+
+  try {
+    const result = await applyToSubscription(env, {
+      before,
+      applied,
+      promo: { id: card.promotion_id, name: title },
+      redemptionId: null,
+      platformRemainingGb,
+      now,
+    });
+
+    await settleRewardCard(env, card.id, { granted: result.applied, now });
+
+    return withId({
+      state: "granted",
+      message: `已到账：${rewardsText(result.applied)}`,
+      title,
+      applied: result.applied,
+      expires_at: result.after.expires_at,
+      redemption_id: null,
+    });
+  } catch (e) {
+    // 没发完 ⇒ 还回去，否则这张卡要卡到 5 分钟后才可能被接管
+    await releaseRewardCard(env, card.id);
+    throw e;
+  }
 }
