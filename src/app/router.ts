@@ -34,7 +34,7 @@ import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient } from "../plans/model";
 import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
-import { claimGiftFor, listGiftShelf } from "../promotions/gift";
+import { claimGiftFor, claimRewardCard, listGiftShelf } from "../promotions/gift";
 import { listTimeline } from "../subscriptions/timeline";
 import { orderListView } from "../orders/view";
 import { bindReferral, referralPanel } from "../promotions/referral";
@@ -299,6 +299,21 @@ function subscriptionTag(
   if (sub.trial) return { tag: "试用已结束", tag_tone: "muted" };
   const label = state.reason === "exhausted" ? "流量用尽" : state.reason === "frozen" ? "已暂停" : "已过期";
   return { tag: label, tag_tone: "muted" };
+}
+
+/**
+ * 领取接口返回的 `remaining_gb`（契约 §2.9.8 ②）：
+ * 成功才查，失败给 null —— 复用 `subscriptionView` 的口径，不另算一份。
+ */
+async function remainingAfterClaim(
+  env: Env,
+  customerId: number,
+  granted: boolean,
+): Promise<number | null> {
+  if (!granted) return null;
+  const view = subscriptionView(await customerSubscription(env, customerId));
+  const v = view.remaining_gb;
+  return typeof v === "number" ? v : null;
 }
 
 function subscriptionView(sub: Subscription | null): Record<string, unknown> {
@@ -593,10 +608,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
       subscription: subscriptionView(sub),
       // 邀请面板：官网与 App 共用（§2.9.3）。不需要邀请功能的客户端忽略即可
       referral: await referralPanel(env, customer.id),
-      // 有几个礼包现在能领（App 拿它做红点，省掉一次列表请求）
-      pending_gifts: (await listGiftShelf(env, customer.id, new Date())).items.filter(
-        (i) => i.claimable,
-      ).length,
+      // ⚠️ 这里**不给**礼包红点：红点只有一个来源 `GET /me/gifts.available_count`
+      // （契约 §2.3：它是礼包的属性，放两处等于把同一份资格判定算两遍）
     });
   }
 
@@ -648,6 +661,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
       promotionId: Number(claimOne[1]),
     });
     if (result.state === "not_found") return err(404, "promotion_not_found");
+    // 并发占位不是业务结论：它的语义是"稍后再试"，走 409（契约 §2.9.8 ②）
+    if (result.state === "busy") return err(409, "claim_busy");
     return json({
       ok: result.state === "granted",
       state: result.state,
@@ -657,6 +672,31 @@ async function route(request: Request, env: Env, path: string, method: string): 
       title: result.title,
       applied: result.applied,
       expires_at: result.expires_at ?? null,
+      remaining_gb: await remainingAfterClaim(env, customer.id, result.state === "granted"),
+    });
+  }
+
+  // ── 推荐奖励卡领取（契约 §2.9.9 ②）──
+  //  请求/响应形状与礼包领取**完全一致**，客户端复用同一个弹窗。
+  //  差别只有三处：路径参数是**发放实例 id**、没有 sold_out、不占活动名额。
+  const claimReward = path.match(/^\/me\/rewards\/(\d+)\/claim$/);
+  if (method === "POST" && claimReward) {
+    if (!customer) return err(401, "unauthorized");
+    const result = await claimRewardCard(env, {
+      customerId: customer.id,
+      rewardId: Number(claimReward[1]),
+    });
+    if (result.state === "not_found") return err(404, "not_found");
+    if (result.state === "busy") return err(409, "claim_busy");
+    return json({
+      ok: result.state === "granted",
+      state: result.state,
+      result_text:
+        result.state === "granted" ? `${result.message}，可以在「我的订阅」里看到` : result.message,
+      title: result.title,
+      applied: result.applied,
+      expires_at: result.expires_at ?? null,
+      remaining_gb: await remainingAfterClaim(env, customer.id, result.state === "granted"),
     });
   }
 

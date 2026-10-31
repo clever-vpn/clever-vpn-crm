@@ -38,6 +38,10 @@
   .kv { display:grid; grid-template-columns:120px 1fr; gap:4px 12px; font-size:13px; }
   .kv dt { color:var(--dim); }
   .kv dd { margin:0; }
+  .gift { border:1px solid var(--border); border-radius:var(--radius); padding:12px; display:grid; gap:6px; }
+  .gift .title { font-weight:600; }
+  .gift.claimed { opacity:.6; }
+  .dot { background:var(--bad); color:#fff; border-radius:999px; font-size:11px; padding:1px 7px; }
   .err { background:#fef2f2; color:var(--bad); border:1px solid #fecaca; border-radius:8px; padding:10px; }
   .ok { background:#f0fdf4; color:var(--ok); border:1px solid #bbf7d0; border-radius:8px; padding:10px; }
 </style>
@@ -49,6 +53,7 @@
     <input id="base" type="text" value="https://crm.clever-vpn.org" />
   </label>
   <span id="who" class="hint"></span>
+  <span id="dot" class="dot" hidden></span>
   <button id="logout" class="ghost" hidden>退出登录</button>
 </header>
 
@@ -111,6 +116,17 @@
       <button id="redeem-btn" type="button">兑换</button>
     </div>
     <pre id="redeem-out" class="out" style="margin-top:10px"></pre>
+  </section>
+
+  <section class="card" id="gifts-card" hidden>
+    <h2>7 · 礼包货架 <code>GET /me/gifts</code>（契约 §2.9.8 / §2.9.9）</h2>
+    <p class="hint" style="margin:0 0 10px">
+      礼包与推荐奖励卡**同一个列表**：<code>type</code> 区分，<code>state</code> /
+      <code>status_text</code> / <code>claim_action</code> 全部由 CRM 给，页面只画。
+      红点只认 <code>available_count</code>（不从 <code>/me</code> 拿）。
+    </p>
+    <div id="gifts" class="plans"></div>
+    <pre id="gift-out" class="out" style="margin-top:10px"></pre>
   </section>
 
 </main>
@@ -297,7 +313,8 @@ async function redeem() {
     if (res.status === 429) {
       flash('err', `被限流：${data.message ?? ''}（Retry-After: ${res.headers.get('retry-after') ?? '—'}s）`);
     } else if (data.ok) {
-      flash('ok', `兑换成功：${data.promotion_name}${data.opened ? '（本次用体验套餐开户）' : ''}`);
+      // v23 删除了 `opened`（不再用载体套餐 0 元开户）
+      flash('ok', `兑换成功：${data.promotion_name ?? ''}`);
       $('redeem-code').value = '';
       await loadMe();
     } else {
@@ -314,6 +331,78 @@ $('redeem-btn').addEventListener('click', redeem);
 $('redeem-code').addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter') redeem();
 });
+
+/** 货架：礼包 + 推荐奖励卡（契约 §2.9.8 ①、§2.9.9 ①） */
+async function loadGifts() {
+  if (!state.token) { show('gifts-card', false); $('dot').hidden = true; return; }
+  try {
+    const shelf = await call('GET', '/me/gifts');
+    state.shelf = shelf;
+    show('gifts-card', true);
+
+    // 红点只有一个来源：available_count
+    $('dot').hidden = !shelf.available_count;
+    $('dot').textContent = String(shelf.available_count);
+
+    const box = $('gifts');
+    if (!shelf.items.length) {
+      box.innerHTML = `<p class="hint">${shelf.empty_text ?? '暂时没有可以领取的礼包'}</p>`;
+      return;
+    }
+    box.innerHTML = '';
+    for (const it of shelf.items) {
+      const el = document.createElement('div');
+      el.className = 'gift' + (it.state === 'available' ? '' : ' claimed');
+      const kind = it.type === 'referral_reward' ? '推荐奖励' : '礼包';
+      el.innerHTML = `
+        <div class="row" style="justify-content:space-between">
+          <span class="title">${it.title}</span>
+          <span class="badge">${kind}</span>
+        </div>
+        <div class="row" style="gap:6px">
+          <span class="badge">${it.rewards_text}</span>
+          ${it.badge ? `<span class="badge">${it.badge}</span>` : ''}
+          ${it.remaining !== null && it.remaining !== undefined ? `<span class="badge">还剩 ${it.remaining} 份</span>` : ''}
+          ${it.ends_at ? `<span class="badge">至 ${String(it.ends_at).slice(0, 10)}</span>` : ''}
+        </div>
+        <div class="meta hint">${it.status_text}</div>
+        ${it.claimable ? `<div class="row"><button data-claim="${it.claim_action}">领取</button></div>` : ''}
+      `;
+      box.appendChild(el);
+    }
+    box.querySelectorAll('button[data-claim]').forEach((btn) => {
+      btn.addEventListener('click', () => claim(btn.dataset.claim));
+    });
+  } catch (e) {
+    flash('err', e.message);
+  }
+}
+
+/**
+ * 领一个（礼包或奖励卡）—— 同一个函数：两者的响应形状**完全一致**（契约 §2.9.9 ②）。
+ * 业务性失败是 `200 + ok:false + state + result_text`；只有"不存在/并发占位"是 404/409。
+ */
+async function claim(path) {
+  const out = $('gift-out');
+  out.textContent = '请求中…';
+  try {
+    const res = await fetch(`${base()}/api/app/v1${path}`, {
+      method: 'POST',
+      headers: state.token ? { authorization: `Bearer ${state.token}` } : {},
+    });
+    const data = await res.json().catch(() => ({}));
+    out.textContent = `${res.status} ${res.statusText}\n${JSON.stringify(data, null, 2)}`;
+    if (res.ok && data.ok) flash('ok', data.result_text ?? '已到账');
+    else if (res.status === 409) flash('err', `正在发放中（${data.error?.message ?? '稍后再试'}）`);
+    else if (res.status === 404) flash('err', '这个礼包已经不在了');
+    else flash('err', data.result_text ?? data.error?.message ?? '领不了');
+    await loadGifts();
+    if (data.ok) await loadMe(); // 权益变了，刷新订阅
+  } catch (e) {
+    out.textContent = String(e);
+    flash('err', e.message);
+  }
+}
 
 async function loadMe() {
   if (!state.token) { show('me-card', false); show('plans-card', false); show('redeem-card', false); return; }
@@ -351,6 +440,7 @@ async function loadMe() {
     show('plans-card', true);
     renderPlans(plans);
     await loadMethods().catch(() => {});
+    await loadGifts(); // 货架与红点（`available_count` 是唯一来源）
   } catch (e) {
     flash('err', e.message);
     if (/unauthorized/i.test(e.message) || /401/.test(e.message)) doLogout();
@@ -364,6 +454,7 @@ function doLogout() {
   $('who').textContent = '';
   $('logout').hidden = true;
   show('login-card', true); show('plans-card', false); show('me-card', false); show('quote-card', false);
+  show('gifts-card', false); show('pay-card', false); $('dot').hidden = true;
 }
 
 $('send').addEventListener('click', async () => {
