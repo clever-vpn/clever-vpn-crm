@@ -136,6 +136,11 @@ const $ = (id) => document.getElementById(id);
 const state = { token: sessionStorage.getItem('app_session') || '' };
 const base = () => $('base').value.replace(/\/+$/, '');
 
+// 记住上一次填的 CRM 源：刷新页面不该把地址丢掉（换成本地调试时最烦这一点）
+const savedBase = localStorage.getItem('app_base');
+if (savedBase) $('base').value = savedBase;
+$('base').addEventListener('change', () => localStorage.setItem('app_base', base()));
+
 function flash(kind, text) {
   $('flash').innerHTML = text ? `<div class="${kind}">${text}</div>` : '';
 }
