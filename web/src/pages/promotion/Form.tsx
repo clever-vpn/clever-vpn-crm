@@ -100,6 +100,8 @@ export function emptyDraft(kind: PromotionKind): PromotionDraft {
     visible: true,
     referrer_reward_type: kind === "referral" ? "days" : null,
     referrer_reward_value: kind === "referral" ? 7 : null,
+    referee_reward_type: kind === "referral" ? "none" : null,
+    referee_reward_value: kind === "referral" ? 0 : null,
   };
 }
 
@@ -528,6 +530,36 @@ export function PromotionForm({
                   <input
                     value={draft.referrer_reward_value ?? 0}
                     onChange={(e) => patch({ referrer_reward_value: Number(e.target.value) || 0 })}
+                  />
+                </Field>
+              )}
+            </Section>
+          )}
+
+          {/* ── 被邀请人奖励 ── */}
+          {isReferral && (
+            <Section
+              title="被邀请人拿什么"
+              hint="同样只给权益（他自己在货架上领）；邀请**不产生折扣** —— 否则用户没动手、金额就变了"
+            >
+              <Field label="奖励类型">
+                <select
+                  value={draft.referee_reward_type ?? "none"}
+                  onChange={(e) => {
+                    const type = e.target.value as "days" | "gb" | "none";
+                    patch({ referee_reward_type: type, referee_reward_value: type === "none" ? 0 : 3 });
+                  }}
+                >
+                  <option value="none">不给奖励</option>
+                  <option value="days">送天数</option>
+                  <option value="gb">送流量</option>
+                </select>
+              </Field>
+              {draft.referee_reward_type !== "none" && (
+                <Field label={draft.referee_reward_type === "gb" ? "送多少 GB" : "送多少天"}>
+                  <input
+                    value={draft.referee_reward_value ?? 0}
+                    onChange={(e) => patch({ referee_reward_value: Number(e.target.value) || 0 })}
                   />
                 </Field>
               )}

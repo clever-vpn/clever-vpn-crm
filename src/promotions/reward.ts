@@ -22,7 +22,10 @@ export type RewardCardState = "pending" | "claiming" | "claimed";
 /** 读卡时的行（够渲染货架 + 决定能不能领） */
 export interface RewardCardRow {
   id: number;
+  /** 卡的主人（列名沿用历史 `referrer_id`） */
   referrer_id: number;
+  /** referrer | referee */
+  role: string;
   promotion_id: number;
   rewards_json: string;
   promotion_snapshot: string | null;
@@ -48,7 +51,10 @@ export async function createRewardCard(
   env: Env,
   opts: {
     referralId: number;
-    referrerId: number;
+    /** 卡给谁 */
+    beneficiaryId: number;
+    /** referrer = 推荐人，referee = 被邀请人 */
+    role: "referrer" | "referee";
     promotionId: number;
     rewards: GiftRewards;
     promotionName?: string | null;
@@ -65,13 +71,14 @@ export async function createRewardCard(
 
   const res = await env.DB.prepare(
     `INSERT INTO referral_rewards
-       (referral_id, referrer_id, promotion_id, rewards_json, promotion_snapshot, state, created_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?)
-     ON CONFLICT (referral_id) DO NOTHING`,
+       (referral_id, referrer_id, role, promotion_id, rewards_json, promotion_snapshot, state, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+     ON CONFLICT (referral_id, role) DO NOTHING`,
   )
     .bind(
       opts.referralId,
-      opts.referrerId,
+      opts.beneficiaryId,
+      opts.role,
       opts.promotionId,
       JSON.stringify(opts.rewards),
       snapshot,
@@ -82,8 +89,10 @@ export async function createRewardCard(
   const changed = Number(res.meta?.changes ?? 0);
   if (changed === 0) return null;
 
-  const row = await env.DB.prepare(`SELECT id FROM referral_rewards WHERE referral_id = ?`)
-    .bind(opts.referralId)
+  const row = await env.DB.prepare(
+    `SELECT id FROM referral_rewards WHERE referral_id = ? AND role = ?`,
+  )
+    .bind(opts.referralId, opts.role)
     .first<{ id: number }>();
   return row?.id ?? null;
 }
@@ -95,7 +104,7 @@ export async function listRewardCards(
   limit = 50,
 ): Promise<RewardCardRow[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, referrer_id, promotion_id, rewards_json, promotion_snapshot,
+    `SELECT id, referrer_id, role, promotion_id, rewards_json, promotion_snapshot,
             state, claiming_at, claimed_at, granted_json, created_at
        FROM referral_rewards
       WHERE referrer_id = ?
@@ -114,7 +123,7 @@ export async function findRewardCard(
   customerId: number,
 ): Promise<RewardCardRow | null> {
   const row = await env.DB.prepare(
-    `SELECT id, referrer_id, promotion_id, rewards_json, promotion_snapshot,
+    `SELECT id, referrer_id, role, promotion_id, rewards_json, promotion_snapshot,
             state, claiming_at, claimed_at, granted_json, created_at
        FROM referral_rewards
       WHERE id = ? AND referrer_id = ?`,

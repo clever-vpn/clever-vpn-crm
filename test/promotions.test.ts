@@ -45,6 +45,8 @@ function promo(over: Partial<Promotion> = {}): Promotion {
     visible: true,
     referrer_reward_type: null,
     referrer_reward_value: null,
+    referee_reward_type: null,
+    referee_reward_value: null,
     status: "active",
     ...over,
   };

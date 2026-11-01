@@ -148,6 +148,15 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   if (kind === "referral" && rewardType !== "none" && !(rewardValue > 0)) {
     errors.push("推荐人奖励必须 > 0（days 或 gb）");
   }
+  // 被邀请人同样只送**权益**（不打折）：折扣会变成"用户没动手、金额就变了"（契约 §2.9.3）
+  const refereeRewardType = str(input.referee_reward_type) || "none";
+  if (!["days", "gb", "none"].includes(refereeRewardType)) {
+    errors.push("referee_reward_type 只能是 days / gb / none");
+  }
+  const refereeRewardValue = num(input.referee_reward_value) ?? 0;
+  if (kind === "referral" && refereeRewardType !== "none" && !(refereeRewardValue > 0)) {
+    errors.push("被邀请人奖励必须 > 0（days 或 gb）");
+  }
 
   // ── 站内展示（契约 §2.9.3，v19）──
   // 自动券没有码、没有入口，定价页是它**唯一**的曝光位：不写角标等于隐形券。
@@ -188,6 +197,9 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
       visible: visible ? 1 : 0,
       referrer_reward_type: kind === "referral" ? rewardType : null,
       referrer_reward_value: kind === "referral" && rewardType !== "none" ? rewardValue : null,
+      referee_reward_type: kind === "referral" ? refereeRewardType : null,
+      referee_reward_value:
+        kind === "referral" && refereeRewardType !== "none" ? refereeRewardValue : null,
     },
   };
 }
@@ -215,6 +227,8 @@ interface PromotionInput {
   visible: number;
   referrer_reward_type: string | null;
   referrer_reward_value: number | null;
+  referee_reward_type: string | null;
+  referee_reward_value: number | null;
 }
 
 async function insertPromotion(env: Env, input: PromotionInput, status: "draft" | "active"): Promise<number> {
@@ -224,8 +238,9 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
        limit_plan_kinds, limit_plan_ids, rewards_json, notify,
        audience, audience_days, cooldown_hours,
        new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer, badge_label, visible,
-       referrer_reward_type, referrer_reward_value, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       referrer_reward_type, referrer_reward_value, referee_reward_type, referee_reward_value,
+       status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       input.auto_apply ? 1 : 0, input.name, input.kind, input.benefit_type, input.benefit_value,
@@ -235,7 +250,8 @@ async function insertPromotion(env: Env, input: PromotionInput, status: "draft" 
       input.audience, input.audience_days, input.cooldown_hours,
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
-      input.referrer_reward_type, input.referrer_reward_value, status, now, now,
+      input.referrer_reward_type, input.referrer_reward_value,
+      input.referee_reward_type, input.referee_reward_value, status, now, now,
     )
     .run();
   return Number(res.meta.last_row_id ?? 0);
@@ -248,7 +264,8 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
        notify = ?,
        audience = ?, audience_days = ?, cooldown_hours = ?,
        new_user_within_days = ?, starts_at = ?, ends_at = ?, max_uses = ?, max_uses_per_customer = ?,
-       badge_label = ?, visible = ?, referrer_reward_type = ?, referrer_reward_value = ?, updated_at = ?
+       badge_label = ?, visible = ?, referrer_reward_type = ?, referrer_reward_value = ?,
+       referee_reward_type = ?, referee_reward_value = ?, updated_at = ?
      WHERE id = ?`,
   )
     .bind(
@@ -260,6 +277,7 @@ async function updatePromotion(env: Env, id: number, input: PromotionInput): Pro
       input.new_user_within_days, input.starts_at, input.ends_at, input.max_uses,
       input.max_uses_per_customer, input.badge_label, input.visible,
       input.referrer_reward_type, input.referrer_reward_value,
+      input.referee_reward_type, input.referee_reward_value,
       new Date().toISOString(), id,
     )
     .run();
@@ -299,6 +317,8 @@ function view(
     visible: promo.visible,
     referrer_reward_type: promo.referrer_reward_type,
     referrer_reward_value: promo.referrer_reward_value,
+    referee_reward_type: promo.referee_reward_type,
+    referee_reward_value: promo.referee_reward_value,
     status: promo.status,
     ...(uses === undefined ? {} : { uses }),
     ...(codeStats ? { code_stats: codeStats } : {}),

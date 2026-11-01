@@ -97,6 +97,8 @@ export interface Promotion {
   visible: boolean;
   referrer_reward_type: RewardType | null;
   referrer_reward_value: number | null;
+  referee_reward_type: RewardType | null;
+  referee_reward_value: number | null;
   status: PromotionStatus;
 }
 
@@ -124,6 +126,8 @@ export interface PromotionRow {
   visible: number;
   referrer_reward_type: string | null;
   referrer_reward_value: number | null;
+  referee_reward_type: string | null;
+  referee_reward_value: number | null;
   status: string;
 }
 
@@ -131,7 +135,8 @@ export const PROMOTION_COLUMNS = `id, auto_apply, name, kind, benefit_type, bene
   notify,
   min_subtotal_minor, limit_plan_kinds, limit_plan_ids, audience, audience_days,
   cooldown_hours, new_user_within_days, starts_at, ends_at, max_uses, max_uses_per_customer,
-  badge_label, visible, referrer_reward_type, referrer_reward_value, status`;
+  badge_label, visible, referrer_reward_type, referrer_reward_value,
+  referee_reward_type, referee_reward_value, status`;
 
 function parseJsonArray(raw: string): string[] {
   try {
@@ -187,6 +192,8 @@ export function rowToPromotion(row: PromotionRow): Promotion {
     visible: row.visible === 1,
     referrer_reward_type: (row.referrer_reward_type as RewardType | null) ?? null,
     referrer_reward_value: row.referrer_reward_value,
+    referee_reward_type: (row.referee_reward_type as RewardType | null) ?? null,
+    referee_reward_value: row.referee_reward_value,
     status: row.status === "active" ? "active" : row.status === "ended" ? "ended" : "draft",
   };
 }

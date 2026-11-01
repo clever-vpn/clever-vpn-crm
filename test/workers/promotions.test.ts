@@ -243,16 +243,18 @@ beforeAll(async () => {
   adminCookie = (loginRes.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
   expect(adminCookie).toContain("crm_admin=");
 
-  // 邀请活动：被邀请人首单减 5 元，推荐人得 7 天。
+  // 邀请活动：双方各得权益（推荐人 7 天、被邀请人 3 天），**不打折**。
   // 注意**不给 code** —— 关系层靠 `customers.referral_code`，不靠促销码。
   await createPromotion({
     name: "邀请好友",
     kind: "referral",
     benefit_type: "amount",
-    benefit_value: 500,
+    benefit_value: 500, // 已不参与结算（保留字段只为兼容），见下面的断言
     audience: "new",
     referrer_reward_type: "days",
     referrer_reward_value: 7,
+    referee_reward_type: "days",
+    referee_reward_value: 3,
   });
 });
 
@@ -680,6 +682,43 @@ describe("邀请码（关系层）", () => {
     };
     expect(panel.referral.invited).toBe(1);
     expect(panel.referral.reward_days).toBe(7);
+
+    // ── 被邀请人那一半：也有一张卡（契约 §2.9.9 双方各一张）──
+    const friendId = await env.DB.prepare(`SELECT id FROM customers WHERE email = ?`)
+      .bind(FRIEND)
+      .first<{ id: number }>();
+    const friendCard = await env.DB.prepare(
+      `SELECT id, state, role, rewards_json FROM referral_rewards
+        WHERE referrer_id = ? AND role = 'referee'`,
+    )
+      .bind(friendId!.id)
+      .first<{ id: number; state: string; role: string; rewards_json: string }>();
+    expect(friendCard?.state).toBe("pending");
+    expect(JSON.parse(friendCard!.rewards_json)).toEqual({ days: 3, gb: 0 });
+
+    // 他自己在货架上领
+    const claimFriend = await appCall(
+      `/api/app/v1/me/rewards/${friendCard!.id}/claim`,
+      friendToken,
+      { method: "POST" },
+    );
+    expect(claimFriend.status).toBe(200);
+    const friendBody = (await claimFriend.json()) as { ok: boolean; state: string };
+    expect(friendBody.ok).toBe(true);
+  });
+
+  it("邀请**不参与结算**：被邀请人的报价里没有它", async () => {
+    // 这条是 §2.9.3 的直接推论：折扣只能来自券。邀请活动上即便配了 benefit_value，
+    // 也不该进 /quote 的 applied_promotions。
+    const token = await login("promo-invitee-quote@test.com", undefined);
+    const res = await appCall("/api/app/v1/quote", token, {
+      method: "POST",
+      body: { plan_id: "promo_30d" },
+    });
+    const q = (await res.json()) as {
+      applied_promotions: { name: string }[];
+    };
+    expect(q.applied_promotions.map((p) => p.name)).not.toContain("邀请好友");
   });
 });
 

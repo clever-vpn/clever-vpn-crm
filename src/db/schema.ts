@@ -649,6 +649,9 @@ export const promotions = sqliteTable(
     /** kind=referral：给推荐人的奖励类型 days | gb | none */
     referrer_reward_type: text("referrer_reward_type"),
     referrer_reward_value: real("referrer_reward_value"),
+    /** 被邀请人拿到的权益（同样只送天数 / 流量，不打折） */
+    referee_reward_type: text("referee_reward_type"),
+    referee_reward_value: real("referee_reward_value"),
     /** draft | active | ended */
     status: text("status").notNull().default("draft"),
     created_at: text("created_at").notNull(),
@@ -723,10 +726,15 @@ export const referralRewards = sqliteTable(
   "referral_rewards",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    /** 一条邀请关系只发一张卡（幂等的唯一来源） */
+    /** 一条邀请关系最多两张卡（推荐人 / 被邀请人各一张） */
     referral_id: integer("referral_id").notNull(),
-    /** 谁的卡 = 推荐人 */
+    /**
+     * 卡的主人。早期只有推荐人有卡，所以列名是 `referrer_id`；
+     * 现在双方各一张，这一列的含义是"发给谁"。
+     */
     referrer_id: integer("referrer_id").notNull(),
+    /** referrer | referee —— 与 `referral_id` 一起构成幂等键 */
+    role: text("role").notNull().default("referrer"),
     /** 兑现时用的礼包活动 */
     promotion_id: integer("promotion_id").notNull(),
     /** 这张卡**配置**值多少（`{days,gb}`），与"实际到账"可能不同 */
@@ -745,7 +753,7 @@ export const referralRewards = sqliteTable(
     created_at: text("created_at").notNull(),
   },
   (t) => [
-    uniqueIndex("uq_referral_rewards_referral").on(t.referral_id),
+    uniqueIndex("uq_referral_rewards_referral").on(t.referral_id, t.role),
     index("idx_referral_rewards_referrer").on(t.referrer_id),
   ],
 );

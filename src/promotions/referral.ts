@@ -206,39 +206,73 @@ export async function rewardReferrer(
       .bind(ref.promotion_id)
       .first<PromotionRow>()
     : null;
-  const type = (promo?.referrer_reward_type as ReferralReward["type"] | null) ?? "none";
-  const value = promo?.referrer_reward_value ?? 0;
+  const refType = (promo?.referrer_reward_type as ReferralReward["type"] | null) ?? "none";
+  const refValue = promo?.referrer_reward_value ?? 0;
+  const refereeType = (promo?.referee_reward_type as ReferralReward["type"] | null) ?? "none";
+  const refereeValue = promo?.referee_reward_value ?? 0;
 
-  if (type !== "days" && type !== "gb") {
-    await markRewarded(env, ref.id, "none", 0, now);
-    return { referrer_id: ref.referrer_id, type: "none", value: 0, applied: false };
-  }
-  if (!(value > 0)) {
-    await markRewarded(env, ref.id, type, 0, now);
-    return { referrer_id: ref.referrer_id, type, value: 0, applied: false };
-  }
+  /** 只认"天数 / 流量"两种权益，且必须 > 0 */
+  const rewardsOf = (t: ReferralReward["type"] | null, v: number) => {
+    if (t !== "days" && t !== "gb") return null;
+    if (!(v > 0)) return null;
+    return { days: t === "days" ? v : 0, gb: t === "gb" ? v : 0 };
+  };
 
-  // ── v23：不直接改推荐人的订阅，而是**发一张卡**让他自己来领（§2.9.9）──
+  const referrerRewards = rewardsOf(refType, refValue);
+  const refereeRewards = rewardsOf(refereeType, refereeValue);
+  const promotionId = ref.promotion_id ?? promo?.id ?? 0;
+  const meta = { promotionName: promo?.name ?? null, promotionBadge: promo?.badge_label ?? null };
+
+  // ── v23：**双方各发一张卡，自己来领**（契约 §2.9.9）──
   //
-  // 为什么不直接加：直接加有两个毛病 ——
-  //   1. 推荐人不知道发生了什么（权益悄悄变了）；
+  // 为什么不直接改订阅：直接加有两个毛病 ——
+  //   1. 用户不知道发生了什么（权益悄悄变了，没有"我去领一下"的爽感）；
   //   2. 绕过了礼包那套「这份订阅收不收得下」的判断，给不限量用户送 GB
   //      会把不限量写成"20GB 上限"（真实事故）。
-  const cardId = await createRewardCard(env, {
-    referralId: ref.id,
-    referrerId: ref.referrer_id,
-    // 来源活动：就是这条邀请关系命中的活动（`referrer_reward_*` 在它上面）
-    promotionId: ref.promotion_id ?? promo?.id ?? 0,
-    rewards: { days: type === "days" ? value : 0, gb: type === "gb" ? value : 0 },
-    promotionName: promo?.name ?? null,
-    promotionBadge: promo?.badge_label ?? null,
-    now,
-  });
+  //
+  // 为什么不再给被邀请人折扣：折扣是"用户没动手、金额就变了"，与 §2.9.3 的定价规则
+  // 冲突（而且会和"限新用户"的券打架）。邀请只送权益。
+  let createdAny = false;
+  if (referrerRewards) {
+    const cardId = await createRewardCard(env, {
+      referralId: ref.id,
+      beneficiaryId: ref.referrer_id,
+      role: "referrer",
+      promotionId,
+      rewards: referrerRewards,
+      ...meta,
+      now,
+    });
+    createdAny = cardId !== null;
+  }
+  if (refereeRewards) {
+    const cardId = await createRewardCard(env, {
+      referralId: ref.id,
+      beneficiaryId: opts.referredCustomerId,
+      role: "referee",
+      promotionId,
+      rewards: refereeRewards,
+      ...meta,
+      now,
+    });
+    createdAny = cardId !== null || createdAny;
+  }
 
   // 记下"已经发过卡"，让本函数对重复通知幂等（`referrals.rewarded_at IS NULL`）
-  await markRewarded(env, ref.id, type, value, now);
+  await markRewarded(
+    env,
+    ref.id,
+    referrerRewards ? refType : "none",
+    referrerRewards ? refValue : 0,
+    now,
+  );
 
   // 「好友已付款，去领取」这封提醒邮件本轮**不发**（契约 §2.9.9：可以发，发不出去
   // 不影响卡片）。等 `notices` 增加 reward_ready 类型时再接，别复用验证码/收据模板。
-  return { referrer_id: ref.referrer_id, type, value, applied: cardId !== null };
+  return {
+    referrer_id: ref.referrer_id,
+    type: referrerRewards ? refType : "none",
+    value: referrerRewards ? refValue : 0,
+    applied: createdAny,
+  };
 }
