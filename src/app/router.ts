@@ -694,7 +694,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
   // ── 兑换码（契约 §2.9.7）──
   //  业务性失败（码错 / 用完 / 冷却 / 没订阅）一律 200 + ok:false + reason，
-  //  与 /quote 的 allowed:false 同口径；只有猜码过频才是 429。
+  //  与 /quote 的 `action:"blocked"` 同口径；只有猜码过频才是 429。
   if (method === "POST" && path === "/redeem") {
     if (!customer) return err(401, "unauthorized");
     const body = await readBody(request);
@@ -747,7 +747,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
     return json({
       // 文案全部由 CRM 组织（标题/金额/状态句/建议轮询间隔）
       items: page.map((row) => orderListView(row, now)),
-      next_cursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
+      // 契约 §A.4：`cursor` 是**不透明字符串**，App 原样回传、不解析
+      next_cursor: hasMore ? String(page[page.length - 1]?.id ?? "") : null,
     });
   }
 
@@ -829,33 +830,48 @@ async function route(request: Request, env: Env, path: string, method: string): 
       discount_minor: promo.applied?.discount_minor ?? 0,
       discount_label: promo.applied?.label ?? null,
       applied_promotions: promo.applied
-        ? [{ code: promoCode || null, label: promo.applied.promotion.name }]
+        ? [
+            {
+              code: promoCode || null,
+              name: promo.applied.promotion.name,
+              discount_minor: promo.applied.discount_minor,
+            },
+          ]
         : [],
     };
-
-    if (!quote.allowed) return json({ ...base, allowed: false, reason: quote.reason, payable_minor: null });
-    // 用户**主动输入的码**不可用 ⇒ 明确拒绝。自动活动不适用则静默跳过（handler 里已过滤）
-    if (promo.error) {
-      return json({
-        ...base,
-        allowed: false,
-        reason: promo.error,
-        payable_minor: null,
-        discount_minor: 0,
-        discount_label: null,
-        applied_promotions: [],
-      });
-    }
 
     const payable = Math.max(
       0,
       plan.price_minor - (promo.applied?.discount_minor ?? 0) - (quote.residual_minor ?? 0),
     );
+
+    // 业务性不可买一律 **200 + action:"blocked"**（契约 §2.4.1 ②）：
+    // 没有 `allowed` 字段（它 ≡ action ∈ {buy,renewal,upgrade}），`reason` 给整句。
+    if (!quote.allowed) {
+      return json({ ...base, action: "blocked", reason: quote.reason, payable_minor: payable });
+    }
+    // 用户**主动输入的码**不可用 ⇒ 明确拒绝。自动活动不适用则静默跳过（handler 里已过滤）
+    if (promo.error) {
+      return json({
+        ...base,
+        action: "blocked",
+        reason: promo.error,
+        payable_minor: payable,
+        discount_minor: 0,
+        discount_label: null,
+        applied_promotions: [],
+      });
+    }
     // 0 元单走不通任何网关：宁可在报价这一步就说清楚
     if (payable <= 0) {
-      return json({ ...base, allowed: false, reason: "优惠已抵扣全部金额，请选择其他套餐", payable_minor: null });
+      return json({
+        ...base,
+        action: "blocked",
+        reason: "优惠已抵扣全部金额，请选择其他套餐",
+        payable_minor: 0,
+      });
     }
-    return json({ ...base, allowed: true, reason: null, payable_minor: payable });
+    return json({ ...base, reason: null, payable_minor: payable });
   }
 
   // ── 下单：一次支付尝试（见 docs/payments.md §2）──

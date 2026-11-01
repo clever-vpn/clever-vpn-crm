@@ -156,7 +156,7 @@ export async function listTimeline(
   env: Env,
   customerId: number,
   opts: { cursor?: number; limit?: number } = {},
-): Promise<{ items: TimelineItem[]; next_cursor: number | null }> {
+): Promise<{ items: TimelineItem[]; next_cursor: string | null }> {
   const limit = Math.min(50, Math.max(1, opts.limit ?? 20));
   const cursor = opts.cursor && opts.cursor > 0 ? opts.cursor : 0;
   const marks = TIMELINE_ACTIONS.map(() => "?").join(",");
@@ -178,5 +178,6 @@ export async function listTimeline(
   const all = (rows.results ?? []).map(renderChange).filter((x): x is TimelineItem => x !== null);
   const hasMore = all.length > limit;
   const items = hasMore ? all.slice(0, limit) : all;
-  return { items, next_cursor: hasMore ? (items[items.length - 1]?.id ?? null) : null };
+  // 契约 §A.4：不透明字符串（App 原样回传，不解析、不比较大小）
+  return { items, next_cursor: hasMore ? String(items[items.length - 1]?.id ?? "") : null };
 }

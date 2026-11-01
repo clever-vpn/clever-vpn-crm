@@ -82,8 +82,8 @@ async function payMonthly(token: string): Promise<void> {
     method: "POST",
     body: { plan_id: "notice_30d" },
   });
-  const q = (await quote.json()) as { allowed: boolean; payable_minor: number | null };
-  expect(q.allowed).toBe(true);
+  const q = (await quote.json()) as { action: string; payable_minor: number | null };
+  expect(q.action).not.toBe("blocked");
   const created = await appCall("/api/app/v1/orders", token, {
     method: "POST",
     body: {
