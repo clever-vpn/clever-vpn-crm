@@ -55,6 +55,8 @@ export interface PayableOrder {
   payment_method: string;
   gateway_id: number | null;
   status: string;
+  /** `purchase`（真实售卖）｜`signup`（注册赠送）｜`test`（后台验网关） */
+  source: string;
   provider_order_no: string | null;
   created_at: string;
   updated_at: string;
@@ -64,7 +66,7 @@ export interface PayableOrder {
 
 /** `SELECT ${PAYABLE_COLUMNS}` —— 与 `PayableOrder` 一一对应 */
 export const PAYABLE_COLUMNS = `id, code, customer_id, plan_id, plan_snapshot, amount_minor,
-  discount_minor, promotion_id, code_id, currency, payment_method, gateway_id, status,
+  discount_minor, promotion_id, code_id, currency, payment_method, gateway_id, status, source,
   provider_order_no, created_at, updated_at, expires_at`;
 
 type OrderRow = Omit<PayableOrder, "provider_order_no" | "created_at" | "updated_at" | "expires_at"> & {
@@ -123,6 +125,19 @@ export async function settlePaidOrder(
   raw: string,
   now: Date = new Date(),
 ): Promise<void> {
+  // 测试单：**只认钱、不发权益**。它存在的意义是验收"这条网关能不能收钱"，
+  // 所以确认到账后直接落 `paid`，不进 `provisioning`、不碰订阅。
+  if (order.source === "test") {
+    await env.DB.prepare(
+      `UPDATE orders SET status = 'paid', paid_at = ?, provider_trade_no = ?, raw_notify = ?,
+         subscription_id = NULL, updated_at = ?
+        WHERE id = ? AND status IN ('pending', 'expired')`,
+    )
+      .bind(now.toISOString(), tradeNo, raw, now.toISOString(), order.id)
+      .run();
+    return;
+  }
+
   const plan = JSON.parse(order.plan_snapshot) as Plan;
 
   // 先标 paid：即使下面发放失败，也不会重复收钱/重复发
@@ -321,8 +336,17 @@ export async function handlePayNotify(
   }
 
   await settlePaidOrder(env, order, parsed.tradeNo, parsed.raw);
-  await env.DB.prepare(`UPDATE payment_gateways SET last_ok_at = ?, last_error = NULL WHERE id = ?`)
-    .bind(new Date().toISOString(), gateway.id)
+  await env.DB.prepare(
+    `UPDATE payment_gateways SET last_ok_at = ?, last_error = NULL,
+       last_test_order_id = COALESCE(?, last_test_order_id), updated_at = ?
+      WHERE id = ?`,
+  )
+    .bind(
+      new Date().toISOString(),
+      order.source === "test" ? order.id : null,
+      new Date().toISOString(),
+      gateway.id,
+    )
     .run();
 
   return text(mapping.notify.reply);

@@ -390,6 +390,39 @@ export function rowToPlan(row: PlanRow): Plan {
 }
 
 /** 对外（App / 后台展示）的形状：与 `app-crm.md` §2.4.7 的 Plan 结构一致 */
+/**
+ * 支付方式的展示名：**用户看到的品牌词**（不是网关名、不是渠道码）。
+ */
+export const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  alipay: "支付宝",
+  wechat: "微信支付",
+  card: "银行卡",
+};
+
+export interface PaymentMethodView {
+  id: string;
+  label: string;
+  icon_url: string | null;
+}
+
+/**
+ * 这一档能给出的网页支付按钮 = **本档支持的方式 ∩ 实例当前可用的方式**。
+ * 交集为空（本档没开网页渠道 / 实例没有可用网关）⇒ `null`，App 置灰。
+ *
+ * 交集在服务端算：只有服务端同时知道"档位支持什么"和"实例配了什么"，
+ * 让客户端求交集是最容易写错的地方（契约 §2.4.1 ①）。
+ */
+export function paymentMethodsOf(
+  plan: Plan,
+  available: ReadonlySet<string>,
+): PaymentMethodView[] | null {
+  const web = plan.sales_channels.find((c) => c.channel === "web_checkout");
+  if (!web) return null;
+  const ids = [...new Set((web.methods ?? []).filter((m) => available.has(m)))];
+  if (!ids.length) return null;
+  return ids.map((id) => ({ id, label: PAYMENT_METHOD_LABELS[id] ?? id, icon_url: null }));
+}
+
 export function planForClient(plan: Plan): Record<string, unknown> {
   return {
     plan_id: plan.id,
@@ -404,7 +437,6 @@ export function planForClient(plan: Plan): Record<string, unknown> {
     validity_days: plan.validity_days,
     line_ids: plan.line_ids,
     speed: plan.up_mbps || plan.down_mbps ? { up_mbps: plan.up_mbps, down_mbps: plan.down_mbps } : null,
-    sales_channels: plan.sales_channels,
     store_product_id: plan.store_product_id,
   };
 }
