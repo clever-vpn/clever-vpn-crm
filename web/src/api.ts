@@ -257,6 +257,19 @@ export const api = {
       input,
     ),
 
+  // ── 商店渠道（内购凭证；不是网关，见契约 §2.4.3.1）──
+  storeChannels: () => call<StoreChannelsResponse>("GET", "/store-channels"),
+  saveStoreChannel: (
+    platform: string,
+    input: {
+      identifier: string;
+      environment?: string;
+      endpoint?: string;
+      status?: string;
+      secret?: string;
+    },
+  ) => call<{ channel: StoreChannelView }>("PUT", `/store-channels/${platform}`, input),
+
   // ── 营销 / 促销（`docs/promotion.md`）──
   promotions: () => call<{ promotions: PromotionView[] }>("GET", "/promotions"),
   createPromotion: (input: PromotionDraft) =>
@@ -463,6 +476,23 @@ export interface GatewayDraft {
   currency?: string;
   allowed_emails?: string[];
   mapping?: unknown;
+}
+
+export interface StoreChannelView {
+  platform: string;
+  endpoint: string;
+  identifier: string;
+  environment: string;
+  /** `unset` = 还没配置过 */
+  status: string;
+  has_secret: boolean;
+  last_ok_at: string | null;
+  last_error: string | null;
+}
+
+export interface StoreChannelsResponse {
+  channels: StoreChannelView[];
+  secret_key_ready: boolean;
 }
 
 export interface GatewaysResponse {

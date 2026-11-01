@@ -519,6 +519,11 @@ export const orders = sqliteTable(
     provider_trade_no: text("provider_trade_no"),
     /** 收银台地址：未过期可直接复用，客服排查也看它 */
     pay_url: text("pay_url"),
+    /**
+     * 内购幂等键 = `"<platform>:<商店事务号>"`。**唯一**。
+     * 商店的凭据可以重发（网络断了就重试），这条索引保证"同一笔钱只落一次单"。
+     */
+    iap_key: text("iap_key"),
     /** 创建请求 / 回调的原始报文 —— 出问题时唯一的证据 */
     raw_create: text("raw_create"),
     raw_notify: text("raw_notify"),
@@ -558,6 +563,8 @@ export const orders = sqliteTable(
     index("idx_orders_customer").on(t.customer_id, t.id),
     // 查单泵的取数索引：`status='pending' AND next_poll_at <= now`
     index("idx_orders_poll").on(t.status, t.next_poll_at),
+    // 内购幂等：同一笔商店交易只能落一次单（重复提交返回同一个 order_code）
+    uniqueIndex("uq_orders_iap_key").on(t.iap_key),
     index("idx_orders_status").on(t.status, t.created_at),
     /** 兜底 cron 扫 `pending` + 按网关看健康度 */
     index("idx_orders_gateway").on(t.gateway_id, t.status),
