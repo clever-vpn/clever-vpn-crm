@@ -149,7 +149,8 @@ beforeAll(async () => {
   noQueryGatewayId = Number(withoutQuery.meta.last_row_id ?? 0);
 
   const cust = await env.DB.prepare(
-    `INSERT INTO customers (email, status, created_at) VALUES ('poll@test.com', 'active', ?)`,
+    `INSERT INTO customers (uuid, email, status, created_at)
+     VALUES (lower(hex(randomblob(16))), 'poll@test.com', 'active', ?)`,
   )
     .bind(now())
     .run();

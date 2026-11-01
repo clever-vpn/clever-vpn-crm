@@ -35,7 +35,8 @@ async function seedSubscription(opts: {
 }): Promise<number> {
   const now = new Date();
   const res = await env.DB.prepare(
-    `INSERT INTO customers (email, status, created_at) VALUES (?, 'active', ?)`,
+    `INSERT INTO customers (uuid, email, status, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'active', ?)`,
   )
     .bind(`cache-${crypto.randomUUID().slice(0, 8)}@test.com`, now.toISOString())
     .run();

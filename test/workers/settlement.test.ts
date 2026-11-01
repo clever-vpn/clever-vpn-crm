@@ -42,7 +42,8 @@ async function seedSubscription(opts: { lastSettledAt: string; platformId: numbe
     .run();
 
   const res = await env.DB.prepare(
-    `INSERT INTO customers (email, status, created_at) VALUES (?, 'active', ?)`,
+    `INSERT INTO customers (uuid, email, status, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'active', ?)`,
   )
     .bind(`settle-${crypto.randomUUID().slice(0, 8)}@test.com`, new Date().toISOString())
     .run();

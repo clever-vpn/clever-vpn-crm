@@ -72,6 +72,14 @@ export const customers = sqliteTable(
   "customers",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    /**
+     * **不可枚举的稳定标识**：商店账号绑定（Apple `appAccountToken` /
+     * Google `obfuscatedAccountId`）的唯一合法来源（契约 §2.3 ①）。
+     *
+     * 为什么不用 `id`：整数可枚举，且换实例（迁移 / 重建）会变 —— 用它等于让两个人可能
+     * 绑到同一个商店账号上。`uuid` 一经发放**永不改变**，注销后也不复用。
+     */
+    uuid: text("uuid").notNull(),
     email: text("email").notNull().unique(),
     password_hash: text("password_hash"),
     display_name: text("display_name"),
@@ -91,6 +99,8 @@ export const customers = sqliteTable(
   (t) => [
     // 允许 NULL（未生成），但一旦生成必须全局唯一：撞码 = 归因到错的人
     uniqueIndex("uq_customers_referral_code").on(t.referral_code),
+    // 商店绑定靠它，重复 = 两个人共用一个商店账号
+    uniqueIndex("uq_customers_uuid").on(t.uuid),
   ],
 );
 
