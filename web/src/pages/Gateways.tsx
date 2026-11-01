@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Button,
+  Dropdown,
   Form,
   Input,
   InputNumber,
@@ -152,6 +153,24 @@ export default function Gateways() {
     }
   }
 
+  /**
+   * 测试支付：建一张 `source='test'` 的 0 权益测试单，用系统浏览器打开收银台。
+   * 与真实下单的区别：允许 draft、忽略白名单、**不产生订阅**（契约 §2.4.5）。
+   */
+  async function testPay(gw: GatewayView, method: string) {
+    setBusy(true);
+    try {
+      const res = await api.testGateway(gw.id, { method, amount_minor: 1 });
+      // 新窗口打开：后台页面不跳走，付完回来刷新就能看到「最近成功」
+      window.open(res.pay_url, "_blank", "noopener,noreferrer");
+      message.success(`已建测试单 ${res.order_code}（${res.currency} ${(res.amount_minor / 100).toFixed(2)}）`);
+    } catch (e) {
+      message.error(e instanceof ApiError ? e.message || e.code : "测试支付失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function act(fn: () => Promise<unknown>, ok: string) {
     setBusy(true);
     try {
@@ -265,6 +284,19 @@ export default function Gateways() {
                       发布
                     </Button>
                   )}
+                  <Dropdown
+                    trigger={["click"]}
+                    menu={{
+                      items: gw.methods.map((m) => ({
+                        key: m,
+                        label: `测试 ${METHOD_LABEL[m] ?? m}`,
+                        onClick: () => void testPay(gw, m),
+                      })),
+                    }}
+                    disabled={busy || gw.methods.length === 0}
+                  >
+                    <Button size="small">测试支付</Button>
+                  </Dropdown>
                   {gw.status === "live" && (
                     <Popconfirm
                       title="停用后 App 里立刻看不到这个支付方式"
