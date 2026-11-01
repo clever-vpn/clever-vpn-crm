@@ -18,6 +18,7 @@ import {
   DashboardOutlined,
   FileTextOutlined,
   GiftOutlined,
+  ShoppingOutlined,
   LogoutOutlined,
   InboxOutlined,
   MenuOutlined,
@@ -33,6 +34,7 @@ import Orders from "./Orders";
 import Plans from "./Plans";
 import Promotions from "./Promotions";
 import Settings from "./Settings";
+import Stores from "./Stores";
 
 interface NavLeaf {
   key: string;
@@ -59,6 +61,7 @@ const NAV: NavItem[] = [
   { key: "/admin/orders", href: "/admin/orders", label: "订单", icon: <FileTextOutlined /> },
   { key: "/admin/plans", href: "/admin/plans", label: "套餐", icon: <AppstoreOutlined /> },
   { key: "/admin/gateways", href: "/admin/gateways", label: "支付", icon: <CreditCardOutlined /> },
+  { key: "/admin/stores", href: "/admin/stores", label: "商店", icon: <ShoppingOutlined /> },
   {
     key: "/admin/marketing",
     label: "营销",
@@ -151,6 +154,8 @@ export default function Shell({
       <Plans />
     ) : path === "/admin/gateways" ? (
       <Gateways />
+    ) : path === "/admin/stores" ? (
+      <Stores />
     ) : path === "/admin/marketing/overview" ? (
       <Marketing />
     ) : path === "/admin/marketing/coupons" ? (

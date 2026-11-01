@@ -65,8 +65,10 @@ function installFakeStores(opts: {
     const url = typeof input === "string" ? input : input.toString();
     calls.push(`${init?.method ?? "GET"} ${url}`);
     if (url.startsWith("https://api.storekit.itunes.apple.com/inApps/v1/transactions/")) {
+      // 回显 URL 里的 transactionId：真实接口就是这么答的，测试要一致
+      const asked = url.split("/transactions/")[1] ?? "2000000123";
       const info = {
-        transactionId: "2000000123",
+        transactionId: asked,
         productId: opts.productId,
         appAccountToken: opts.accountToken,
         environment: opts.environment ?? "Production",
@@ -254,6 +256,61 @@ describe("POST /orders/iap", () => {
       expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
         "product_mismatch",
       );
+    } finally {
+      stores.restore();
+    }
+  });
+
+  it("Apple 退款通知 ⇒ 订单 refunded、权益被撤销（refund_and_void）", async () => {
+    const stores = installFakeStores({
+      productId: "p.iap.30d",
+      accountToken: customerUuid,
+      revoked: true,
+    });
+    try {
+      // 一条"已到账"的内购单（直接落库，省掉前面的回源链路）
+      const orderRes = await env.DB.prepare(
+        `INSERT INTO orders (code, customer_id, plan_id, kind, plan_snapshot, amount_minor,
+           discount_minor, entry, source, payment_method, iap_key, status, paid_at,
+           created_at, updated_at)
+         VALUES ('IAP-REFUND-1', 1, 'p_iap_30d', 'period', '{}', 1500, 0, 'app', 'iap',
+           'apple', 'apple:2000000555', 'active', ?, ?, ?)`,
+      )
+        .bind(now(), now(), now())
+        .run();
+      const orderId = Number(orderRes.meta.last_row_id ?? 0);
+      await env.DB.prepare(
+        `UPDATE platform_subscriptions SET order_id = ? WHERE customer_id = 1`,
+      )
+        .bind(orderId)
+        .run();
+
+      const signedTransactionInfo = `h.${b64url(JSON.stringify({ transactionId: "2000000555" }))}.s`;
+      const signedPayload = `h.${b64url(
+        JSON.stringify({
+          notificationType: "REFUND",
+          data: { signedTransactionInfo },
+        }),
+      )}.s`;
+
+      const res = await call("/api/app/v1/webhooks/apple/assn", {
+        method: "POST",
+        body: { signedPayload },
+      });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { result: string }).result).toBe("refunded");
+
+      const row = await env.DB.prepare(
+        `SELECT status, refunded_minor, refund_mode FROM orders WHERE iap_key = 'apple:2000000555'`,
+      ).first<{ status: string; refunded_minor: number; refund_mode: string }>();
+      expect(row?.status).toBe("refunded");
+      expect(row?.refunded_minor).toBe(1500);
+      expect(row?.refund_mode).toBe("refund_and_void");
+
+      const sub = await env.DB.prepare(
+        `SELECT hold FROM platform_subscriptions WHERE customer_id = 1`,
+      ).first<{ hold: string }>();
+      expect(sub?.hold).toBe("revoked");
     } finally {
       stores.restore();
     }

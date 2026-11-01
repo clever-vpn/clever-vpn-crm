@@ -33,6 +33,7 @@ import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient, paymentMethodsOf } from "../plans/model";
 import { publicMethods } from "../payments/gateways";
 import { placeIapOrder } from "../payments/iap-order";
+import { handleWebhooks } from "./webhooks";
 import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
 import { claimGiftFor, claimRewardCard, listGiftShelf } from "../promotions/gift";
@@ -390,6 +391,10 @@ export async function handleAppApi(request: Request, env: Env): Promise<Response
   if (method === "OPTIONS") {
     return new Response(null, { status: 204, headers: cors });
   }
+
+  // 商店回调（ASSN V2 / RTDN）：**不带会话**、只当触发器，见 `webhooks.ts`
+  const hook = await handleWebhooks(env, request);
+  if (hook) return hook;
 
   // CSRF：靠 Cookie 认证时，写操作必须是同源或**白名单内的跨域**。
   //
