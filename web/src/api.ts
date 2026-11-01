@@ -356,6 +356,8 @@ export interface PromotionView {
   visible: boolean;
   referrer_reward_type: RewardType | null;
   referrer_reward_value: number | null;
+  referee_reward_type: RewardType | null;
+  referee_reward_value: number | null;
   status: PromotionStatus;
   /** 已核销次数 */
   uses?: number;

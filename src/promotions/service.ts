@@ -400,10 +400,9 @@ export async function resolveForPlans(
   const now = opts.now ?? new Date();
 
   const active = await allActivePromotions(env);
-  const referralId = await referralPromotionId(env, opts.customerId);
-  const candidates = active.filter(
-    (p) => (p.auto_apply && p.kind === "coupon") || (referralId !== null && p.id === referralId),
-  );
+  // **邀请不参与结算**：它只送权益（各发一张奖励卡），不产生折扣。
+  // 让它进来会和"限新用户"的券打架 —— 两个折扣源取更优，用户无法解释自己为什么便宜了。
+  const candidates = active.filter((p) => p.auto_apply && p.kind === "coupon");
   if (!candidates.length) return out;
 
   const facts = await customerFacts(env, opts.customerId, now);

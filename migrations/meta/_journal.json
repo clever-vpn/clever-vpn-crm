@@ -22,6 +22,13 @@
       "when": 1793439290688,
       "tag": "0002_sturdy_mystique",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793502675940,
+      "tag": "0003_adorable_jackal",
+      "breakpoints": true
     }
   ]
 }
