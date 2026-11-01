@@ -5,12 +5,13 @@
  * 地址。**不判断是否已付** —— 那是 notify / queryCharge 的事。
  */
 
-import { listLiveGateways, mappingOf, pickGateway } from "./gateways";
+import { listGateways, listLiveGateways, mappingOf, parseMethods, pickGateway } from "./gateways";
 import { buildCreateRequest, parseCreateResponse } from "./mapping";
 import { MOCK_DRIVER, mockSecret } from "./mock";
 import { decryptSecret } from "./secret";
 
 import type { Env } from "../env";
+import type { GatewayRow, RouteResult } from "./gateways";
 import type { Plan } from "../plans/model";
 
 /**
@@ -79,6 +80,13 @@ export interface CreateChargeInput {
   origin: string;
   clientIp?: string;
   now?: Date;
+  /**
+   * **仅后台"测试支付"用**：直接指定网关，跳过 `pickGateway()`。
+   *
+   * 与正常下单的三点不同：允许 `draft`（验收的就是它能不能收钱）、忽略白名单、
+   * 落成 `source = 'test'` 的测试单（`plan_id` 用保留值，不产生订阅）。
+   */
+  testGatewayId?: number;
   /** 仅测试注入：默认用全局 fetch */
   fetch?: typeof fetch;
 }
@@ -96,6 +104,19 @@ export type CreateChargeResult =
     }
   | { ok: false; status: number; code: string; message: string };
 
+/** 后台测试：按 id 取一条网关（**不判 status、不判白名单**），但方式必须真的是它支持的 */
+function routeForTest(
+  rows: readonly GatewayRow[],
+  id: number,
+  method: string,
+): RouteResult | null {
+  const gateway = rows.find((g) => g.id === id);
+  if (!gateway) return null;
+  if (!parseMethods(gateway.methods).includes(method)) return null;
+  const mapping = mappingOf(gateway);
+  return mapping ? { gateway, mapping } : null;
+}
+
 export async function createCharge(env: Env, input: CreateChargeInput): Promise<CreateChargeResult> {
   const now = input.now ?? new Date();
   const nowIso = now.toISOString();
@@ -109,6 +130,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   const recent = await env.DB.prepare(
     `SELECT code, pay_url, amount_minor, currency, expires_at FROM orders
       WHERE customer_id = ? AND plan_id = ? AND payment_method = ? AND status = 'pending'
+        AND source = 'purchase'
         AND amount_minor = ?
         AND pay_url IS NOT NULL AND created_at >= ? AND expires_at > ?
       ORDER BY id DESC LIMIT 1`,
@@ -129,7 +151,9 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   }
 
   // ── 2. 路由：闸门全在这一处（status / methods / 白名单 / 环境开关）──
-  const route = pickGateway(await listLiveGateways(env), input.method, input.customerEmail, env);
+  const route = input.testGatewayId
+    ? routeForTest(await listGateways(env), input.testGatewayId, input.method)
+    : pickGateway(await listLiveGateways(env), input.method, input.customerEmail, env);
   if (!route) {
     return { ok: false, status: 400, code: "payment_method_unavailable", message: "该支付方式暂不可用" };
   }
@@ -221,7 +245,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
        discount_minor, promotion_id, code_id, entry,
        source, payment_method, gateway_id, provider_order_no, provider_trade_no, pay_url,
        raw_create, expires_at, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
   )
     .bind(
       orderCode,
@@ -235,6 +259,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
       input.promotionId ?? null,
       input.codeId ?? null,
       input.entry ?? null,
+      input.testGatewayId ? "test" : "purchase",
       input.method,
       route.gateway.id,
       orderCode,

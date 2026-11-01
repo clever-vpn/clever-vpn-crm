@@ -14,7 +14,6 @@
  *   GET  /me/gifts                 我的礼包**货架**（可领 / 抢完 / 已领 / 已结束）
  *   POST /me/gifts/{promotion_id}/claim  领一个礼包（条件插入，抢不到会说清原因）
  *   GET  /plans                可售套餐（免登录；每项只带一个 `action` + 促销展示位）
- *   GET  /payment-methods      可用支付方式（需登录）
  *   POST /quote                报价（唯一的应付金额来源；可带 promo_code）
  *   POST /orders               审计式创建一笔待支付订单（可带 promo_code / origin）
  *   GET  /orders               我的订单列表（官网收据用）
@@ -726,7 +725,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
       `SELECT id, code, plan_snapshot, amount_minor, discount_minor, currency, status,
               created_at, paid_at
          FROM orders
-        WHERE customer_id = ? AND (? = 0 OR id < ?)
+        WHERE customer_id = ? AND source <> 'test' AND (? = 0 OR id < ?)
         ORDER BY id DESC LIMIT ?`,
     )
       .bind(customer.id, cursor, cursor, limit + 1)
@@ -857,22 +856,6 @@ async function route(request: Request, env: Env, path: string, method: string): 
       return json({ ...base, allowed: false, reason: "优惠已抵扣全部金额，请选择其他套餐", payable_minor: null });
     }
     return json({ ...base, allowed: true, reason: null, payable_minor: payable });
-  }
-
-  // ── 可用的支付方式（受网关闸门约束：status / methods / 白名单 / 环境开关）──
-  //    白名单按用户算，所以必须登录（契约 §2.2）
-  if (method === "GET" && path === "/payment-methods") {
-    if (!customer) return err(401, "unauthorized");
-    const items: { id: string; label: string; channel: string }[] = [];
-    const seen = new Set<string>();
-    for (const gw of await listLiveGateways(env)) {
-      for (const m of visibleMethods(gw, customer.email, env)) {
-        if (seen.has(m)) continue;
-        seen.add(m);
-        items.push({ id: m, label: PAY_METHOD_LABEL[m] ?? m, channel: "web_checkout" });
-      }
-    }
-    return json(items);
   }
 
   // ── 下单：一次支付尝试（见 docs/payments.md §2）──

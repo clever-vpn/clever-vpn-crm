@@ -13,6 +13,7 @@
  * `generic_json_v1` 的 `mapping` 是**完整配置**（必须能通过 `validateMapping`）。
  */
 
+import { createCharge } from "../payments/checkout";
 import { encryptSecret, secretKeyConfigured } from "../payments/secret";
 import { DRIVERS, validateMapping, type GatewayMapping } from "../payments/mapping";
 import { EPAY_V1_MAPPING } from "../payments/builtin/epay";
@@ -296,6 +297,71 @@ export async function handleAdminGateways(
     await audit(env, actor, "gateway_created", String(id), { driver: normalized.driver, name: normalized.name });
     const row = await loadGateway(env, id);
     return json({ gateway: row ? view(row) : null }, 201);
+  }
+
+  // ── 测试支付：只验证"这条网关能不能收钱"，不产生订阅 ──
+  //    与用户下单的三点不同：允许 draft、忽略白名单、落成 `source='test'` 的 0 权益测试单。
+  const testOne = /^\/gateways\/(\d+)\/test$/.exec(path);
+  if (method === "POST" && testOne) {
+    const id = Number(testOne[1]);
+    const current = await loadGateway(env, id);
+    if (!current) return fail(404, "gateway_not_found");
+
+    const body = await readBody(request);
+    const methods = (JSON.parse(current.methods || "[]") as string[]) ?? [];
+    const wanted = typeof body.method === "string" ? body.method.trim() : "";
+    const method_ = wanted || methods[0] || "";
+    if (!method_) return fail(400, "no_method", "这条网关没有配置任何支付方式");
+    if (!methods.includes(method_)) {
+      return fail(400, "method_not_supported", `这条网关不支持 ${method_}`);
+    }
+
+    const amount = Math.max(1, Number(body.amount_minor ?? 1) || 1);
+    const origin = (env.SITE_URL && env.SITE_URL.trim()) || new URL(request.url).origin;
+
+    const res = await createCharge(env, {
+      // 测试单没有真实客户：`customer_id = 0` 是哨兵值，用户侧永远看不到
+      customerId: 0,
+      customerEmail: actor,
+      plan: {
+        id: "__gateway_test__",
+        name: "网关测试",
+        kind: "period",
+        price_minor: amount,
+        currency: current.currency,
+        licence_limit: 1,
+        term_days: 1,
+        monthly_quota_gb: null,
+        traffic_gb: null,
+        validity_days: null,
+        line_ids: [],
+        up_mbps: null,
+        down_mbps: null,
+        sales_channels: [{ channel: "web_checkout", methods: [method_] }],
+        store_product_id: {},
+        sort_order: 0,
+        status: "active",
+        visibility: "hidden",
+        retired_at: null,
+        trial: false,
+      },
+      method: method_,
+      amountMinor: amount,
+      entry: "admin",
+      origin,
+      testGatewayId: id,
+    });
+
+    if (!res.ok) return fail(res.status, res.code, res.message);
+    return json({
+      ok: true,
+      order_code: res.orderCode,
+      pay_url: res.payUrl,
+      amount_minor: res.amountMinor,
+      currency: res.currency,
+      expires_at: res.expiresAt,
+      actor,
+    });
   }
 
   const byId = /^\/gateways\/(\d+)$/.exec(path);

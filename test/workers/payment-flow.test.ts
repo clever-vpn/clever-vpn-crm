@@ -141,29 +141,6 @@ describe("契约 v11：/plans 只给一个 action", () => {
   });
 });
 
-describe("支付方式列表受白名单约束", () => {
-  it("白名单内的客户能看到 alipay/wechat", async () => {
-    const res = await call("/api/app/v1/payment-methods", { token: TOKEN });
-    expect(res.status).toBe(200);
-    const items = (await res.json()) as { id: string; label: string; channel: string }[];
-    expect(items.map((i) => i.id).sort()).toEqual(["alipay", "wechat"]);
-    expect(items.find((i) => i.id === "alipay")?.label).toBe("支付宝");
-    // channel 是支付方式的属性，不是订单入参（v11）
-    expect(items.every((i) => i.channel === "web_checkout")).toBe(true);
-  });
-
-  it("白名单外的客户看不到（否则等于免费开通）", async () => {
-    const res = await call("/api/app/v1/payment-methods", { token: "test-session-token-other" });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual([]);
-  });
-
-  it("未登录直接 401（白名单按用户算，匿名给不出）", async () => {
-    const res = await call("/api/app/v1/payment-methods");
-    expect(res.status).toBe(401);
-  });
-});
-
 describe("mock 支付全链路", () => {
   it("下单 → 演示页 → 模拟支付 → 订阅生效", async () => {
     // 1. 下单
