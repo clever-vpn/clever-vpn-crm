@@ -249,6 +249,13 @@ export const api = {
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/publish`),
   disableGateway: (id: number) =>
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/disable`),
+  /** 测试支付：只验"这条网关能不能收钱"，不产生订阅（`source='test'` 的测试单） */
+  testGateway: (id: number, input: { method?: string; amount_minor?: number } = {}) =>
+    call<{ order_code: string; pay_url: string; amount_minor: number; currency: string }>(
+      "POST",
+      `/gateways/${id}/test`,
+      input,
+    ),
 
   // ── 营销 / 促销（`docs/promotion.md`）──
   promotions: () => call<{ promotions: PromotionView[] }>("GET", "/promotions"),
