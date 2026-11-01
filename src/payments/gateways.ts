@@ -142,6 +142,23 @@ export async function listGateways(env: Env): Promise<GatewayRow[]> {
   return rows.results ?? [];
 }
 
+/**
+ * **对外可见**的支付方式：`live` + 白名单为空 + 有可路由实现。
+ *
+ * 白名单非空的网关是"私有/测试网关"（mock 必须非空才能 live），
+ * 它的存在不能让一个按钮出现在用户的定价页上 —— 否则"这个按钮对我可见"就成了一份
+ * 不可复现的判定（换台设备就不一样）。验收走后台的测试单，见 `docs/payments.md`。
+ */
+export async function publicMethods(env: Env): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const g of await listLiveGateways(env)) {
+    if (parseAllowedEmails(g.allowed_emails).length > 0) continue;
+    if (!mappingOf(g)) continue;
+    for (const m of parseMethods(g.methods)) out.add(m);
+  }
+  return out;
+}
+
 /** 只读可路由的（`status='live'`），路由热路径用这个 */
 export async function listLiveGateways(env: Env): Promise<GatewayRow[]> {
   const rows = await env.DB.prepare(

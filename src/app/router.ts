@@ -31,7 +31,8 @@ import { consumeCode, issueCode } from "../admin/email-code";
 import { emailCodeAvailable } from "../mail";
 import { listLiveGateways, visibleMethods } from "../payments/gateways";
 import { createCharge } from "../payments/checkout";
-import { rowToPlan, planForClient } from "../plans/model";
+import { rowToPlan, planForClient, paymentMethodsOf } from "../plans/model";
+import { publicMethods } from "../payments/gateways";
 import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
 import { claimGiftFor, claimRewardCard, listGiftShelf } from "../promotions/gift";
@@ -550,9 +551,15 @@ async function route(request: Request, env: Env, path: string, method: string): 
     // 最优情形”，条件写进角标前缀。活动价就是实付：自动券必然上墙、不限量，
     // 所以列表不再给第二个“应付”字段（`payable_minor` 已删除）。
     const promos = await planPromos(env, { plans, customerId: viewer?.id ?? null, now });
+    // 支付按钮 = 本档支持 ∩ 实例可用（live + 白名单为空 + 有可路由实现）。
+    // **与谁在看无关**：游客和登录用户拿到的是同一份（契约 §2.4.1 ①）。
+    const availableMethods = await publicMethods(env);
 
     const items = plans.map((plan) => {
-      const base = planForClient(plan);
+      const base = {
+        ...planForClient(plan),
+        payment_methods: paymentMethodsOf(plan, availableMethods),
+      };
       const best = promos.get(plan.id);
       const promo = {
         // 划线价：就是套餐标价
