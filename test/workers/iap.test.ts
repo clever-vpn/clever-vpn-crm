@@ -318,6 +318,35 @@ describe("POST /orders/iap", () => {
     }
   });
 
+  it("cron 兜底：pending 的商店单会被自动查单并结算", async () => {
+    const stores = installFakeStores({ productId: "p.iap.30d", accountToken: customerUuid });
+    try {
+      const created = new Date(Date.now() - 60_000).toISOString();
+      const plan = await env.DB.prepare(`SELECT * FROM plans WHERE id = 'p_iap_30d'`).first();
+      const res = await env.DB.prepare(
+        `INSERT INTO orders (code, customer_id, plan_id, kind, plan_snapshot, amount_minor,
+           discount_minor, entry, source, payment_method, provider_trade_no, iap_key,
+           status, created_at, updated_at)
+         VALUES ('IAP-CRON-1', 1, 'p_iap_30d', 'period', ?, 1500, 0, 'app', 'iap', 'apple',
+           '2000000888', 'apple:2000000888', 'pending', ?, ?)`,
+      )
+        .bind(JSON.stringify(plan), created, created)
+        .run();
+      expect(res.success).toBe(true);
+
+      const { pollPendingOrders } = await import("../../src/payments/poll");
+      const report = await pollPendingOrders(env);
+      expect(report.paid).toBeGreaterThanOrEqual(1);
+
+      const row = await env.DB.prepare(
+        `SELECT status FROM orders WHERE iap_key = 'apple:2000000888'`,
+      ).first<{ status: string }>();
+      expect(row?.status).not.toBe("pending");
+    } finally {
+      stores.restore();
+    }
+  });
+
   it("Google：落账后由 CRM 调 consume", async () => {
     const stores = installFakeStores({ productId: "p.iap.30d", accountToken: customerUuid });
     try {
