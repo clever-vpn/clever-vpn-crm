@@ -130,10 +130,10 @@ beforeAll(async () => {
 });
 
 describe("GET /trial（免登录）", () => {
-  it("还没配试用套餐 ⇒ available:false，注册也不会凭空多出订阅", async () => {
+  it("还没配试用套餐 ⇒ text:null，注册也不会凭空多出订阅", async () => {
     const res = await appCall("/api/app/v1/trial", "");
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { available: boolean }).available).toBe(false);
+    expect(((await res.json()) as { text: string | null }).text).toBeNull();
 
     const token = await login(LATE_USER);
     const sub = await appCall("/api/app/v1/subscription", token);
@@ -156,13 +156,11 @@ describe("GET /trial（免登录）", () => {
       trial: true,
     });
 
-    const info = (await (await appCall("/api/app/v1/trial", "")).json()) as Record<string, unknown>;
-    expect(info.available).toBe(true);
-    expect(info.days).toBe(7);
-    expect(info.quota_gb).toBe(10);
+    // 契约 §2.4.9：只有一句广告词，与"谁在看"无关
+    const info = (await (await appCall("/api/app/v1/trial", "")).json()) as {
+      text: string | null;
+    };
     expect(info.text).toBe("注册即送 7 天免费试用（10GB）");
-    // 被强制成 0 元 + 隐藏
-    expect(info.plan_name).toBe("7 天体验");
     const row = await env.DB.prepare(`SELECT price_minor, visibility FROM plans WHERE id = 'trial_7d'`)
       .first<{ price_minor: number; visibility: string }>();
     expect(row).toEqual({ price_minor: 0, visibility: "hidden" });
