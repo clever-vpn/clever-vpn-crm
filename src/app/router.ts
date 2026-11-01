@@ -32,6 +32,7 @@ import { listLiveGateways, visibleMethods } from "../payments/gateways";
 import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient, paymentMethodsOf } from "../plans/model";
 import { publicMethods } from "../payments/gateways";
+import { placeIapOrder } from "../payments/iap-order";
 import { quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
 import { claimGiftFor, claimRewardCard, listGiftShelf } from "../promotions/gift";
@@ -893,6 +894,29 @@ async function route(request: Request, env: Env, path: string, method: string): 
       });
     }
     return json({ ...base, reason: null, payable_minor: payable });
+  }
+
+  // ── 商店内购：客户端已在商店付完，把凭据交给 CRM 回源校验（契约 §2.4.3）──
+  //    与网页轨道的区别：这里**没有下单**，只有"查单 + 落账"；收尾 consume 由 CRM 做。
+  if (method === "POST" && path === "/orders/iap") {
+    if (!customer) return err(401, "unauthorized");
+    const body = await readBody(request);
+    const result = await placeIapOrder(env, {
+      platform: typeof body.platform === "string" ? body.platform : "",
+      productId: typeof body.product_id === "string" ? body.product_id.trim() : "",
+      receipt: typeof body.receipt === "string" ? body.receipt : "",
+      customerId: customer.id,
+      customerUuid: customer.uuid,
+    });
+    if (!result.ok) return err(result.status, result.code, result.message);
+
+    const sub =
+      result.status === "paid" ? await loadFreshSubscription(env, customer.id) : null;
+    return json({
+      order_code: result.orderCode,
+      status: result.status,
+      subscription: sub ? subscriptionView(sub) : null,
+    });
   }
 
   // ── 下单：一次支付尝试（见 docs/payments.md §2）──
