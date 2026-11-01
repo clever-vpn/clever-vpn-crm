@@ -21,6 +21,7 @@ import {
 import { consumeCode, issueCode } from "./email-code";
 import { handleAdminPlans } from "./plans";
 import { handleAdminGateways } from "./gateways";
+import { handleAdminStoreChannels } from "./store-channels";
 import { handleAdminPromotions } from "./promotions";
 import { handleAdminSettings } from "./settings";
 import { handleAdminSubscriptions } from "./subscriptions";
@@ -404,6 +405,10 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
   // ── 支付网关（唯一能创建网关的地方）────────────────────────────────
   const gatewaysResponse = await handleAdminGateways(request, env, admin.email);
   if (gatewaysResponse) return gatewaysResponse;
+
+  // ── 商店渠道（Apple / Google 凭证；不是网关，见契约 §2.4.3.1）──────
+  const storesResponse = await handleAdminStoreChannels(request, env, admin.email);
+  if (storesResponse) return storesResponse;
 
   // ── 订阅与结算（手工开通 / 跑结算）──────────────────────────────────
   const subsResponse = await handleAdminSubscriptions(request, env, admin.email);

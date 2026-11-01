@@ -104,6 +104,41 @@ export const customers = sqliteTable(
   ],
 );
 
+/**
+ * 商店渠道（**不是支付网关**，见 `docs/payment.md` §2.4.3.1）
+ *
+ * 与 `payment_gateways` 的区别：钱不进租户商户号、CRM 不能 `createOrder`（购买在客户端完成）、
+ * 到账通知是 ASSN/RTDN 而不是签名回调、退款只能由用户在商店发起。
+ * 所以单独一张表，每平台最多一行（同一个开发者账号）。
+ *
+ * 共享的只有"查单 → `settlePaidOrder()`"这段代码，以及同一套密钥加密
+ * （`secret_enc` + `PAYMENT_SECRET_KEY`）。
+ */
+export const storeChannels = sqliteTable(
+  "store_channels",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** apple | google（唯一） */
+    platform: text("platform").notNull(),
+    /** API 根地址；有默认值，只有沙盒域名/自建代理才需要改 */
+    endpoint: text("endpoint"),
+    /** bundle_id（Apple） / package_name（Google）：查单时校验凭据归属 */
+    identifier: text("identifier").notNull(),
+    /** production | sandbox。**sandbox 只在非生产实例接受** */
+    environment: text("environment").notNull().default("production"),
+    /** Apple：.p8 + issuer_id + key_id；Google：服务账号 JSON。AES-GCM，主密钥同上 */
+    secret_enc: text("secret_enc"),
+    /** draft | live | disabled；只有 live 会被查单调用 */
+    status: text("status").notNull().default("draft"),
+    /** 最近一次查单成功 / 失败，后台"渠道"页直接显示（验收用） */
+    last_ok_at: text("last_ok_at"),
+    last_error: text("last_error"),
+    created_at: text("created_at").notNull(),
+    updated_at: text("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("uq_store_channels_platform").on(t.platform)],
+);
+
 /** 邮箱验证码：只存哈希，一次一用（按 email 做冷却/次数校验） */
 export const emailCodes = sqliteTable("email_codes", {
   email: text("email").primaryKey(),
