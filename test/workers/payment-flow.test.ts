@@ -52,7 +52,8 @@ function call(path: string, init: { method?: string; body?: unknown; token?: str
 
 async function seedCustomer(email: string, token: string): Promise<number> {
   const res = await env.DB.prepare(
-    `INSERT INTO customers (email, status, created_at) VALUES (?, 'active', ?)`,
+    `INSERT INTO customers (uuid, email, status, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'active', ?)`,
   )
     .bind(email, now())
     .run();

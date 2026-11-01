@@ -84,7 +84,8 @@ beforeAll(async () => {
   await seedPlan("store_only", [{ channel: "apple_iap" }]);
 
   const res = await env.DB.prepare(
-    `INSERT INTO customers (email, status, created_at) VALUES (?, 'active', ?)`,
+    `INSERT INTO customers (uuid, email, status, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'active', ?)`,
   )
     .bind("buyer@test.com", now())
     .run();

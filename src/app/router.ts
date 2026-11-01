@@ -149,22 +149,27 @@ const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 interface CustomerRow {
   id: number;
+  uuid: string;
   email: string;
   display_name: string | null;
   status: string;
 }
 
 async function findCustomer(env: Env, email: string): Promise<CustomerRow | null> {
-  return env.DB.prepare(`SELECT id, email, display_name, status FROM customers WHERE email = ?`)
+  return env.DB.prepare(
+    `SELECT id, uuid, email, display_name, status FROM customers WHERE email = ?`,
+  )
     .bind(email)
     .first<CustomerRow>();
 }
 
 async function createCustomer(env: Env, email: string): Promise<number> {
+  // `uuid` 在**建号那一刻**生成，此后永不改变（注销重注册也是新的）——
+  // 它是商店账号绑定的唯一合法来源（契约 §2.3 ①）。
   const res = await env.DB.prepare(
-    `INSERT INTO customers (email, status, created_at) VALUES (?, 'active', ?)`,
+    `INSERT INTO customers (uuid, email, status, created_at) VALUES (?, ?, 'active', ?)`,
   )
-    .bind(email, new Date().toISOString())
+    .bind(crypto.randomUUID(), email, new Date().toISOString())
     .run();
   return Number(res.meta.last_row_id ?? 0);
 }
@@ -218,7 +223,9 @@ async function resolveSession(env: Env, request: Request): Promise<CustomerRow |
     .bind(now.toISOString(), id, new Date(now.getTime() - SESSION_TOUCH_MS).toISOString())
     .run();
 
-  return env.DB.prepare(`SELECT id, email, display_name, status FROM customers WHERE id = ?`)
+  return env.DB.prepare(
+    `SELECT id, uuid, email, display_name, status FROM customers WHERE id = ?`,
+  )
     .bind(session.customer_id)
     .first<CustomerRow>();
 }
@@ -479,6 +486,9 @@ async function route(request: Request, env: Env, path: string, method: string): 
       });
     }
 
+    // 新建的客户要回读一次拿到 `uuid`（老客户在 `existing` 里已经带了）
+    const userRow = existing ?? (await findCustomer(env, email));
+
     const token = randomToken();
     const nowIso = new Date().toISOString();
     await env.DB.prepare(
@@ -512,7 +522,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
     return json(
       {
         session_token: token,
-        user: { id: customerId, email, name: existing?.display_name ?? null },
+        user: {
+          id: customerId,
+          uuid: userRow?.uuid ?? "",
+          email,
+          name: existing?.display_name ?? null,
+        },
         platform,
         platform_status: sub ? (sub.activation_code ? view.status : "provisioning") : "none",
       },
@@ -596,7 +611,13 @@ async function route(request: Request, env: Env, path: string, method: string): 
     if (!customer) return err(401, "unauthorized");
     const sub = await loadFreshSubscription(env, customer.id);
     return json({
-      user: { id: customer.id, email: customer.email, name: customer.display_name },
+      // 契约 §2.3 ①：`uuid` 是商店账号绑定的唯一合法来源，与 `/auth/verify` 同形
+      user: {
+        id: customer.id,
+        uuid: customer.uuid,
+        email: customer.email,
+        name: customer.display_name,
+      },
       subscription: subscriptionView(sub),
       // 邀请面板：官网与 App 共用（§2.9.3）。不需要邀请功能的客户端忽略即可
       referral: await referralPanel(env, customer.id),

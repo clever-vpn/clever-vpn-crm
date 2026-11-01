@@ -178,9 +178,15 @@ export async function handleAdminSubscriptions(
       .first<{ id: number }>();
     if (exists) return json({ customer: { id: exists.id, email } });
     const res = await env.DB.prepare(
-      `INSERT INTO customers (email, display_name, status, created_at) VALUES (?, ?, 'active', ?)`,
+      `INSERT INTO customers (uuid, email, display_name, status, created_at)
+       VALUES (?, ?, ?, 'active', ?)`,
     )
-      .bind(email, typeof body.display_name === "string" ? body.display_name : null, new Date().toISOString())
+      .bind(
+        crypto.randomUUID(),
+        email,
+        typeof body.display_name === "string" ? body.display_name : null,
+        new Date().toISOString(),
+      )
       .run();
     const id = Number(res.meta.last_row_id ?? 0);
     await audit(env, actor, "customer_created", String(id), { email });
