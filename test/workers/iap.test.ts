@@ -135,6 +135,8 @@ async function pemOf(kind: "ec" | "rsa"): Promise<string> {
 }
 
 beforeAll(async () => {
+  // CI 没有 `.dev.vars`：没有主密钥就存不了商店凭据
+  (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "test-secret-key";
   // 一个客户 + 一个会话
   const res = await env.DB.prepare(
     `INSERT INTO customers (uuid, email, status, created_at) VALUES (?, ?, 'active', ?)`,
