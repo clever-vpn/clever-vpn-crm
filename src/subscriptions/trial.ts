@@ -24,18 +24,15 @@ import { customerSubscription, logChange, upsertSubscription } from "./store";
 import type { Env } from "../env";
 import type { Plan } from "../plans/model";
 
-/** `GET /trial` 的返回体：CRM **组织好**给 App 直接显示的内容 */
+/**
+ * `GET /trial` 的返回体 —— **只有一句话**（契约 §2.4.9）。
+ *
+ * 它回答"这个实例现在有没有试用活动、怎么念"，与"谁在看"无关：
+ * 能不能领、领没领过由注册流程决定（注册即自动开通），不需要这里判。
+ */
 export interface TrialInfo {
-  available: boolean;
-  plan_name: string | null;
-  /** 试用天数（= 套餐 term_days） */
-  days: number | null;
-  /** 试用流量（GB）；`unlimited` 为 true 时没有意义 */
-  quota_gb: number | null;
-  unlimited: boolean;
-  licence_limit: number | null;
-  /** 给注册页直接显示的一句（用户可见文案的唯一来源在 CRM） */
-  text: string;
+  /** 整句广告词；`null` = 这个实例没有试用活动 */
+  text: string | null;
 }
 
 export interface TrialStart {
@@ -46,15 +43,7 @@ export interface TrialStart {
   plan_id: string | null;
 }
 
-const UNAVAILABLE: TrialInfo = {
-  available: false,
-  plan_name: null,
-  days: null,
-  quota_gb: null,
-  unlimited: false,
-  licence_limit: null,
-  text: "",
-};
+const UNAVAILABLE: TrialInfo = { text: null };
 
 /** 读那个唯一的试用套餐（`trial = 1` 且 `active`） */
 export async function loadTrialPlan(env: Env): Promise<Plan | null> {
@@ -72,17 +61,8 @@ export async function trialInfo(env: Env): Promise<TrialInfo> {
   const plan = await loadTrialPlan(env);
   if (!plan || plan.kind !== "period" || !plan.term_days) return UNAVAILABLE;
 
-  const unlimited = plan.monthly_quota_gb === null;
-  const quota = unlimited ? "不限量" : `${plan.monthly_quota_gb}GB`;
-  return {
-    available: true,
-    plan_name: plan.name,
-    days: plan.term_days,
-    quota_gb: plan.monthly_quota_gb,
-    unlimited,
-    licence_limit: plan.licence_limit,
-    text: `注册即送 ${plan.term_days} 天免费试用（${quota}）`,
-  };
+  const quota = plan.monthly_quota_gb === null ? "不限量" : `${plan.monthly_quota_gb}GB`;
+  return { text: `注册即送 ${plan.term_days} 天免费试用（${quota}）` };
 }
 
 function orderCode(now: Date, customerId: number): string {
