@@ -219,16 +219,17 @@ describe("多活动：取更优，不叠加", () => {
     expect(bestPromotion([], ctx())).toBeNull();
   });
 
-  it("只有自动生效的券能进定价页（凭码券是站外渠道）", () => {
+  it("自动券一律进定价页；凭码券 / 定向 / 礼包不进", () => {
     const byCode = promo({ id: 1, name: "渠道码", auto_apply: false });
-    const hidden = promo({ id: 2, name: "定向券", auto_apply: true, visible: false });
+    // `visible: false` 已经不能让它藏起来：自动券必须上墙（契约 §2.9.3）
+    const hiddenAttempt = promo({ id: 2, name: "想藏起来的券", auto_apply: true, visible: false });
     const targeted = promo({ id: 3, name: "名单内", auto_apply: true, audience: "specific" });
     const gift = promo({ id: 4, name: "礼包", kind: "gift", auto_apply: true });
     const publicOne = promo({ id: 5, name: "公开券", auto_apply: true });
-    const shown = [byCode, hidden, targeted, gift, publicOne]
+    const shown = [byCode, hiddenAttempt, targeted, gift, publicOne]
       .filter(canAppearInList)
       .map((p) => p.id);
-    expect(shown).toEqual([5]);
+    expect(shown).toEqual([2, 5]);
   });
 
   it("角标带系统人群前缀，租户只能填后半句", () => {

@@ -319,13 +319,13 @@ describe("后台建活动", () => {
 describe("/plans 的促销展示位", () => {
   type PlanItem = {
     plan_id: string;
+    price_minor: number;
     promo_price_minor: number | null;
     promo_badge: string | null;
-    payable_minor: number | null;
     action: string;
   };
 
-  it("匿名也能看角标 + 活动价（含人群前缀），但仍没有应付", async () => {
+  it("匿名也能看角标 + 活动价（含人群前缀），但列表不给应付字段", async () => {
     const res = await fetchJson("/api/app/v1/plans");
     const items = (await res.json()) as PlanItem[];
     const plan = items.find((p) => p.plan_id === "promo_30d");
@@ -333,19 +333,24 @@ describe("/plans 的促销展示位", () => {
     // 匿名不知道访客是不是新客 ⇒ 按"该人群最优情形"算，条件写进前缀
     expect(plan?.promo_badge).toBe("限新用户 · 首单立减 3 元");
     expect(plan?.promo_price_minor).toBe(1200);
-    // 但"这个人要付多少"必须等登录：限人群的券不能当报价
-    expect(plan?.payable_minor).toBeNull();
+    // 应付 = 卡片价；列表不再给第二个数字
+    expect(plan).not.toHaveProperty("payable_minor");
+    expect((plan?.promo_price_minor ?? plan?.price_minor)).toBe(1200);
   });
 
-  it("登录后：新客拿到折扣后的应付", async () => {
+  it("登录后：新客看到的活动价就是实付", async () => {
     const token = await login(PAYER);
     const res = await appCall("/api/app/v1/plans", token);
     const items = (await res.json()) as PlanItem[];
     const plan = items.find((p) => p.plan_id === "promo_30d");
     expect(plan?.action).toBe("buy");
-    // 1500 − 300：定价页写的价，与 /quote 必须一模一样
-    expect(plan?.payable_minor).toBe(1200);
+    // 1500 − 300：定价页写的价就是实付，与 /quote 必须一模一样
     expect(plan?.promo_price_minor).toBe(1200);
+    const q = (await (await appCall("/api/app/v1/quote", token, {
+      method: "POST",
+      body: { plan_id: "promo_30d" },
+    })).json()) as { payable_minor: number | null };
+    expect(q.payable_minor).toBe(1200);
   });
 
   it("凭码券是站外渠道：把 visible 传成 true 也不进定价页", async () => {
@@ -1410,5 +1415,87 @@ describe("没有「管理员代领」这条路", () => {
       body: { customer_ids: [1] },
     });
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * 价格模型：**用户看到的价 = 他要付的价**（契约 §2.9.3）
+ *
+ * 两条硬约束都由服务端兜住，不靠前端自觉：
+ *   1. 自动券必须上墙 —— 不能"隐藏着但仍然扣钱"；
+ *   2. 券不设总名额 —— 抢完导致价格回升，等于看到 12 付 15。
+ */
+describe("价格模型（§2.9.3）", () => {
+  it("自动券传 visible:false 也落成 1，并且真的带角标出现在定价页", async () => {
+    const res = await adminCall("/api/admin/promotions", {
+      method: "POST",
+      body: {
+        name: "想藏起来的券",
+        kind: "coupon",
+        auto_apply: true,
+        benefit_type: "amount",
+        benefit_value: 999, // 比已有的新客券更划算，保证它成为定价页上那条
+        audience: "all",
+        badge_label: "全场立减 9.99 元",
+        visible: false, // 会被服务端忽略
+      },
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { promotion: { id: number } };
+    const row = await env.DB.prepare(`SELECT visible FROM promotions WHERE id = ?`)
+      .bind(body.promotion.id)
+      .first<{ visible: number }>();
+    expect(row?.visible).toBe(1);
+
+    // 上线后才出现在定价页（新建默认 draft）
+    const published = await adminCall(`/api/admin/promotions/${body.promotion.id}/publish`, {
+      method: "POST",
+    });
+    expect(published.status).toBe(200);
+
+    // 定价页确实能看到它（角标就是"凭什么"）
+    const plans = (await (await fetchJson("/api/app/v1/plans")).json()) as {
+      plan_id: string;
+      promo_badge: string | null;
+    }[];
+    expect(plans.find((p) => p.plan_id === "promo_30d")?.promo_badge).toContain("全场立减 9.99 元");
+  });
+
+  it("券不设总名额：带 max_uses 直接拒绝", async () => {
+    const res = await adminCall("/api/admin/promotions", {
+      method: "POST",
+      body: {
+        name: "限前 100 人",
+        kind: "coupon",
+        auto_apply: true,
+        benefit_type: "amount",
+        benefit_value: 100,
+        audience: "all",
+        badge_label: "限时",
+        max_uses: 100,
+      },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { errors: string[] };
+    expect(body.errors.join("")).toContain("券不限量");
+  });
+
+  it("礼包仍然可以设总名额（0 元权益，先到先得）", async () => {
+    const res = await adminCall("/api/admin/promotions", {
+      method: "POST",
+      body: {
+        name: "限量礼包",
+        kind: "gift",
+        audience: "all",
+        rewards: { days: 3 },
+        max_uses: 50,
+      },
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { promotion: { id: number } };
+    const row = await env.DB.prepare(`SELECT max_uses FROM promotions WHERE id = ?`)
+      .bind(body.promotion.id)
+      .first<{ max_uses: number | null }>();
+    expect(row?.max_uses).toBe(50);
   });
 });

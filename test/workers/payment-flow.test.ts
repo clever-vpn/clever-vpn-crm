@@ -99,14 +99,14 @@ beforeAll(async () => {
 describe("契约 v11：/plans 只给一个 action", () => {
   const OTHER_TOKEN = "test-session-token-other";
 
-  it("匿名：能看商品与标价，但 action=login_required 且没有应付", async () => {
+  it("匿名：能看商品与标价，action=login_required，且列表不给应付字段", async () => {
     const res = await call("/api/app/v1/plans");
     expect(res.status).toBe(200);
     const items = (await res.json()) as Record<string, unknown>[];
     expect(items.length).toBeGreaterThan(0);
     for (const p of items) {
       expect(p.action).toBe("login_required");
-      expect(p.payable_minor).toBeNull();
+      expect(p).not.toHaveProperty("payable_minor"); // 应付 = 卡片价，不再单独下发
       expect(p.price_minor).toBeGreaterThan(0);
       // 旧口径必须彻底消失
       expect(p).not.toHaveProperty("purchasable");
@@ -120,11 +120,13 @@ describe("契约 v11：/plans 只给一个 action", () => {
     const items = (await res.json()) as {
       plan_id: string;
       action: string;
-      payable_minor: number | null;
+      price_minor: number;
+      promo_price_minor: number | null;
     }[];
     const plan = items.find((p) => p.plan_id === "pay_plan_30d");
     expect(plan?.action).toBe("buy");
-    expect(plan?.payable_minor).toBe(1500);
+    // 应付 = promo_price_minor ?? price_minor
+    expect(plan?.promo_price_minor ?? plan?.price_minor).toBe(1500);
   });
 
   it("expected_payable_minor 与报价不符 → 409 price_changed", async () => {
@@ -584,12 +586,11 @@ describe("升级：换成别的套餐（残值抵扣）", () => {
     const plans = (await list.json()) as {
       plan_id: string;
       action: string;
-      payable_minor: number | null;
       next_expires_at: string | null;
     }[];
     const up = plans.find((p) => p.plan_id === UPGRADE_PLAN);
     expect(up?.action).toBe("upgrade");
-    expect(up?.payable_minor).toBeNull();
+    expect(up).not.toHaveProperty("payable_minor");
     expect(up?.next_expires_at).toBeNull();
 
     const quoted = await call("/api/app/v1/quote", {

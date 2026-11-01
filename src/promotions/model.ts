@@ -400,5 +400,6 @@ export function promoBadgeText(p: Promotion): string {
  *   3. `audience !== specific` —— 定向名单写"仅限受邀用户"既不吸引人也看不懂
  */
 export function canAppearInList(p: Promotion): boolean {
-  return p.kind === "coupon" && p.auto_apply && p.visible && p.audience !== "specific";
+  // 自动券**必须上墙**（服务端强制 `visible=1`），所以这里不需要再看那个字段。
+  return p.kind === "coupon" && p.auto_apply && p.audience !== "specific";
 }
