@@ -631,32 +631,22 @@ export function PromotionForm({
           <Section title="展示">
             {isCoupon && draft.auto_apply ? (
               <>
-                <Field
-                  label="定价页展示"
-                  hint="自动生效的券没有码、没有入口，定价页是它唯一的曝光位"
-                >
-                  <select
-                    value={draft.visible ? "yes" : "no"}
-                    onChange={(e) => patch({ visible: e.target.value === "yes" })}
-                  >
-                    <option value="yes">展示（定价页图标活动）</option>
-                    <option value="no">不展示（只在结账时自动抵扣）</option>
-                  </select>
+                <div className="notice">
+                  自动券<strong>一定展示在定价页</strong>：用户看到的价就是他要付的。
+                  想停就结束活动 —— 没有「隐藏着但仍然扣钱」这种状态。
+                </div>
+                <Field label="角标文案" hint="定价页上那一句话。人群限制会自动加在前面，不用自己写">
+                  <input
+                    value={draft.badge_label ?? ""}
+                    onChange={(e) => patch({ badge_label: e.target.value })}
+                    placeholder="首单立减 ¥3"
+                  />
+                  {badgePreview && (
+                    <div className="hint" style={{ marginTop: 6 }}>
+                      用户会看到：<span className="tag">{badgePreview}</span>
+                    </div>
+                  )}
                 </Field>
-                {draft.visible && (
-                  <Field label="角标文案" hint="定价页上那一句话。人群限制会自动加在前面，不用自己写">
-                    <input
-                      value={draft.badge_label ?? ""}
-                      onChange={(e) => patch({ badge_label: e.target.value })}
-                      placeholder="首单立减 ¥3"
-                    />
-                    {badgePreview && (
-                      <div className="hint" style={{ marginTop: 6 }}>
-                        用户会看到：<span className="tag">{badgePreview}</span>
-                      </div>
-                    )}
-                  </Field>
-                )}
               </>
             ) : (
               <div className="notice">
@@ -664,8 +654,8 @@ export function PromotionForm({
                 码在定价页不展示 —— 否则渠道专属就变成人人都有了。
               </div>
             )}
-            {draft.auto_apply && (
-              <Field label="总名额（留空 = 不限）" hint="只对自动生效的券有意义；凭码的名额在码上">
+            {isGift && (
+              <Field label="总名额（留空 = 不限）" hint="礼包先到先得：抢完显示「来晚了」；券不设总名额">
                 <input
                   value={draft.max_uses ?? ""}
                   onChange={(e) => patch({ max_uses: e.target.value ? Number(e.target.value) : null })}

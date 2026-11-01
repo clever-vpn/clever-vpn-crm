@@ -99,7 +99,8 @@ export async function generateCodes(
   opts: {
     promotionId: number;
     count: number;
-    maxUses?: number;
+    /** 每个码最多用几次；`null` = 不限（券的共享码） */
+    maxUses?: number | null;
     prefix?: string | null;
     expiresAt?: string | null;
     note?: string | null;
@@ -122,7 +123,7 @@ export async function generateCodes(
         opts.promotionId,
         code,
         batchId,
-        Math.max(1, Math.round(opts.maxUses ?? 1)),
+        opts.maxUses === null ? null : Math.max(1, Math.round(opts.maxUses ?? 1)),
         opts.expiresAt ?? null,
         opts.note ?? null,
         now.toISOString(),

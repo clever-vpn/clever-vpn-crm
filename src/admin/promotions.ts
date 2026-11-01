@@ -124,8 +124,12 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   if (maxUsesRaw !== null && maxUsesRaw <= 0) {
     errors.push("总名额留空表示不限；要限制就填大于 0 的整数");
   }
-  // 名额只有一个来源：自动活动记在活动上；凭码活动记在码上（`promotion_codes.max_uses`）
-  const maxUses = autoApply ? maxUsesRaw : null;
+  // **总名额只对礼包有意义**（0 元权益，先到先得，抢完只是"来晚了"）。
+  // 券一律不设总名额：抢完会让价格回升，等价于"看到 12、付 15"（契约 §2.9.3）。
+  if (kind !== "gift" && maxUsesRaw !== null) {
+    errors.push("只有礼包设总名额；券不限量（要限时就设时间窗，每人 1 次是固定的）");
+  }
+  const maxUses = kind === "gift" ? maxUsesRaw : null;
   // 每人每活动固定 1 次（契约 §2.9.7）：同一人反复用同一个优惠违背营销语义，
   // 也让"核销次数 = 触达人数"这条报表口径失效。
   const perCustomer = 1;
@@ -151,14 +155,11 @@ function validate(input: Record<string, unknown>): { ok: true; value: PromotionI
   if (autoApply && !badgeLabel) {
     errors.push("自动生效的券必须有角标文案（用户只能通过它在定价页看到这个活动）");
   }
-  // 凭码券一律不进定价页：摆上去等于把渠道专属（博主 / 实体卡）变成人人都有。
-  // 礼包相反 —— **货架是它唯一的入口**（没有推送、也没有"管理员替他领"），
-  // 所以租户选什么就落什么：勾「站内展示」= 够格的人都能在货架看到；
+  // **自动券必然上墙**（契约 §2.9.3）：价格变了必须同时给出"凭什么"，否则就是暗改价。
+  // 所以券没有"隐藏但仍生效"这种状态 —— 租户想停就结束活动。
+  // 凭码券不进定价页（站外分发）；礼包按租户选：勾着 = 够格的人都看得到货架，
   // 不勾 = 只出现在被点名那位客户的货架上（`audience='specific'`，见 gift.ts）。
-  const visible =
-    kind === "gift"
-      ? input.visible !== false
-      : autoApply && kind === "coupon" && input.visible !== false;
+  const visible = kind === "gift" ? input.visible !== false : kind === "coupon" && autoApply;
 
   if (errors.length) return { ok: false, errors };
 
@@ -576,9 +577,11 @@ export async function handleAdminPromotions(
     if (!Number.isInteger(count) || count < 1 || count > 500) {
       return fail(400, "invalid_request", "count 必须是 1–500 的整数");
     }
+    // 码上的用量是**分发控制**，不是定价：用户输码之后才看到价，所以它不影响
+    // "卡片价 = 实付"。`max_uses` 传 null = 不限（共享码）。
     const maxUses = body.max_uses === undefined ? 1 : Number(body.max_uses);
-    if (!Number.isInteger(maxUses) || maxUses < 1) {
-      return fail(400, "invalid_request", "max_uses 必须是 ≥1 的整数");
+    if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1)) {
+      return fail(400, "invalid_request", "max_uses 必须是 ≥1 的整数（null = 不限）");
     }
     const prefix = typeof body.prefix === "string" ? body.prefix : null;
 

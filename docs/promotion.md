@@ -141,12 +141,12 @@ promotions                     一个活动
   min_subtotal_minor           ⚠️ 两家面板都没有，我们必须有
   limit_plan_kinds / limit_plan_ids
   starts_at / ends_at
-  max_uses / max_uses_per_customer
+  max_uses / max_uses_per_customer   ⚠️ max_uses 只对礼包有效；券不限量（抢完会让价格回升）
   audience / audience_days     人群（all/new/existing/expiring/expired/specific）
   cooldown_hours               同一客户两次核销的最小间隔
   new_user_within_days         额外的"注册 N 天内"闸门（与 audience 正交）
   badge_label                  "限时 8 折"，直接给 UI 展示
-  visible                      是否在用户的货架上公开出现
+  visible                      礼包：是否在货架上公开出现；券：自动券恒为 1（必须上墙）
 
 promotion_targets               audience=specific 的点名名单
   promotion_id, customer_id     唯一约束：(promotion_id, customer_id)

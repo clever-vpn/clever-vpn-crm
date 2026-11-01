@@ -39,7 +39,7 @@ import { listTimeline } from "../subscriptions/timeline";
 import { orderListView } from "../orders/view";
 import { bindReferral, referralPanel } from "../promotions/referral";
 import { redeemGiftCode } from "../promotions/redeem";
-import { planPromos, resolveForPlans, resolvePromotion } from "../promotions/service";
+import { planPromos, resolvePromotion } from "../promotions/service";
 import { customerSubscription, ensureTrafficFresh } from "../subscriptions/store";
 import { startTrial, trialInfo } from "../subscriptions/trial";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
@@ -546,50 +546,37 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const plans = await loadActivePlans(env);
     const now = new Date();
     const ctx = viewer ? await currentContext(env, viewer.id) : { sub: null, current: null };
-    // 促销展示位（§2.9.3，v19）：按**真实访客**算 —— 登录用户与 `/quote` 同源，
-    // 匿名只按“该人群最优情形”算，并把条件写进角标前缀
+    // 促销展示位（§2.9.3）：按**真实访客**算 —— 登录用户按自己的条件，匿名按“该人群
+    // 最优情形”，条件写进角标前缀。活动价就是实付：自动券必然上墙、不限量，
+    // 所以列表不再给第二个“应付”字段（`payable_minor` 已删除）。
     const promos = await planPromos(env, { plans, customerId: viewer?.id ?? null, now });
-    const mine = viewer
-      ? await resolveForPlans(env, { plans, customerId: viewer.id, now })
-      : new Map<string, { discount_minor: number }>();
 
     const items = plans.map((plan) => {
       const base = planForClient(plan);
       const best = promos.get(plan.id);
       const promo = {
         // 划线价：就是套餐标价
-        // 活动价（满足活动条件时的价）：只给**宣传位**用，不代表这个人的应付
         promo_price_minor: best?.promo_price_minor ?? null,
         // null = 没有公开活动；文案由 CRM 给（含人群前缀），App 不拼
         promo_badge: best?.badge_label ?? null,
       };
       if (!viewer) {
-        // 匿名：只有“所有人都能用”的活动才敢当报价报给游客；限人群的等登录
-        const openToAll = best?.promotion.audience === "all";
         return {
           ...base,
           ...promo,
-          payable_minor: openToAll ? (best?.promo_price_minor ?? null) : null,
           action: "login_required" as const,
           reason: "登录后购买",
           next_expires_at: null,
         };
       }
       const quote = quotePurchase(ctx.current, plan, now);
-      const discount = mine.get(plan.id)?.discount_minor ?? 0;
-      // 与 /quote 同一个公式：payable = max(0, promo(price) − residual)
-      const payable = quote.allowed
-        ? Math.max(0, plan.price_minor - discount - (quote.residual_minor ?? 0))
-        : null;
       return {
         ...base,
         ...promo,
-        // 列表只给"按标价买"的金额；升级的应付含残值，必须点开由 /quote 给
-        payable_minor: quote.action === "upgrade" ? null : payable,
         // App 不做任何判断：按 action 渲染 购买 / 续订 / 升级 按钮
         action: quote.action,
         reason: quote.reason,
-        // 只有续订给“续订后有效期至…”，升级的到期日由 /quote 给
+        // 只有续订给“续订后有效期至…”，升级的到期日与应付由 /quote 给
         next_expires_at: quote.action === "renewal" ? quote.expires_at : null,
       };
     });

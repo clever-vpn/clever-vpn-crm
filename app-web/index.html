@@ -80,7 +80,7 @@
   </section>
 
   <section class="card" id="plans-card" hidden>
-    <h2>2 · 套餐（<code>action</code> / <code>payable_minor</code> 全部由 CRM 给，App 不做判断）</h2>
+    <h2>2 · 套餐（<code>action</code> / <code>promo_price_minor</code> 全部由 CRM 给，App 不做判断）</h2>
     <div class="row" style="margin-bottom:10px">
       <label class="hint">支付方式 <select id="method"></select></label>
     </div>
@@ -267,7 +267,7 @@ function renderPlans(plans) {
       </div>
       <div class="meta">${canBuy
         ? `${ACTION[p.action]} · ` +
-          (p.action === 'upgrade' ? '点「升级」看应付' : `应付 ${yuan(p.payable_minor)}`) +
+          (p.action === 'upgrade' ? '点「升级」看应付' : `应付 ${yuan(p.promo_price_minor ?? p.price_minor)}`) +
           (p.action === 'renewal' && p.next_expires_at ? ` · 续订后有效期至 ${p.next_expires_at.slice(0, 10)}` : '')
         : (p.action === 'login_required' ? '登录后订阅' : '不可购买：' + (p.reason ?? ''))}</div>
       ${canBuy
