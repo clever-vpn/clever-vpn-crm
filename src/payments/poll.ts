@@ -37,6 +37,7 @@ import { gatewaySecret } from "./checkout";
 import { GATEWAY_COLUMNS, mappingOf } from "./gateways";
 import { buildQueryRequest, hasQuery, parseQueryResponse } from "./mapping";
 import { PAYABLE_COLUMNS, markGatewayResult, settlePaidOrder } from "./notify";
+import { queryIapOnce } from "./iap-poll";
 
 import type { Env } from "../env";
 import type { GatewayRow } from "./gateways";
@@ -292,6 +293,35 @@ export async function pollPendingOrders(
   const gwList = gwRows.results ?? [];
 
   for (const order of orders) {
+    // 商店轨道（`source='iap'`）没有网关：问商店，走同一个结算入口
+    if (order.source === "iap") {
+      const out = await queryIapOnce(env, order, { fetch: deps.fetch, now });
+      switch (out.verdict) {
+        case "paid":
+          report.paid += 1;
+          continue;
+        case "terminal":
+          report.terminal += 1;
+          continue;
+        case "no_query":
+          report.no_query += 1;
+          await scheduleNextPoll(env, order, POLL_STOPPED, now);
+          continue;
+        case "error":
+          report.failed += 1;
+          if (out.message) report.errors.push(`${order.code}: ${out.message}`);
+          break;
+        case "pending":
+          break;
+      }
+      if (await expireIfDue(env, order, now)) {
+        report.expired += 1;
+        continue;
+      }
+      await scheduleNextPoll(env, order, nextPollAt(order.created_at, now) ?? POLL_STOPPED, now);
+      continue;
+    }
+
     const gateway = order.gateway_id
       ? (gwList.find((g) => g.id === order.gateway_id) ?? null)
       : null;

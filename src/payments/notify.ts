@@ -58,6 +58,8 @@ export interface PayableOrder {
   /** `purchase`（真实售卖）｜`signup`（注册赠送）｜`test`（后台验网关） */
   source: string;
   provider_order_no: string | null;
+  /** 商店事务号（Apple transactionId / Google purchaseToken）；网关单为空 */
+  provider_trade_no: string | null;
   created_at: string;
   updated_at: string;
   /** 支付截止时间（TTL）；过期后不再自动查单，只等回调或人工 */
@@ -67,7 +69,7 @@ export interface PayableOrder {
 /** `SELECT ${PAYABLE_COLUMNS}` —— 与 `PayableOrder` 一一对应 */
 export const PAYABLE_COLUMNS = `id, code, customer_id, plan_id, plan_snapshot, amount_minor,
   discount_minor, promotion_id, code_id, currency, payment_method, gateway_id, status, source,
-  provider_order_no, created_at, updated_at, expires_at`;
+  provider_order_no, provider_trade_no, created_at, updated_at, expires_at`;
 
 type OrderRow = Omit<PayableOrder, "provider_order_no" | "created_at" | "updated_at" | "expires_at"> & {
   provider_order_no?: string | null;
