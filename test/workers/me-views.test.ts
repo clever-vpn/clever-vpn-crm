@@ -71,8 +71,8 @@ async function payMonthly(token: string): Promise<string> {
     method: "POST",
     body: { plan_id: "views_30d" },
   });
-  const q = (await quote.json()) as { allowed: boolean; payable_minor: number | null };
-  expect(q.allowed).toBe(true);
+  const q = (await quote.json()) as { action: string; payable_minor: number | null };
+  expect(q.action).not.toBe("blocked");
   const created = await appCall("/api/app/v1/orders", token, {
     method: "POST",
     body: {
@@ -191,7 +191,7 @@ describe("GET /me/timeline", () => {
       next_cursor: number | null;
     };
     expect(first.items).toHaveLength(1);
-    expect(first.next_cursor).toBeGreaterThan(0);
+    expect(first.next_cursor).toEqual(expect.any(String));
 
     const second = (await (
       await appCall(`/api/app/v1/me/timeline?limit=1&cursor=${first.next_cursor}`, token)

@@ -3,7 +3,7 @@
  *
  * 要钉住的行为（契约 `app-crm.md` §2.9）：
  *   - `/plans` 的 `price_minor` / `promo_price_minor` / `promo_badge` 是**公开**信息；个人应付只给登录用户
- *   - `/quote` 是唯一金额来源：带码折扣、错码拒绝（200 + allowed:false，不是 5xx）
+ *   - `/quote` 是唯一金额来源：带码折扣、错码拒绝（200 + action:"blocked"，不是 5xx）
  *   - `/orders` 下单时**重新校验**，金额按促销后收，并把 `promotion_id` 落单
  *   - **支付成功才核销**：`redemptions` 只在回调里写，重放不重复
  *   - 邀请码：选填、只在建号那一刻生效、输错静默忽略；被邀请人首单后推荐人拿权益奖励
@@ -150,8 +150,8 @@ async function payOrder(token: string, planId: string, promoCode?: string): Prom
     method: "POST",
     body: { plan_id: planId, ...(promoCode ? { promo_code: promoCode } : {}) },
   });
-  const q = (await quote.json()) as { allowed: boolean; payable_minor: number | null; reason: string | null };
-  expect(q.allowed, q.reason ?? "").toBe(true);
+  const q = (await quote.json()) as { action: string; payable_minor: number | null; reason: string | null };
+  expect(q.action, q.reason ?? "").not.toBe("blocked");
 
   const created = await appCall("/api/app/v1/orders", token, {
     method: "POST",
@@ -440,14 +440,14 @@ describe("/quote：唯一的金额来源", () => {
     });
     expect(res.status).toBe(200);
     const q = (await res.json()) as {
-      allowed: boolean;
+      action: string;
       payable_minor: number;
       discount_minor: number;
       discount_label: string;
       applied_promotions: { code: string | null; label: string }[];
       price_minor: number;
     };
-    expect(q.allowed).toBe(true);
+    expect(q.action).not.toBe("blocked");
     expect(q.price_minor).toBe(1500);
     expect(q.discount_minor).toBe(300);
     expect(q.payable_minor).toBe(1200);
@@ -455,7 +455,7 @@ describe("/quote：唯一的金额来源", () => {
     expect(q.applied_promotions[0]?.code).toBe("NEW300");
   });
 
-  it("错码：200 + allowed:false + 整句理由（不是 5xx）", async () => {
+  it("错码：200 + action=blocked + 整句理由（不是 5xx）", async () => {
     const token = await login(PAYER);
     for (const code of ["NOPE", "NEW300X"]) {
       const res = await appCall("/api/app/v1/quote", token, {
@@ -463,10 +463,11 @@ describe("/quote：唯一的金额来源", () => {
         body: { plan_id: "promo_30d", promo_code: code },
       });
       expect(res.status).toBe(200);
-      const q = (await res.json()) as { allowed: boolean; reason: string; payable_minor: null };
-      expect(q.allowed).toBe(false);
+      const q = (await res.json()) as { action: string; reason: string; payable_minor: number };
+      expect(q.action).toBe("blocked");
       expect(q.reason.length).toBeGreaterThan(0);
-      expect(q.payable_minor).toBeNull();
+      // `payable_minor` 恒在（int），blocked 时只是无意义 —— 不返回 null
+      expect(typeof q.payable_minor).toBe("number");
     }
   });
 
@@ -485,8 +486,8 @@ describe("/quote：唯一的金额来源", () => {
       method: "POST",
       body: { plan_id: "promo_90d", promo_code: "FREE100" },
     });
-    const q = (await res.json()) as { allowed: boolean; reason: string };
-    expect(q.allowed).toBe(false);
+    const q = (await res.json()) as { action: string; reason: string };
+    expect(q.action).toBe("blocked");
     expect(q.reason).toContain("抵扣全部金额");
   });
 });
@@ -574,8 +575,8 @@ describe("/orders + 支付回调", () => {
       method: "POST",
       body: { plan_id: "promo_30d", promo_code: "NEW300" },
     });
-    const q = (await res.json()) as { allowed: boolean; reason: string };
-    expect(q.allowed).toBe(false);
+    const q = (await res.json()) as { action: string; reason: string };
+    expect(q.action).toBe("blocked");
     expect(q.reason).toContain("已经用过");
   });
 });
@@ -1427,8 +1428,8 @@ describe("批次码", () => {
       method: "POST",
       body: { plan_id: "promo_30d", promo_code: codes[0]!.code },
     });
-    const q = (await quote.json()) as { allowed: boolean; payable_minor: number; reason: string };
-    expect(q.allowed, q.reason).toBe(true);
+    const q = (await quote.json()) as { action: string; payable_minor: number; reason: string };
+    expect(q.action, q.reason).not.toBe("blocked");
     expect(q.payable_minor).toBe(1000); // 1500 - 500
 
     // 走完整下单 + 支付，核销后码的用量应为 1

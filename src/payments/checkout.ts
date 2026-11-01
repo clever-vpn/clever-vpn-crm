@@ -155,7 +155,9 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
     ? routeForTest(await listGateways(env), input.testGatewayId, input.method)
     : pickGateway(await listLiveGateways(env), input.method, input.customerEmail, env);
   if (!route) {
-    return { ok: false, status: 400, code: "payment_method_unavailable", message: "该支付方式暂不可用" };
+    // 契约 §6：这个方式此刻不可用（网关停用 / 已下线）⇒ 422 `payment_unavailable`，
+    // App 刷新 `/plans` 换一种，不要重试同一个。
+    return { ok: false, status: 422, code: "payment_unavailable", message: "该支付方式暂不可用，请换一种" };
   }
   const mapping = mappingOf(route.gateway);
   if (!mapping) {

@@ -238,9 +238,10 @@ describe("mock 支付全链路", () => {
       token: "test-session-token-other",
       body: { plan_id: "pay_plan_30d", payment_method: "alipay" },
     });
-    expect(res.status).toBe(400);
+    // 契约 §6：方式不可用 = 422 `payment_unavailable`（不是 400、不是 409）
+    expect(res.status).toBe(422);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("payment_method_unavailable");
+    expect(body.error.code).toBe("payment_unavailable");
   });
 
   it("回调签名被改 → 403，且订单不变", async () => {
