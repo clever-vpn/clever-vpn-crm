@@ -63,6 +63,12 @@ export default function Customers() {
   const [adjustBusy, setAdjustBusy] = useState(false);
   const [adjustForm] = Form.useForm<{ days?: number; gb?: number; reason: string }>();
 
+  // 临时冻结 / 解冻（停服务不减权益，与"调整权益"是两件事）
+  const [holdOpen, setHoldOpen] = useState(false);
+  const [holdTarget, setHoldTarget] = useState<AdminCustomer | null>(null);
+  const [holdBusy, setHoldBusy] = useState(false);
+  const [holdForm] = Form.useForm<{ reason: string }>();
+
   const load = useCallback(async () => {
     try {
       const [{ customers }, { plans: list }] = await Promise.all([api.customers(), api.plans()]);
@@ -154,6 +160,23 @@ export default function Customers() {
       await load();
     } catch (e) {
       message.error(e instanceof ApiError ? e.message || e.code : "调整失败");
+    }
+  }
+
+  async function submitHold() {
+    if (!holdTarget?.subscription) return;
+    const v = await holdForm.validateFields();
+    const frozen = holdTarget.subscription.status_reason !== "frozen";
+    setHoldBusy(true);
+    try {
+      const r = await api.setCustomerHold(holdTarget.id, { frozen, reason: v.reason });
+      message.success(
+        `${frozen ? "已冻结" : "已解冻"}${r.platform_synced ? "" : "（未同步平台）"}`,
+      );
+      setHoldOpen(false);
+      await load();
+    } catch (e) {
+      message.error(e instanceof ApiError ? e.message || e.code : "操作失败");
     } finally {
       setAdjustBusy(false);
     }
@@ -288,6 +311,19 @@ export default function Customers() {
                       调整权益
                     </Button>
                   )}
+                  {c.subscription && (
+                    <Button
+                      size="small"
+                      danger={c.subscription.status_reason !== "frozen"}
+                      onClick={() => {
+                        setHoldTarget(c);
+                        holdForm.setFieldsValue({ reason: "" });
+                        setHoldOpen(true);
+                      }}
+                    >
+                      {c.subscription.status_reason === "frozen" ? "解冻" : "冻结"}
+                    </Button>
+                  )}
                 </Space>
               ),
             },
@@ -365,6 +401,35 @@ export default function Customers() {
             rules={[{ required: true, message: "必须写清楚为什么补" }]}
           >
             <Input placeholder="例：11-03 线路故障补偿 / 投诉安抚" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 临时冻结：停服务、不减权益；两处一起动（平台 frozen + CRM hold） */}
+      <Modal
+        open={holdOpen}
+        title={
+          holdTarget ? `${holdTarget.subscription?.status_reason === "frozen" ? "解冻" : "冻结"}：${holdTarget.email}` : ""
+        }
+        onCancel={() => setHoldOpen(false)}
+        onOk={() => void submitHold()}
+        confirmLoading={holdBusy}
+        okText={holdTarget?.subscription?.status_reason === "frozen" ? "解冻" : "冻结"}
+        okButtonProps={{ danger: holdTarget?.subscription?.status_reason !== "frozen" }}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary">
+          {holdTarget?.subscription?.status_reason === "frozen"
+            ? "解冻后 VPN 立即恢复，会话与激活码都不变。"
+            : "冻结只停服务：VPN 立刻连不上，但用户仍能登录、看订阅、找客服。除权（退款撤销）是另一件事，不走这里。"}
+        </Typography.Paragraph>
+        <Form form={holdForm} layout="vertical">
+          <Form.Item
+            label="原因（必填）"
+            name="reason"
+            rules={[{ required: true, message: "必须写清楚为什么冻结 / 解冻" }]}
+          >
+            <Input placeholder="例：欠费暂停 / 投诉核实中 / 已结清" />
           </Form.Item>
         </Form>
       </Modal>

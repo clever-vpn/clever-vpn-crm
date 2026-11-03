@@ -257,6 +257,14 @@ export const api = {
       input,
     ),
 
+  /** 临时冻结 / 解冻（停服务，不减权益）：两处一起动，见契约 §2.6 ⑦ */
+  setCustomerHold: (id: number, input: { frozen: boolean; reason: string }) =>
+    call<{ ok: true; hold: string; platform_synced: boolean }>(
+      "POST",
+      `/customers/${id}/hold`,
+      input,
+    ),
+
   // ── 商店渠道（内购凭证；不是网关，见契约 §2.4.3.1）──
   storeChannels: () => call<StoreChannelsResponse>("GET", "/store-channels"),
   saveStoreChannel: (
