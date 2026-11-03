@@ -20,6 +20,7 @@ import {
   upsertSubscription,
 } from "../subscriptions/store";
 import { adjustSubscription } from "../subscriptions/adjust";
+import { setCustomerHold } from "../subscriptions/hold";
 import { pollOrderOnce } from "../payments/poll";
 
 import type { Env } from "../env";
@@ -252,6 +253,23 @@ export async function handleAdminSubscriptions(
   // ── **直接调整权益**（特殊补偿通道）──
   //    与礼包的边界：礼包是营销活动（有人群/名额/统计、用户自己来领）；
   //    这里是"给某一个人补一点"，不绑定活动、不进营销统计，但**必须写原因**。
+  // ── 临时冻结 / 解冻（停服务，不减权益；契约 §2.6 ⑦）──
+  const holdOne = /^\/customers\/(\d+)\/hold$/.exec(path ?? "");
+  if (method === "POST" && holdOne) {
+    const body = await readBody(request);
+    const result = await setCustomerHold(env, {
+      customerId: Number(holdOne[1]),
+      frozen: body.frozen !== false,
+      reason: typeof body.reason === "string" ? body.reason : "",
+    });
+    if (!result.ok) {
+      return fail(result.code === "no_subscription" ? 404 : 400, result.code, result.message);
+    }
+    await audit(env, actor, result.hold === "frozen" ? "customer_frozen" : "customer_unfrozen",
+      String(holdOne[1]), { reason: body.reason });
+    return json({ ok: true, hold: result.hold, platform_synced: result.platform_synced });
+  }
+
   if (method === "POST" && path === "/subscriptions/adjust") {
     const body = await readBody(request);
     const customerId = Number(body.customer_id ?? 0);

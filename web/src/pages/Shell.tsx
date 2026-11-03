@@ -18,7 +18,6 @@ import {
   DashboardOutlined,
   FileTextOutlined,
   GiftOutlined,
-  ShoppingOutlined,
   LogoutOutlined,
   InboxOutlined,
   MenuOutlined,
@@ -60,8 +59,15 @@ const NAV: NavItem[] = [
   { key: "/admin/customers", href: "/admin/customers", label: "客户", icon: <TeamOutlined /> },
   { key: "/admin/orders", href: "/admin/orders", label: "订单", icon: <FileTextOutlined /> },
   { key: "/admin/plans", href: "/admin/plans", label: "套餐", icon: <AppstoreOutlined /> },
-  { key: "/admin/gateways", href: "/admin/gateways", label: "支付", icon: <CreditCardOutlined /> },
-  { key: "/admin/stores", href: "/admin/stores", label: "商店", icon: <ShoppingOutlined /> },
+  {
+    key: "/admin/payments",
+    label: "支付",
+    icon: <CreditCardOutlined />,
+    children: [
+      { key: "/admin/payments/gateways", href: "/admin/payments/gateways", label: "支付网关" },
+      { key: "/admin/payments/stores", href: "/admin/payments/stores", label: "商店渠道" },
+    ],
+  },
   {
     key: "/admin/marketing",
     label: "营销",
@@ -93,7 +99,16 @@ const MENU_ITEMS = NAV.map((n) =>
 );
 
 /** 营销分组默认展开：分类存在的意义是“一眼看全”，不该先让人再点一次 */
-const DEFAULT_OPEN_KEYS = ["/admin/marketing"];
+const DEFAULT_OPEN_KEYS = ["/admin/marketing", "/admin/payments"];
+
+/**
+ * 旧地址 → 新地址。支付拆成二级菜单后，早期收藏的 `/admin/gateways` 仍要能打开，
+ * 否则"书签失效"会被当成功能坏了。
+ */
+const LEGACY_PATHS: Record<string, string> = {
+  "/admin/gateways": "/admin/payments/gateways",
+  "/admin/stores": "/admin/payments/stores",
+};
 
 /**
  * 手机底部标签栏只放"每天要点"的入口（Material / iOS 规范：3–5 个）。
@@ -129,7 +144,8 @@ export default function Shell({
   onLoggedOut: () => void;
   onMeChanged: (me: Me) => void;
 }) {
-  const [path, navigate] = usePathname();
+  const [rawPath, navigate] = usePathname();
+  const path = LEGACY_PATHS[rawPath] ?? rawPath;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const screens = Grid.useBreakpoint();
   // 首帧 screens 是空对象（还不知道宽度）：用 md === false 判断"确认是小屏"，
@@ -152,9 +168,9 @@ export default function Shell({
       <Orders />
     ) : path === "/admin/plans" ? (
       <Plans />
-    ) : path === "/admin/gateways" ? (
+    ) : path === "/admin/payments/gateways" ? (
       <Gateways />
-    ) : path === "/admin/stores" ? (
+    ) : path === "/admin/payments/stores" ? (
       <Stores />
     ) : path === "/admin/marketing/overview" ? (
       <Marketing />
