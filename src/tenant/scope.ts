@@ -117,7 +117,57 @@ export async function scopeToTenant(
   return { env: scoped, tenantId: map.tenant_id, slot: map.slot };
 }
 
+/**
+ * 启动自检（每个 isolate 只跑一次，见 `ensureConfig`）。
+ *
+ * 多租户最容易踩的坑不是逻辑错，而是**绑定漏了**：KV 指向一个 slot，wrangler 里却
+ * 少一条 `DB_<slot>`。这种错不会在部署时报，只会在某个租户第一次请求时炸，而且
+ * 报得像业务 bug。所以启动就把话说清楚，并让 `/__version` 能查到。
+ */
+export interface ConfigCheck {
+  ok: boolean;
+  mode: Mode;
+  problems: string[];
+  /** multi 下本 shard 实际绑了几个库 */
+  dbs: number;
+}
+
+export function selfCheck(env: { MODE?: string; DB?: unknown } & Record<string, unknown>): ConfigCheck {
+  const mode = modeOf(env);
+  const problems: string[] = [];
+  const dbs = Object.keys(env).filter((k) => /^DB_\d+$/.test(k)).length;
+
+  if (mode === "single") {
+    if (!env.DB) problems.push("MODE=single 但没绑定 DB（d1_databases）");
+  } else {
+    if (!env.HOSTS) problems.push("MODE=multi 但没绑定 HOSTS（kv_namespaces）");
+    if (dbs === 0) problems.push("MODE=multi 但没有任何 DB_<slot> 绑定");
+    if (env.DB) problems.push("MODE=multi 却仍绑着 DB：请求不会用到它，容易误判");
+  }
+
+  return { ok: problems.length === 0, mode, problems, dbs };
+}
+
+let checked = false;
+
+/** 每个 isolate 首次请求时跑一次自检；问题只记日志，不改变请求结果 */
+export function ensureConfig(env: Record<string, unknown>): ConfigCheck {
+  const result = selfCheck(env);
+  if (!checked) {
+    checked = true;
+    if (!result.ok) {
+      console.error(`[tenant] 配置自检失败（mode=${result.mode}）：${result.problems.join("；")}`);
+    }
+  }
+  return result;
+}
+
 /** 仅供测试：清掉 isolate 缓存 */
 export function __clearScopeCache(): void {
   memo.clear();
+}
+
+/** 仅供测试：重置自检的一次性标记 */
+export function __resetSelfCheck(): void {
+  checked = false;
 }

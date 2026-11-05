@@ -23,7 +23,7 @@ import { handleUnsubscribe } from "./notices/unsubscribe";
 import { sendPendingNotices } from "./notices/store";
 import { pollPendingOrders } from "./payments/poll";
 import { getNumberSetting, setSetting } from "./settings";
-import { TenantResolveError, modeOf, scopeToTenant } from "./tenant/scope";
+import { TenantResolveError, ensureConfig, modeOf, scopeToTenant } from "./tenant/scope";
 import type { Scoped } from "./tenant/scope";
 
 /** 每小时重活的门：距上次执行 ≥55 分钟就允许跑（漏了下一 tick 自动补，不用等整点） */
@@ -55,6 +55,10 @@ function json(body: unknown, status = 200): Response {
 
 export default {
   async fetch(request: Request, rawEnv: Env): Promise<Response> {
+    // 每个 isolate 首次请求做一次配置自检：绑定漏了要在这里喊，不要等到某个租户
+    // 第一次请求才暴露成"离奇的 500"。结果同时挂在 /__version 上供部署后核对。
+    const config = ensureConfig(rawEnv as unknown as Record<string, unknown>);
+
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       return json({ status: "ok" });
@@ -89,6 +93,7 @@ export default {
         contract: env.CRM_CONTRACT_VERSION ?? "1",
         mode: modeOf(rawEnv),
         tenant: scoped.tenantId || null,
+        config: { ok: config.ok, problems: config.problems, dbs: config.dbs },
       });
     }
 

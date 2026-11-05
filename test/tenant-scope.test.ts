@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   TenantResolveError,
   __clearScopeCache,
+  __resetSelfCheck,
+  ensureConfig,
   modeOf,
   scopeToTenant,
+  selfCheck,
 } from "../src/tenant/scope";
 
 /** 极简 KV 替身：只实现 get(key, 'json') */
@@ -114,5 +117,58 @@ describe("scopeToTenant · multi（SaaS 分片）", () => {
     await scopeToTenant(req("https://acme.app.example.com/"), e);
     await scopeToTenant(req("https://acme.app.example.com/other"), e);
     expect(reads).toBe(1);
+  });
+});
+
+describe("启动自检 selfCheck", () => {
+  it("single：没库就是错", () => {
+    const r = selfCheck({});
+    expect(r.ok).toBe(false);
+    expect(r.problems.join()).toContain("没绑定 DB");
+  });
+
+  it("single：正常配置无问题", () => {
+    expect(selfCheck({ DB: DB_A }).ok).toBe(true);
+  });
+
+  it("multi：缺 HOSTS、缺 DB_*、留着 DB 都会被点名", () => {
+    const r = selfCheck({ MODE: "multi", DB: DB_A });
+    expect(r.ok).toBe(false);
+    expect(r.problems).toHaveLength(3);
+    expect(r.dbs).toBe(0);
+  });
+
+  it("multi：HOSTS + 至少一个 DB_N 即通过，并报出库数", () => {
+    const r = selfCheck({ MODE: "multi", HOSTS: kvOf({}), DB_0: DB_A, DB_1: DB_B });
+    expect(r.ok).toBe(true);
+    expect(r.dbs).toBe(2);
+  });
+
+  it("ensureConfig 每个 isolate 只喊一次，且不影响请求结果", () => {
+    __resetSelfCheck();
+    const seen: string[] = [];
+    const orig = console.error;
+    console.error = (...args: unknown[]) => void seen.push(String(args[0]));
+    try {
+      ensureConfig({});
+      ensureConfig({});
+    } finally {
+      console.error = orig;
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("配置自检失败");
+  });
+
+  it("配置正常时ensureConfig 不打日志", () => {
+    __resetSelfCheck();
+    const seen: string[] = [];
+    const orig = console.error;
+    console.error = (...args: unknown[]) => void seen.push(String(args[0]));
+    try {
+      ensureConfig({ DB: DB_A });
+    } finally {
+      console.error = orig;
+    }
+    expect(seen).toHaveLength(0);
   });
 });
