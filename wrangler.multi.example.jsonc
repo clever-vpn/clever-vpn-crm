@@ -1,0 +1,78 @@
+/**
+ * 多租户（SaaS 分片）配置**示例** —— 不是可直接部署的文件。
+ *
+ * 一个 shard = 一个 Worker 脚本 + 一批 D1 库。租户不跑自己的代码，跑的是同一份脚本，
+ * 差别只在"这个请求该用哪个库"：`host → KV → slot → env['DB_' + slot]`
+ * （ADR 0004、clever-vpn-docs 的 contracts/site-hosting.md §2.2）。
+ *
+ * 真实配置由 cf-api/CI 程序化生成，不要手改线上 shard：
+ *   - `DB_0…DB_N` 按该 shard 实际承载的租户数生成（2 000 租户/shard）；
+ *   - `HOSTS` 的 KV id 由 cf-api 在开通时写入，租户 → slot 的映射全在 KV 里，
+ *     所以扩租户**不需要重新部署**，只有"加一个库"才需要改绑定。
+ *
+ * 与单租户 wrangler.jsonc 的差别只有三处：
+ *   1. `MODE = "multi"`；
+ *   2. 不绑定 `DB`，改绑 `DB_<slot>`；
+ *   3. 多绑定一个 `HOSTS`。
+ * 业务代码一行都不用改 —— 它只认 `env.DB`，不知道库是怎么来的。
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "clever-vpn-crm-saas-shard-0",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "html_handling": "none"
+  },
+  "observability": {
+    "enabled": true
+  },
+  // 多租户下**故意不开 cron**：`scheduled()` 在 multi 模式里是空转的（见 src/index.ts），
+  // 开了只会每 2 分钟白跑一次、还让人误以为结算在跑。等"跨 shard 的统一调度器"
+  // 落地后再打开，届时它要能遍历本 shard 的所有 DB_*，而不是只认 env.DB。
+  // "triggers": { "crons": ["*/2 * * * *"] },
+
+  // 租户 → slot 的映射（写入口只有一个：cf-api 开通/迁移流程）
+  //   key   host:<小写域名>
+  //   value { tenant_id, slot, shard?, status? }
+  "kv_namespaces": [
+    {
+      "binding": "HOSTS",
+      "id": "REPLACE_WITH_HOSTS_KV_ID"
+    }
+  ],
+
+  // 分片内的库。生成规则：slot = floor(全局 slot / 2000)，库名 `clever-vpn-crm-<slot>`。
+  // 下面只列两个，真实 shard 会有几十到上千条 —— 由生成脚本按实际租户数产出，
+  // 手写列表一定会漏（漏了就是请求期 500：`missing_db`，见 src/tenant/scope.ts）。
+  "d1_databases": [
+    {
+      "binding": "DB_0",
+      "database_name": "clever-vpn-crm-0",
+      "database_id": "REPLACE_WITH_D1_ID_0",
+      "migrations_dir": "migrations-dev"
+    },
+    {
+      "binding": "DB_1",
+      "database_name": "clever-vpn-crm-1",
+      "database_id": "REPLACE_WITH_D1_ID_1",
+      "migrations_dir": "migrations-dev"
+    }
+  ],
+
+  // secret 照旧 `wrangler secret put`（每 shard 一份，内容相同）：
+  //   CF_API_TOKEN / SESSION_SECRET
+  "vars": {
+    "MODE": "multi",
+    "CF_API_BASE": "https://api.clever-vpn.org",
+    "CRM_CODE_VERSION": "dev",
+    "CRM_CONTRACT_VERSION": "19",
+    "ENVIRONMENT": "production",
+    "APP_ORIGINS": "https://app.clever-vpn.org",
+    // 租户 id 来自 KV，不是常量 —— 所以这里不能有 CRM_TENANT_ID
+    "SITE_URL": ""
+  }
+}
