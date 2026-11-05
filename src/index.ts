@@ -23,6 +23,8 @@ import { handleUnsubscribe } from "./notices/unsubscribe";
 import { sendPendingNotices } from "./notices/store";
 import { pollPendingOrders } from "./payments/poll";
 import { getNumberSetting, setSetting } from "./settings";
+import { TenantResolveError, modeOf, scopeToTenant } from "./tenant/scope";
+import type { Scoped } from "./tenant/scope";
 
 /** 每小时重活的门：距上次执行 ≥55 分钟就允许跑（漏了下一 tick 自动补，不用等整点） */
 const HOURLY_EVERY_MS = 55 * 60 * 1000;
@@ -52,17 +54,41 @@ function json(body: unknown, status = 200): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, rawEnv: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       return json({ status: "ok" });
     }
 
+    /**
+     * 取库：single（默认）原样用 `env.DB`；multi 走 `host → KV → slot`。
+     * 业务代码只看到 `env.DB`，不判别模式（见 src/tenant/scope.ts）。
+     * 解析失败**绝不回落默认租户** —— 未知域名就是 404。
+     */
+    let scoped: Scoped;
+    try {
+      scoped = await scopeToTenant(request, rawEnv as never);
+    } catch (error) {
+      if (error instanceof TenantResolveError) {
+        if (error.code === "suspended") {
+          // 410 而不是 404：域名解析得到、只是这个租户被停用，说清楚好排障
+          return new Response("站点已暂停", { status: 410 });
+        }
+        return json(
+          { error: error.code, message: error.message },
+          error.code === "unknown_host" ? 404 : 500,
+        );
+      }
+      throw error;
+    }
+    const env = scoped.env as unknown as Env;
+
     if (url.pathname === "/__version") {
       return json({
         code: env.CRM_CODE_VERSION ?? "dev",
         contract: env.CRM_CONTRACT_VERSION ?? "1",
-        tenant: env.CRM_TENANT_ID ?? null,
+        mode: modeOf(rawEnv),
+        tenant: scoped.tenantId || null,
       });
     }
 
@@ -138,6 +164,16 @@ export default {
    * 用**上次执行时间**做门是自愈的（漏了就下一 tick 补）。
    */
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    /**
+     * 多租户模式下**没有"当前租户"**：cron 打进来时不知道要为哪个库干活。
+     * 定时任务在 SaaS 下由 cf-api（或按 slot 逐个调度）负责，这里直接跳过，
+     * 绝不对着一片里"某一个随便的库"跑结算（那会写错租户的数据）。
+     * 自部署（single）行为完全不变。
+     */
+    if (modeOf(env as unknown as { MODE?: string }) === "multi") {
+      console.warn("[scheduled] MODE=multi 时不在 Worker 内跑定时任务（由平台侧调度）");
+      return;
+    }
     await ensureSchema(env.DB);
     const now = new Date();
 

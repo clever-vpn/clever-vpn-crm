@@ -1,6 +1,14 @@
 /** Worker 运行时绑定与变量。集中放这里，避免 router 与入口互相 import。 */
 export interface Env {
   DB: D1Database;
+  /**
+   * 多租户模式：`single`（默认，自部署）| `multi`（SaaS 分片）。
+   * 只有 single 时 `DB` 才是配置里那个绑定；multi 下由 `src/tenant/scope.ts`
+   * 按 `host → slot` 从 `DB_<slot>` 里挑一个放进 `env.DB`。
+   */
+  MODE?: string;
+  /** multi 专用：`host:* → { tenant_id, slot, shard, status }` */
+  HOSTS?: KVNamespace;
   /** 静态资源（web/dist，含管理后台 SPA） */
   ASSETS: Fetcher;
 
