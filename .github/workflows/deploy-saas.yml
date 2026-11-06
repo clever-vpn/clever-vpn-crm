@@ -1,0 +1,207 @@
+# 部署 SaaS 分片（shard-N）—— 代码走 CI，绑定走 cf-api
+#
+# 契约：clever-vpn-docs/docs/contracts/site-hosting.md §4.5
+#
+# 为什么是这个形状：
+#   1. `wrangler deploy` 是**连绑定一起提交**的。若 CI 取完清单再部署，期间 cf-api
+#      又 PATCH 加了一条 DB_<slot>，旧清单会把那条绑定抹掉 = 静默解绑、该租户立刻
+#      500。所以 deploy 前后各取一次清单，最后以 registry 为准再 PATCH 一次。
+#   2. 部署期间**暂停开通**（pause），只挡开通/补池，不挡服务。
+#   3. `resume` 必须 `if: always()`，否则部署失败就把开通永久锁在外面；暂停本身还有
+#      90 分钟自动过期兜底（workflow 被取消时唯一的救援）。
+#   4. 要发哪些片**由 cf-api 判定**（GET /platform/shards 的 next_shard），本文件不
+#      算水位 —— 两处规则必然漂移。
+name: deploy-saas
+
+on:
+  workflow_dispatch:
+    inputs:
+      shard:
+        description: "要部署的分片号（留空 = 让 cf-api 判断该发哪些片）"
+        required: false
+        default: ""
+        type: string
+      reason:
+        description: "审计备注（会写进 registry 的 pause_reason）"
+        required: false
+        default: "manual"
+        type: string
+  schedule:
+    # 每天 04:17 UTC 检查一次是否要加新片（2000 租户/片，低频）
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CF_API_BASE: https://api.clever-vpn.org
+  # 分片脚本名与库名的推导在 cf-api 侧（manifest.worker / bindings），这里不重复
+
+jobs:
+  # ---- 1. 问 cf-api：该发哪些片 ----
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      has_work: ${{ steps.decide.outputs.has_work }}
+      matrix: ${{ steps.decide.outputs.matrix }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - name: Load SERVICE_TOKEN from Bitwarden (SM)
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_SERVICE_TOKEN }} > SERVICE_TOKEN
+
+      - name: Ask cf-api which shards to deploy
+        id: decide
+        env:
+          SHARD_INPUT: ${{ inputs.shard }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SERVICE_TOKEN:-}" ]]; then
+            echo "::error::SERVICE_TOKEN 为空（检查 BW_SECRET_ID_SERVICE_TOKEN）"
+            exit 1
+          fi
+
+          resp=$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards")
+          echo "cf-api: $resp"
+
+          if [[ -n "$SHARD_INPUT" ]]; then
+            # 人工指定：不猜，直接发这一片
+            list=$(jq -c --arg s "$SHARD_INPUT" '[{shard: ($s|tonumber)}]' <<<"$resp")
+            echo "reason=manual: $SHARD_INPUT" >> "$GITHUB_OUTPUT"
+          else
+            # 自动模式：下一片（容量水位到了）+ 任何"有绑定却没版本记录"的片
+            list=$(jq -c '
+              ([.next_shard] | map(select(. != null)))
+              + ([.shards[] | select(.deployed == false) | .shard])
+              | unique | map({shard: .})
+            ' <<<"$resp")
+            jq -r '.reason' <<<"$resp" > /tmp/reason.txt
+            echo "reason=$(cat /tmp/reason.txt)" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "matrix={\"include\":$list}" >> "$GITHUB_OUTPUT"
+          count=$(jq 'length' <<<"$list")
+          if [[ "$count" -gt 0 ]]; then
+            echo "has_work=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            echo "无需部署（cf-api: $(jq -r '.reason' <<<"$resp")）"
+          fi
+
+  # ---- 2. 逐片部署 ----
+  deploy:
+    name: deploy shard-${{ matrix.shard }}
+    needs: plan
+    if: needs.plan.outputs.has_work == 'true'
+    runs-on: ubuntu-latest
+    # 同一片不允许并发部署（重复 PATCH settings 会互相覆盖）
+    concurrency:
+      group: deploy-saas-shard-${{ matrix.shard }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      SHARD: ${{ matrix.shard }}
+      WORKER: clever-vpn-crm-saas-shard-${{ matrix.shard }}
+      CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Load secrets from Bitwarden (SM)
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_SERVICE_TOKEN }} > SERVICE_TOKEN
+            ${{ vars.BW_SECRET_ID_CLOUDFLARE_API_TOKEN }} > CLOUDFLARE_API_TOKEN
+
+      # ---- 2.1 暂停开通（挡开通与补池，不挡服务）----
+      - name: Pause provisioning
+        id: pause
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"minutes\":90,\"reason\":\"deploy:${{ github.run_id }}\"}" \
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/pause"
+
+      # ---- 2.2 取清单 → 渲染配置 ----
+      - name: Fetch manifest
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/manifest" > manifest.json
+          jq -r '"\(.worker) 现有绑定 \(.bindings|length) 条"' manifest.json
+
+      - name: Render wrangler.shard.jsonc + settings.json
+        env:
+          HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+          CRM_CODE_VERSION: ${{ github.sha }}
+          APP_ORIGINS: ${{ vars.APP_ORIGINS }}
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: node scripts/render-shard-config.mjs --manifest manifest.json
+
+      # ---- 2.3 构建 + 部署 ----
+      - run: npm ci
+      - run: npm run build:web
+      - name: Deploy worker
+        run: npx wrangler deploy --config wrangler.shard.jsonc
+
+      # ---- 2.4 以 registry 为准再刷一次绑定（覆盖暂停前在途的那一条）----
+      - name: Refresh bindings from registry
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/manifest" > manifest.final.json
+          node scripts/render-shard-config.mjs --manifest manifest.final.json >/dev/null
+
+          curl -sS --fail-with-body -X PATCH \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -F "settings=@settings.json" \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/$WORKER/settings" \
+            | jq -e '.success == true' >/dev/null
+
+          # 校验数量：漏一条 = 静默解绑
+          want=$(jq '.bindings | length' settings.json)
+          got=$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/$WORKER/settings" \
+            | jq '.result.bindings | length')
+          echo "绑定数量：期望 $want / 实际 $got"
+          [[ "$want" == "$got" ]] || { echo "::error::绑定数量不一致（漏绑 = 静默解绑）"; exit 1; }
+
+      # ---- 2.5 回写版本（cron 据此不再重发这一片）----
+      - name: Record deployed version
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"code_version\":\"${{ github.sha }}\"}" \
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/deployed"
+
+      # ---- 2.6 恢复开通（无论前面成败都要跑）----
+      - name: Resume provisioning
+        if: always() && steps.pause.outcome == 'success'
+        run: |
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"reason\":\"deploy:done:${{ github.run_id }}\"}" \
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/resume" \
+            || echo "::warning::resume 失败 —— 暂停会在 90 分钟后自动过期"

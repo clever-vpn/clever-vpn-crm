@@ -17,3 +17,9 @@ prototype/
 
 # dev 迁移链（scripts/reset-db.sh 生成，生产链在 migrations/）
 migrations-dev/
+
+# SaaS 分片部署的生成物（由 cf-api 的 manifest 渲染，不提交）
+wrangler.shard.jsonc
+settings.json
+manifest.json
+manifest.final.json
