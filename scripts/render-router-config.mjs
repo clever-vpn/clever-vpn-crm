@@ -36,7 +36,10 @@ const deployed = shards.filter((s) => s.deployed).map((s) => s.shard).sort((a, b
 
 const config = {
   name: "clever-vpn-crm-router",
-  main: "src/index.ts",
+  // ⚠️ `main` 相对**配置文件**所在目录（这里是仓库根），不是相对本脚本：
+  // 写成 "src/index.ts" 会把 CRM 本体部署成 router（实测踩过：router 返回的
+  // 是 CRM 的 "MODE=single 但没有绑定 DB"）。
+  main: "workers/router/src/index.ts",
   compatibility_date: "2026-10-01",
   observability: { enabled: true },
   kv_namespaces: [{ binding: "HOSTS", id: hostsKvId }],
