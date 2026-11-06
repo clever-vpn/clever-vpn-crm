@@ -20,6 +20,8 @@ migrations-dev/
 
 # SaaS 分片部署的生成物（由 cf-api 的 manifest 渲染，不提交）
 wrangler.shard.jsonc
+wrangler.router.jsonc
+shards.json
 settings.json
 manifest.json
 manifest.final.json
