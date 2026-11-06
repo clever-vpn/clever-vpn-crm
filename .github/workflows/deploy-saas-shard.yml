@@ -1,4 +1,10 @@
-# 部署 SaaS 分片（shard-N）—— 代码走 CI，绑定走 cf-api
+# 部署 **SaaS 分片（shard-N）** —— 代码走 CI，绑定走 cf-api
+#
+# 命名约定：`deploy-saas-<用途>.yml`。带 `saas` 的前提是"只有托管模式才用"，
+# 因为同一份代码在单租户自部署里走的是 `deploy.yml`（租户 fork 自己跑）。
+#   deploy-saas-shard.yml   本文件：shard-N
+#   deploy-saas-site.yml    site-serve（站点出口，零 D1）
+#   deploy-saas-router.yml  router（*.根域名 → shard，service binding）
 #
 # 契约：clever-vpn-docs/docs/contracts/site-hosting.md §4.5
 #
@@ -11,7 +17,7 @@
 #      90 分钟自动过期兜底（workflow 被取消时唯一的救援）。
 #   4. 要发哪些片**由 cf-api 判定**（GET /platform/shards 的 next_shard），本文件不
 #      算水位 —— 两处规则必然漂移。
-name: deploy-saas
+name: deploy-saas-shard
 
 on:
   workflow_dispatch:
