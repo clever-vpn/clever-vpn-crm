@@ -1,6 +1,7 @@
 name: release
 
-# 打 tag（v*）→ 产出可部署产物，托管侧（clever-vpn-crm-saas）下载同一份字节上传到 WfP。
+# 打 tag（v*）→ 产出可复现的部署产物（Worker bundle + 迁移资产 + 示例配置）。
+# 部署本身走 `deploy-*.yml`（CI 直接 wrangler deploy），不经过这里。
 on:
   push:
     tags: ["v*"]
@@ -20,6 +21,11 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+      # `wrangler deploy` 会校验 `assets.directory`（= web/dist）是否存在，
+      # 而 web/dist 是构建产物、不入库 —— 不先构建就直接挂在 dry-run 上。
+      - name: Build web assets
+        run: npm run build:web
+
       - name: Build worker bundle
         run: npx wrangler deploy --dry-run --outdir dist
 
@@ -27,7 +33,7 @@ jobs:
         run: |
           cp dist/index.js crm-worker.mjs
           cp wrangler.example.jsonc .
-          # 迁移语句（给 cf-api 建租户库用）：已按 statement-breakpoint 拆好
+          # 迁移资产（给 cf-api 建租户库用）：整文件 sql + 内容寻址 schema_version
           node scripts/pack-migrations.mjs --dir migrations --out migrations.json
           sha256sum crm-worker.mjs wrangler.example.jsonc migrations.json > checksums.txt
           cat checksums.txt
