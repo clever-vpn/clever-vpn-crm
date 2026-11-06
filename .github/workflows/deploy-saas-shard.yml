@@ -169,29 +169,42 @@ jobs:
       - name: Deploy worker
         run: npx wrangler deploy --config wrangler.shard.jsonc
 
-      # ---- 2.4 以 registry 为准再刷一次绑定（覆盖暂停前在途的那一条）----
-      - name: Refresh bindings from registry
+      # ---- 2.4 以 registry 为准再刷一次绑定 ----
+      # 做法是「拿最新清单再 wrangler deploy 一次」，**不是** PATCH settings。
+      # 原因：Workers 里 vars 就是 plain_text 类型的 binding，而 PATCH settings 的
+      # bindings 是整体替换 —— 只提交 KV+D1 会把 MODE/SHARD 等 vars 全删掉，worker
+      # 直接退回 MODE=single 且无 DB（实测踩过）。re-deploy 走同一条代码路径，既刷
+      # 绑定又保留 vars 与 secrets。
+      - name: Refresh bindings from registry (re-deploy)
         run: |
           set -euo pipefail
           curl -sS --fail-with-body \
             -H "Authorization: Bearer $SERVICE_TOKEN" \
             "$CF_API_BASE/api/v2/platform/shards/$SHARD/manifest" > manifest.final.json
           node scripts/render-shard-config.mjs --manifest manifest.final.json >/dev/null
+          npx wrangler deploy --config wrangler.shard.jsonc
 
-          curl -sS --fail-with-body -X PATCH \
+      # ---- 2.4.1 核对：按**名字**核对关键绑定，而不是只比数量 ----
+      # （只比数量会在"数量相同但内容被换掉"时静默通过 —— 上一次就是 1 == 1）
+      - name: Verify key bindings
+        run: |
+          set -euo pipefail
+          json=$(curl -sS --fail-with-body \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -F "settings=@settings.json" \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/$WORKER/settings" \
-            | jq -e '.success == true' >/dev/null
-
-          # 校验数量：漏一条 = 静默解绑
-          want=$(jq '.bindings | length' settings.json)
-          got=$(curl -sS --fail-with-body \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/$WORKER/settings" \
-            | jq '.result.bindings | length')
-          echo "绑定数量：期望 $want / 实际 $got"
-          [[ "$want" == "$got" ]] || { echo "::error::绑定数量不一致（漏绑 = 静默解绑）"; exit 1; }
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/$WORKER/settings")
+          names=$(jq -r '.result.bindings[].name' <<<"$json" | sort | tr '\n' ' ')
+          echo "现状 bindings：$names"
+          for want in HOSTS MODE SHARD; do
+            jq -e --arg n "$want" '.result.bindings[] | select(.name == $n)' <<<"$json" >/dev/null \
+              || { echo "::error::缺绑定 $want（很可能被 PATCH settings 抹掉了）"; exit 1; }
+          done
+          # vars 必须是 plain_text，否则等于没有
+          jq -e '.result.bindings[] | select(.name == "MODE" and .type == "plain_text" and .text == "multi")' <<<"$json" >/dev/null \
+            || { echo "::error::MODE 不是 plain_text=multi"; exit 1; }
+          d1=$(jq '[.result.bindings[] | select(.type == "d1")] | length' <<<"$json")
+          want_d1=$(jq '.bindings | length' manifest.final.json)
+          echo "D1 绑定：期望 $want_d1 / 实际 $d1"
+          [[ "$want_d1" == "$d1" ]] || { echo "::error::D1 绑定数量不一致（漏绑 = 静默解绑）"; exit 1; }
 
       # ---- 2.5 回写版本（cron 据此不再重发这一片）----
       - name: Record deployed version
