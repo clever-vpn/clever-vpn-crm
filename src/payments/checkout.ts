@@ -43,7 +43,7 @@ export function newOrderCode(now: Date = new Date()): string {
 /**
  * 取网关密钥（明文，只在内存里）。
  *
- * - `mock`：派生自 `SESSION_SECRET`；
+ * - `mock`：派生自 `SIGNING_SECRET`；
  * - 其它：解密 `secret_enc`。解不开（没配主密钥 / 换过主密钥 / 密文被改）→ `null`，
  *   调用方必须明确报错，**不能**拿空密钥去签名（那样会静默签错）。
  */

@@ -6,7 +6,7 @@
 # 需要的配置（Settings → Secrets and variables → Actions）：
 #   Secrets:   CLOUDFLARE_API_TOKEN（Workers Scripts:Edit + D1:Edit）
 #              CF_API_TOKEN（cf-api 租户 token，cv_api_…）
-#              SESSION_SECRET（随机长串）
+#              SIGNING_SECRET（随机长串；旧名 SESSION_SECRET 仍兼容）
 #   Variables: CRM_TENANT_ID（必填；为空则本工作流整体跳过）
 #              CLOUDFLARE_ACCOUNT_ID
 #              D1_NAME / WORKER_NAME / CF_API_BASE（可选，有默认值）
@@ -107,6 +107,8 @@ jobs:
       - name: 写入 Worker secrets
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          # 新名优先；旧名仍接受（老 fork 不用一夜改配置）
+          SIGNING_SECRET: ${{ secrets.SIGNING_SECRET }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
         run: |
@@ -114,11 +116,12 @@ jobs:
           if [ -z "${CF_API_TOKEN:-}" ]; then
             echo "::error::缺少 secret CF_API_TOKEN（cf-api 租户 token）"; exit 1
           fi
-          if [ -z "${SESSION_SECRET:-}" ]; then
-            echo "::error::缺少 secret SESSION_SECRET"; exit 1
+          SIGNING_SECRET="${SIGNING_SECRET:-$SESSION_SECRET}"
+          if [ -z "${SIGNING_SECRET:-}" ]; then
+            echo "::error::缺少 secret SIGNING_SECRET（旧名 SESSION_SECRET 也可）"; exit 1
           fi
           printf '%s' "$CF_API_TOKEN"   | npx wrangler secret put CF_API_TOKEN   --config wrangler.ci.jsonc
-          printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET --config wrangler.ci.jsonc
+          printf '%s' "$SIGNING_SECRET" | npx wrangler secret put SIGNING_SECRET --config wrangler.ci.jsonc
           if [ -n "${SETUP_TOKEN:-}" ]; then
             printf '%s' "$SETUP_TOKEN" | npx wrangler secret put SETUP_TOKEN --config wrangler.ci.jsonc
           else

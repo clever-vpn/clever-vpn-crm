@@ -64,7 +64,7 @@
   ],
 
   // secret 照旧 `wrangler secret put`（每 shard 一份，内容相同）：
-  //   CF_API_TOKEN / SESSION_SECRET
+  //   CF_API_TOKEN / SIGNING_SECRET
   "vars": {
     "MODE": "multi",
     "CF_API_BASE": "https://api.clever-vpn.org",

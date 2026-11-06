@@ -14,6 +14,8 @@
 
 import { signParams, type SignSpec } from "./sign";
 
+import { signingKeyOf } from "../signing";
+
 import type { Env } from "../env";
 import type { GatewayMapping } from "./mapping";
 
@@ -47,11 +49,11 @@ export const MOCK_MAPPING: GatewayMapping = {
 /**
  * mock 的签名密钥。
  *
- * 派生自 `SESSION_SECRET`（生产必有），这样**伪造回调需要拿到服务端密钥**，
+ * 派生自 `SIGNING_SECRET`（生产必有），这样**伪造回调需要拿到服务端密钥**，
  * 不是一个写在仓库里的常量。本地没配时退化成一个明显的开发值。
  */
 export function mockSecret(env: Env): string {
-  const base = String(env.SESSION_SECRET ?? "").trim();
+  const base = signingKeyOf(env);
   return base ? `${base}:mock` : "mock-dev-secret";
 }
 

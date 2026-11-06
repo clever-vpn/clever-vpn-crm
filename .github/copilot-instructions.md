@@ -83,7 +83,7 @@ This repository is an **open-source, self-hostable tenant CRM** on Cloudflare Wo
   changes (add table/column), never edit a published migration — add a new one.
 - **No hosted-only code paths** (`if (hosted) …`). Differences between self-hosted and hosted must be
   expressed purely through bindings/vars (`CRM_TENANT_ID`, `CF_API_BASE`, `CF_API_TOKEN`).
-- Secrets only via `wrangler secret put` (`CF_API_TOKEN`, `SESSION_SECRET`). Never read or log them.
+- Secrets only via `wrangler secret put` (`CF_API_TOKEN`, `SIGNING_SECRET`). Never read or log them.
 - Payments stay out of scope: adapters call the tenant's own payment provider; the CRM records the
   resulting state. Never store card data.
 - Keep `/health` and `/__version` stable — the hosted platform and uptime checks depend on them.

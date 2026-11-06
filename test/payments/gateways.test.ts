@@ -22,7 +22,7 @@ import type { Env } from "../../src/env";
 const SECRET = "test-secret";
 
 function env(over: Partial<Env> = {}): Env {
-  return { DB: {} as never, ASSETS: {} as never, SESSION_SECRET: SECRET, ...over };
+  return { DB: {} as never, ASSETS: {} as never, SIGNING_SECRET: SECRET, ...over };
 }
 
 function gw(over: Partial<GatewayRow> = {}): GatewayRow {
