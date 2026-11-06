@@ -140,6 +140,16 @@ jobs:
             ${{ vars.BW_SECRET_ID_SERVICE_TOKEN }} > SERVICE_TOKEN
             ${{ vars.BW_SECRET_ID_CLOUDFLARE_API_TOKEN }} > CLOUDFLARE_API_TOKEN
 
+      # SIGNING_SECRET —— 一次性证明的 HMAC 密钥（退订链接 / mock 回调）。
+      # 独立可选步骤：变量没设置时 sm-action 会拿到空 UUID 并解析失败。
+      - name: Load SIGNING_SECRET from Bitwarden (SM)
+        if: vars.BW_SECRET_ID_SIGNING_SECRET != ''
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_SIGNING_SECRET }} > SIGNING_SECRET
+
       # ---- 2.1 暂停开通（挡开通与补池，不挡服务）----
       - name: Pause provisioning
         id: pause
@@ -168,6 +178,17 @@ jobs:
       - run: npm run build:web
       - name: Deploy worker
         run: npx wrangler deploy --config wrangler.shard.jsonc
+
+      # ---- 2.3.1 同步 SIGNING_SECRET（worker 已存在；wrangler deploy 不会动 secrets）----
+      - name: Sync SIGNING_SECRET to shard
+        run: |
+          set -euo pipefail
+          if [[ -z "${SIGNING_SECRET:-}" ]]; then
+            echo "::warning::SIGNING_SECRET 未配置（BW_SECRET_ID_SIGNING_SECRET 未设置）—— 退订链接与 mock 回调签名不可用"
+            exit 0
+          fi
+          printf '%s' "$SIGNING_SECRET" | npx wrangler secret put SIGNING_SECRET --config wrangler.shard.jsonc
+          echo "✔ SIGNING_SECRET 已写入（值不打印）"
 
       # ---- 2.4 以 registry 为准再刷一次绑定 ----
       # 做法是「拿最新清单再 wrangler deploy 一次」，**不是** PATCH settings。
