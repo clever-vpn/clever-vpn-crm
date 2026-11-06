@@ -65,15 +65,26 @@ jobs:
       - name: Deploy router
         run: npx wrangler deploy --config wrangler.router.jsonc
 
-      - name: Smoke test
+      # 冒烟测试走**真实域名**（任意子域都命中通配 route），不依赖额外变量：
+      # 这一步能抓到"部署上去的不是 router（比如 main 写错）"这类事故。
+      - name: Smoke test (via wildcard route)
         env:
-          ROUTER_URL: ${{ vars.ROUTER_HEALTH_URL }}
+          CRM_ROOT: ${{ vars.CRM_ROOT }}
         run: |
           set -euo pipefail
-          if [[ -z "${ROUTER_URL:-}" ]]; then
-            echo "::notice::未配置 ROUTER_HEALTH_URL，跳过冒烟测试"
+          if [[ -z "${CRM_ROOT:-}" ]]; then
+            echo "::notice::未配置 CRM_ROOT 变量，跳过冒烟测试"
             exit 0
           fi
-          curl -sS --fail-with-body --retry 5 --retry-delay 3 --retry-all-errors \
-            "$ROUTER_URL/__router/health" | jq -e '.ok == true' >/dev/null
-          echo "✔ router 健康"
+          url="https://route-check.${CRM_ROOT}/__router/health"
+          for i in $(seq 1 10); do
+            body=$(curl -sS -m 8 "$url" || true)
+            if jq -e '.ok == true' <<<"$body" >/dev/null 2>&1; then
+              echo "✔ router 健康：$body"
+              exit 0
+            fi
+            echo "第 $i 次：$body"
+            sleep 3
+          done
+          echo "::error::router 冒烟失败（最近一次响应：$body）—— 检查 main 是否指向 workers/router/src/index.ts"
+          exit 1
