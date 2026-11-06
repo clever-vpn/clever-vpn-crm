@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildBundle, splitStatements } from "../scripts/pack-migrations.mjs";
+import { buildBundle, normalizeSql, splitStatements } from "../scripts/pack-migrations.mjs";
 
 describe("迁移打包（release asset）", () => {
   it("按 statement-breakpoint 拆，不吃字符串里的分号", () => {
@@ -32,6 +32,39 @@ describe("迁移打包（release asset）", () => {
     );
     expect(b.files.map((f) => f.name)).toEqual(["0000_a.sql", "0001_b.sql"]);
     expect(b.statement_count).toBe(2);
-    expect(b.files[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(b.files[0]!.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("每个文件带 sql 原文（执行单位），且不再带 statements 数组", () => {
+    const sql = "CREATE TABLE a (x);--> statement-breakpoint\nCREATE INDEX i ON a (x);";
+    const b = buildBundle([{ name: "0000_a.sql", sql }], { tag: "v1" });
+    const f = b.files[0]!;
+    expect(f.sql).toBe(sql); // 原样保留，消费方一次 /query 提交整文件
+    expect(f.statement_count).toBe(2);
+    expect(f).not.toHaveProperty("statements");
+  });
+
+  it("sha256 对的是归一化后的 sql（即真正被执行的文本）", () => {
+    const withTx = "BEGIN TRANSACTION;\nCREATE TABLE t (x);\nCOMMIT;\n";
+    const a = buildBundle([{ name: "0000_a.sql", sql: withTx }], { tag: "v1" });
+    const b = buildBundle([{ name: "0000_a.sql", sql: "CREATE TABLE t (x);\n" }], { tag: "v1" });
+    expect(a.files[0]!.sql).toBe("CREATE TABLE t (x);\n");
+    expect(a.files[0]!.sha256).toBe(b.files[0]!.sha256);
+    expect(a.schema_version).toBe(b.schema_version);
+  });
+
+  it("剥掉 BEGIN/COMMIT（D1 自己会套事务）", () => {
+    expect(normalizeSql("BEGIN TRANSACTION;\nSELECT 1;\nCOMMIT;\n")).toBe("SELECT 1;\n");
+    expect(normalizeSql("  begin transaction ;\nSELECT 1;\n  commit ;\n")).toBe("SELECT 1;\n");
+  });
+
+  it("多段事务让打包直接失败（不留到开通时才炸）", () => {
+    const multi = "BEGIN TRANSACTION;\nSELECT 1;\nCOMMIT;\nBEGIN TRANSACTION;\nSELECT 2;\nCOMMIT;\n";
+    expect(() => buildBundle([{ name: "0000_a.sql", sql: multi }], { tag: "v1" })).toThrow(/多段事务/);
+  });
+
+  it("不动 CASE ... END 这种行内关键字", () => {
+    const sql = "CREATE TABLE t (x TEXT CHECK (CASE WHEN x = 'a' THEN 1\n  END));\n";
+    expect(normalizeSql(sql)).toBe(sql);
   });
 });
