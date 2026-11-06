@@ -32,7 +32,6 @@ jobs:
       - name: Package release assets
         run: |
           cp dist/index.js crm-worker.mjs
-          cp wrangler.example.jsonc .
           # 迁移资产（给 cf-api 建租户库用）：整文件 sql + 内容寻址 schema_version
           node scripts/pack-migrations.mjs --dir migrations --out migrations.json
           sha256sum crm-worker.mjs wrangler.example.jsonc migrations.json > checksums.txt
