@@ -1,0 +1,79 @@
+# 部署 **SaaS router** —— 租户后台域的入口（`{slug}.{CRM_ROOT}` / `crm.brand.com`）
+#
+# 它只做 Host → KV → 转发到对应 shard 的 service binding。片数变化时必须重新跑本
+# workflow（service binding 是部署期静态的）。
+#
+# 契约：clever-vpn-docs/docs/contracts/site-hosting.md §1.1 / §2
+name: deploy-saas-router
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "审计备注"
+        required: false
+        default: "manual"
+        type: string
+  schedule:
+    # 每周一次：加片后忘了手动跑，最多一周自动跟上
+    - cron: "37 4 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CF_API_BASE: https://api.clever-vpn.org
+
+jobs:
+  deploy:
+    name: deploy router
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-saas-router
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Load secrets from Bitwarden (SM)
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_SERVICE_TOKEN }} > SERVICE_TOKEN
+            ${{ vars.BW_SECRET_ID_CLOUDFLARE_API_TOKEN }} > CLOUDFLARE_API_TOKEN
+
+      - name: Fetch shard list
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards" > shards.json
+          jq -r '"分片：\([.shards[]? | "shard-\(.shard)(deployed=\(.deployed))"] | join(", "))"' shards.json
+
+      - name: Render wrangler.router.jsonc
+        env:
+          HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+        run: node scripts/render-router-config.mjs --input shards.json
+
+      - run: npm ci
+
+      - name: Deploy router
+        run: npx wrangler deploy --config wrangler.router.jsonc
+
+      - name: Smoke test
+        env:
+          ROUTER_URL: ${{ vars.ROUTER_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ROUTER_URL:-}" ]]; then
+            echo "::notice::未配置 ROUTER_HEALTH_URL，跳过冒烟测试"
+            exit 0
+          fi
+          curl -sS --fail-with-body --retry 5 --retry-delay 3 --retry-all-errors \
+            "$ROUTER_URL/__router/health" | jq -e '.ok == true' >/dev/null
+          echo "✔ router 健康"
