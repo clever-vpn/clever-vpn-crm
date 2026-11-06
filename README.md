@@ -35,7 +35,7 @@
 |---|---|---|
 | Secret | `CLOUDFLARE_API_TOKEN` | Workers Scripts:Edit + D1:Edit |
 | Secret | `CF_API_TOKEN` | cf-api 租户 token（`cv_api_…`） |
-| Secret | `SESSION_SECRET` | 随便一串长随机值（会话签名） |
+| Secret | `SIGNING_SECRET` | 随便一串长随机值。**一次性证明**的 HMAC 密钥（退订链接 / mock 回调签名），与登录态无关 |
 | Variable | `CRM_TENANT_ID` | 你在 cf-api 的租户 ID（**必填**，为空则跳过部署） |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
 | Variable | `D1_NAME` / `WORKER_NAME` / `CF_API_BASE` | 可选，有默认值 |

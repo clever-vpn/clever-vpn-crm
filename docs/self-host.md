@@ -40,7 +40,7 @@ Secrets（加密，不可读回）：
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API Token，权限：**Workers Scripts:Edit** + **D1:Edit**（+ Account Settings:Read） |
 | `CF_API_TOKEN` | cf-api 租户 API Token（`cv_api_…`） |
-| `SESSION_SECRET` | 随便一串 ≥32 字符的随机值（会话签名）；换掉 = 所有用户重新登录 |
+| `SIGNING_SECRET` | 随便一串 ≥32 字符的随机值。签名**一次性证明**（退订链接 / mock 回调）；换掉只会让已发出的退订链接失效，**不会踢人下线** |
 | `PAYMENT_SECRET_KEY` | 支付网关密钥的主密钥（AES-GCM）；换掉 = 已存的网关密钥全部失效，需要重新填写 |
 | `SETUP_TOKEN` | 管理后台首次初始化口令（`openssl rand -hex 24`）；不配则不能初始化管理员 |
 | `RESEND_API_KEY` | 发信服务商 API key（与 `EMAIL` 绑定二选一，见下方"邮件"一节） |
@@ -89,7 +89,7 @@ Variables（明文）：
 | **每日配额** | Cloudflare Email Service 有账号级日配额（示例 5000/天）。后台「设置 → 每日发信配额」填真实值，**缺省 5000**、软上限取 90% —— 留下的 10% 是给**验证码**的（App 是无密码登录，配额吃干净等于用户登不进来） |
 | **配额用尽** | 不会丢：通知留在表里，**顺延到次日**再发；权益不受影响，只是晚点告诉他 |
 | **退订** | 每封带 `List-Unsubscribe`（一键退订），只退**营销类**（礼包收据）；验证码与订单结果不受影响 |
-| **退订链接的前置** | 需要 `SITE_URL`（退订页与"去领取"按钮都是绝对地址）和 `SESSION_SECRET`（签名）。没配 `SITE_URL` 时邮件里不放按钮和退订入口 —— 生产环境请务必配 |
+| **退订链接的前置** | 需要 `SITE_URL`（退订页与"去领取"按钮都是绝对地址）和 `SIGNING_SECRET`（签名）。没配 `SITE_URL` 时邮件里不放按钮和退订入口 —— 生产环境请务必配 |
 
 > 合规提醒：Cloudflare Email Service **只用于交易类邮件**。不要拿它发促销群发
 > （"全场 8 折""限时抢购"），那会打掉发信域名信誉，**连带验证码登录一起挂**。
@@ -104,7 +104,7 @@ Actions → **deploy** → **Run workflow**（`main` 分支）。
 2. `wrangler d1 list` 找 `D1_NAME`，**不存在就 `wrangler d1 create`**（幂等）；
 3. `node scripts/render-config.mjs` 把 D1 id 与租户参数渲染进 `wrangler.ci.jsonc`；
 4. `wrangler deploy --config wrangler.ci.jsonc`；
-5. `wrangler secret put CF_API_TOKEN / SESSION_SECRET / PAYMENT_SECRET_KEY`；
+5. `wrangler secret put CF_API_TOKEN / SIGNING_SECRET / PAYMENT_SECRET_KEY`；
 6. 在 run 的 Summary 里打印 Worker URL 与验证命令。
 
 因为第 4 步先于第 5 步，**首次部署后要再跑一次**（或等 secrets 生效后调用一次业务
@@ -171,7 +171,7 @@ npx wrangler d1 create clever-vpn-crm     # 已存在会报错，忽略
 D1_DATABASE_ID=<uuid> CRM_TENANT_ID=<id> node scripts/render-config.mjs
 npx wrangler deploy --config wrangler.ci.jsonc
 printf '%s' "$CF_API_TOKEN"   | npx wrangler secret put CF_API_TOKEN   --config wrangler.ci.jsonc
-printf '%s' "$SESSION_SECRET"     | npx wrangler secret put SESSION_SECRET     --config wrangler.ci.jsonc
+printf '%s' "$SIGNING_SECRET"     | npx wrangler secret put SIGNING_SECRET     --config wrangler.ci.jsonc
 printf '%s' "$PAYMENT_SECRET_KEY" | npx wrangler secret put PAYMENT_SECRET_KEY --config wrangler.ci.jsonc
 ```
 

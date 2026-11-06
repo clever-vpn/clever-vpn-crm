@@ -18,7 +18,18 @@ export interface Env {
   CF_API_BASE?: string;
   /** 租户 API Token（wrangler secret put CF_API_TOKEN） */
   CF_API_TOKEN?: string;
-  /** 会话签名密钥（wrangler secret put SESSION_SECRET） */
+  /**
+   * **一次性证明的 HMAC 密钥**（`wrangler secret put SIGNING_SECRET`）。
+   *
+   * 用来"我们能证明是自己签发/自己收到的"，与登录态**无关**：
+   *   - 发出：邮件里的退订链接 `?c=<id>&t=<hmac>`
+   *   - 收进：`mock` 支付渠道的回调签名
+   * 登录态是 `app_sessions` 里的随机 token + 查表，不用任何密钥。
+   *
+   * 轮换它只会让**已发出的**退订链接失效（重发一封即可），不会踢任何用户下线。
+   */
+  SIGNING_SECRET?: string;
+  /** @deprecated 旧名，等价于 `SIGNING_SECRET`。只为不让老部署一夜失效。 */
   SESSION_SECRET?: string;
   /** 首次初始化管理员用的一次性口令（wrangler secret put SETUP_TOKEN） */
   SETUP_TOKEN?: string;
@@ -65,7 +76,7 @@ export interface Env {
    * 支付网关密钥的**主密钥**（`wrangler secret put PAYMENT_SECRET_KEY`）。
    *
    * 用于 AES-GCM 加解密 `payment_gateways.secret_enc`。**没配就不能保存/使用
-   * 真实网关密钥**（mock 除外，它用 `SESSION_SECRET` 派生）。
+   * 真实网关密钥**（mock 除外，它用 `SIGNING_SECRET` 派生）。
    * 换掉它会导致已有密文全部解不开 —— 因为密文只存了 `v1:` 前缀，没有其他依赖。
    */
   PAYMENT_SECRET_KEY?: string;

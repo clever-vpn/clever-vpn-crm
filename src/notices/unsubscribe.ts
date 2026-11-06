@@ -10,6 +10,8 @@
  *      邮件客户端的"退订"按钮会直接 POST（body 是 `List-Unsubscribe=One-Click`），
  *      不需要用户点开网页再确认一次。
  */
+import { signingKeyOf } from "../signing";
+
 import type { Env } from "../env";
 
 /** 没有 `SITE_URL`（本地/未配官网）就生成不出绝对链接，邮件里就不放退订入口 */
@@ -18,7 +20,7 @@ function siteBase(env: Env): string {
 }
 
 function secret(env: Env): string {
-  return env.SESSION_SECRET ?? "";
+  return signingKeyOf(env);
 }
 
 /** HMAC-SHA256(secret, `unsub:{customerId}`) 的十六进制前 32 位 */
