@@ -6,9 +6,15 @@
  * 算出来（契约 `site-hosting` §4.5.1 —— 清单必须程序生成，漏一条就是静默解绑）。
  *
  * 输入：`GET /api/v2/platform/shards/{n}/manifest` 的原样 JSON
- * 输出（两个文件，都在 gitignore 里）：
+ * 输出（一个文件，gitignore）：
  *   wrangler.shard.jsonc  —— 给 `wrangler deploy --config`
- *   settings.json         —— 给部署后的 `PATCH …/settings`（全量绑定替换）
+ *
+ * ⚠️ 不再产出 `settings.json`（曾用于部署后 `PATCH …/settings` 刷新绑定），原因：
+ * Workers 里 **`vars` 就是 `plain_text` 类型的 binding**，而 PATCH settings 的
+ * `bindings` 是**整体替换** —— 只提交 KV+D1，会把 MODE / SHARD 等 vars 全部删掉，
+ * 于是 worker 退回 `MODE=single` 且没有 `DB`，第一次请求就 500。实测踩过。
+ * 刷新绑定改用"拿最新清单再 `wrangler deploy` 一次"：同一条代码路径、保留 secrets、
+ * 也保留 vars。
  *
  * 用法（由 `.github/workflows/deploy-saas.yml` 调用）：
  *   node scripts/render-shard-config.mjs --manifest manifest.json
@@ -94,17 +100,10 @@ const config = `// ⚠️ 自动生成，不要提交（.gitignore 已排除）�
 
 writeFileSync("wrangler.shard.jsonc", config);
 
-/**
- * settings.json：部署后 `PATCH …/scripts/{worker}/settings` 用。
- * 只带 `bindings`（该字段整体替换）；`compatibility_date` 等未提交字段保持原值。
- * **必须包含 KV**，否则那次 PATCH 会把 HOSTS 一起抹掉。
- */
-writeFileSync(
-  "settings.json",
-  JSON.stringify({ bindings: [...kvBindings, ...d1Bindings] }, null, 2),
-);
-
 console.error(`✔ ${manifest.worker}：shard=${manifest.shard}`);
 console.error(`  D1 绑定 ${manifest.bindings.length} 条（已分配 ${manifest.slots?.length ?? 0} + 池中 ${manifest.pooled?.length ?? 0}）`);
-console.error(`  → wrangler.shard.jsonc / settings.json`);
-console.error(`  ⚠️ 部署后请核对 settings 里 bindings 数量 == ${kvBindings.length + d1Bindings.length}`);
+console.error(`  → wrangler.shard.jsonc（含 vars：MODE/SHARD/…）`);
+if (kvBindings.length + d1Bindings.length !== 1 + manifest.bindings.length) {
+  console.error("✘ 内部不一致：KV 与 D1 绑定数量对不上");
+  process.exit(1);
+}
