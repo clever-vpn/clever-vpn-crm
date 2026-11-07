@@ -77,14 +77,44 @@ CRM 也不必应付各家浏览器的第三方 Cookie 政策。代价是登录�
 `SETUP_TOKEN` 缺失时 `/api/admin/bootstrap` 返回 `setup_configured:false`，
 `/setup` 返回 503 并给出提示。
 
-## 4. 账号恢复（不做接口，走 D1）
+## 4. 账号恢复
 
-> 只要 Cloudflare 账号在手，一切都能找回来。**故意不提供 `/recover` 端点**：
+> 只要 Cloudflare 账号在手，一切都能找回来。**没有 `/recover` 端点**：
 > 少一个可被攻击的入口。
 >
-> 顺序：① 配了邮件 → 后台「邮箱验证码登录」自助回来；
+> 顺序：① 配了邮件 → 登录页「忘记密码」（邮箱验证码自助重设）；
 > ② 邮件没配 / 邮箱也进不去 / 2FA 丢失 → **走下面的 D1 重置**（这一条永远有效，
 > 因为它不依赖任何一个外部服务）。
+
+### 4.1 忘记密码（自助，未登录可用）
+
+登录页密码框下方有「忘记密码？」（**只有服务端真能发信时才显示**）：
+
+```
+POST /api/admin/password/forgot   { email, turnstile_token? }   → 恒返回 { ok:true, cooldown:60 }
+POST /api/admin/password/reset    { email, code, next }          → { ok:true }
+```
+
+- `purpose = admin_reset`：与「邮箱验证码登录」（`admin_login`）、「已登录改密」
+  （`admin_password`）**互不通用** —— 哈希入参含 purpose。
+- 码 6 位 / 10 分钟 / 最多 5 次 / 60 秒冷却；只存哈希。
+- 重置成功会 **① 踢掉所有会话**（重置的动机通常是"账号可能被别人用过"）
+  **② 解除 `failed_attempts` / `locked_until`**（被锁 15 分钟的人正是最需要重置的人，
+  而验证码已经证明了他就是本人）。
+- `forgot` 是恒定响应：不泄露"这个邮箱是不是管理员"。
+
+### 4.2 SaaS 开通时的初始密码
+
+托管模式下租户拿不到 `SETUP_TOKEN`，所以管理员账号由 **cf-api 在开通时直接写进
+租户 D1**（`admin_users` 一行），初始密码随后发到 `accounts.email`。
+
+- 密码格式与本节 4.3 完全一致（`pbkdf2$sha256$50000$…`），cf-api 与本站
+  `src/admin/crypto.ts` 的 `verifyPassword` 已做过跨仓验证。
+- 这封信没收到 / 密码丢了 → 用 4.1 的「忘记密码」自己重设，**不需要** cf-api 介入。
+- 因此 `bootstrap.needs_setup` 在托管租户里应为 `false`；只有自托管（自己拥有
+  Cloudflare 账号）才走 `/setup` + `SETUP_TOKEN`。
+
+### 4.3 最后的兜底：D1 重置
 
 忘记密码 / 丢失 2FA / 账号被锁，在 D1 上执行（本地或 Dashboard 都行）：
 

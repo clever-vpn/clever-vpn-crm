@@ -389,6 +389,67 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
     });
   }
 
+  // ── 公开：忘记密码（第一步：给管理员邮箱发重置码）──────────────────
+  // 恒定响应：不泄露"这个邮箱是不是管理员"；只有匹配才真的发信。
+  // 与 /login/email/start 的区别只是 purpose 不同 ⇒ 登录码**不能**拿来重置密码。
+  if (method === "POST" && path === "/password/forgot") {
+    const admin = await loadAdmin(env);
+    if (!admin) return fail(409, "needs_setup");
+    if (!emailCodeAvailable(env)) {
+      return fail(503, "email_unavailable", "未配置邮件发送，无法自助重置密码");
+    }
+    const body = await readBody(request);
+    const guarded = await turnstileGuard(request, env, body);
+    if (guarded) return guarded;
+    const email = str(body.email).toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(400, "invalid_email");
+
+    if (email !== admin.email.toLowerCase()) return json({ ok: true, cooldown: 60 });
+
+    const issued = await issueCode(env, email, "admin_reset");
+    if (!issued.ok) return fail(502, "email_send_failed", "验证码发送失败，请稍后再试");
+    return json({ ok: true, cooldown: 60, ...(issued.code ? { code: issued.code, dev: true } : {}) });
+  }
+
+  // ── 公开：忘记密码（第二步：用码换新密码）──────────────────────────
+  //
+  // 这是**唯一**能在未登录状态改密码的入口，所以：
+  //   · 码分 purpose（登录码/改密码的码都用不了）；
+  //   · 6 位码 10 分钟 + 最多 5 次尝试（consumeCode 里）；
+  //   · 成功后**踢掉所有会话** —— 重置密码的常见动机就是"账号可能被别人用过"；
+  //   · 顺带解除 failed_attempts / locked_until：被锁 15 分钟的人正是最需要重置的人，
+  //     而邮箱验证码已经证明了他就是本人。
+  if (method === "POST" && path === "/password/reset") {
+    const admin = await loadAdmin(env);
+    if (!admin) return fail(409, "needs_setup");
+    const body = await readBody(request);
+    const email = str(body.email).toLowerCase();
+    const code = str(body.code);
+    const next = str(body.next);
+
+    const okCode =
+      email === admin.email.toLowerCase() &&
+      (await consumeCode(env, email, "admin_reset", code));
+    if (!okCode) {
+      await audit(env, email || "anon", "password_reset_failed", null, null);
+      return fail(401, "invalid_code", "验证码不正确或已过期");
+    }
+    if (next.length < 12) return fail(400, "weak_password");
+
+    const iterations = Number(env.ADMIN_PBKDF2_ITERATIONS ?? DEFAULT_ITERATIONS);
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE admin_users
+         SET password_hash = ?, failed_attempts = 0, locked_until = NULL, updated_at = ?
+       WHERE id = ?`,
+    )
+      .bind(await hashPassword(next, iterations), now, admin.id)
+      .run();
+    await env.DB.prepare(`DELETE FROM admin_sessions WHERE user_id = ?`).bind(admin.id).run();
+    await audit(env, admin.email, "password_reset", null, null);
+    return json({ ok: true });
+  }
+
   // ── 以下全部需要登录 ───────────────────────────────────────────────
   const admin = await loadAdmin(env);
   const session = await sessionFrom(env, request, SESSION_COOKIE);

@@ -183,6 +183,16 @@ export const api = {
     call<{ ok: true; cooldown: number; code?: string; dev?: boolean }>("POST", "/password/send-code"),
   changePasswordWithCode: (code: string, next: string) =>
     call<{ ok: true }>("POST", "/password", { code, next }),
+  /** 忘记密码（未登录）：第一步，给管理员邮箱发重置码 */
+  passwordForgot: (email: string, turnstileToken?: string) =>
+    call<{ ok: true; cooldown: number; code?: string; dev?: boolean }>(
+      "POST",
+      "/password/forgot",
+      { email, turnstile_token: turnstileToken },
+    ),
+  /** 忘记密码（未登录）：第二步，用码设新密码（会踢掉所有会话） */
+  passwordReset: (email: string, code: string, next: string) =>
+    call<{ ok: true }>("POST", "/password/reset", { email, code, next }),
   /** 发一封测试邮件：验证「配了」≠「能发」 */
   testMail: () => call<{ ok: true; dev: boolean }>("POST", "/mail/test"),
   /** 运行期设置（目前只有发信配额） */
