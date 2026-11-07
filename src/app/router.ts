@@ -112,28 +112,20 @@ const err = (status: number, code: string, message?: string): Response =>
   json({ error: { code, ...(message ? { message } : {}) } }, status);
 
 // ---- CORS（契约 §3）----
-
-function allowedOrigins(env: Env): string[] {
-  return (env.APP_ORIGINS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function corsHeaders(env: Env, request: Request): Record<string, string> {
-  const origin = request.headers.get("Origin");
-  if (!origin) return {};
-  const allowed = allowedOrigins(env);
-  // 白名单为空 ⇒ 不下发 CORS 头（同源部署用不到）
-  if (!allowed.includes(origin)) return {};
-  return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": "authorization, content-type, idempotency-key, x-crm-request",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Max-Age": "600",
-    Vary: "Origin",
-  };
-}
+//
+// 浏览器要读跨源响应，就必须有这个头；带 `Authorization` 的跨源请求还要先过预检。
+// 这是**浏览器规矩，不是安全措施** —— curl 能伪造一切，任何参数都能被任意构造，
+// 所以这里不判断"信任哪个站"，也不区分 origin：谁来都一样。
+//
+// 唯一的红线是**永远不加 `Access-Control-Allow-Credentials`**（`*` 与它本就互斥）：
+// 跨源请求拿不到 Cookie，也存不下跨源响应的 Set-Cookie。
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, content-type, idempotency-key, x-crm-request",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Max-Age": "600",
+};
 
 // ---- 小工具 ----
 
@@ -385,7 +377,7 @@ export async function handleAppApi(request: Request, env: Env): Promise<Response
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/app\/v1/, "") || "/";
   const method = request.method;
-  const cors = corsHeaders(env, request);
+  const cors = CORS_HEADERS;
 
   // 预检：免鉴权、直接 204
   if (method === "OPTIONS") {
@@ -396,18 +388,10 @@ export async function handleAppApi(request: Request, env: Env): Promise<Response
   const hook = await handleWebhooks(env, request);
   if (hook) return hook;
 
-  // CSRF：靠 Cookie 认证时，写操作必须是同源或**白名单内的跨域**。
-  //
-  // Bearer 不会被浏览器自动附加，所以 App 天然免疫。登录（还没有 token）也是写操作：
-  // 官网独立部署后要跨域发起 `/auth/send-code`，所以 `APP_ORIGINS` 里的 origin 必须放行
-  // —— 它拿不到 Cookie（跨域响应的 Set-Cookie 会被浏览器丢掉），也就无从 CSRF。
-  if (method !== "GET" && !bearerToken(request)) {
-    const origin = request.headers.get("Origin");
-    const sameOrigin = !origin || origin === url.origin;
-    if (!sameOrigin && !allowedOrigins(env).includes(origin)) {
-      return err(403, "forbidden", "跨站请求被拒绝");
-    }
-  }
+  // 不校验 Origin / Referer：会话 Cookie 是 **host-only + HttpOnly + SameSite=Lax**，
+  // 跨站请求带不上它，跨源响应的 `Set-Cookie` 也会被浏览器丢弃 ⇒ 跨源 Cookie 认证
+  // 根本不可能发生。App / 官网一律走 `Authorization: Bearer`（浏览器不会自动附加）。
+  // 若将来改成 `SameSite=None` 或给 Cookie 加 `Domain=`，这个前提就没了 —— 那时再补。
 
   const withCors = (res: Response): Response => {
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);

@@ -5,8 +5,10 @@
  *   - App（原生壳）：`Authorization: Bearer <token>`
  *   - 官网（浏览器）：`Cookie: cv_session=<token>`，HttpOnly，服务端 Set-Cookie
  *
- * 有 Cookie 就意味着有 CSRF 面，所以浏览器侧写操作（非 GET）要求 `Origin` 与站点同源；
- * `Bearer` 请求豁免（原生壳没有 Origin 概念，带 Origin 的也是移动壳自己的 scheme）。
+ * **CSRF 不做 Origin 校验**（2026-11-07 起）：会话 Cookie 是 host-only +
+ * `HttpOnly` + `SameSite=Lax` —— 跨站请求带不上它，跨源响应的 `Set-Cookie` 也会被
+ * 浏览器丢弃，所以"跨源 Cookie 认证"根本不可能发生。老的白名单只让**站点读不到数据**
+ * （站点与 CRM 不同源），已删除。下面的用例断言"Origin 不再影响任何结果"。
  */
 import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -96,24 +98,26 @@ describe("官网登录态", () => {
     expect(viaCookie).toEqual(viaBearer);
   });
 
-  it("Cookie 写操作跨站应 403，同源放行", async () => {
+  it("Cookie 写操作：Origin 不再影响结果（跨站与同源完全一致）", async () => {
     const token = await login();
+    const body = { plan_id: "dev_period_100g" };
 
     const crossSite = await call("/api/app/v1/quote", {
       method: "POST",
-      body: { plan_id: "dev_period_100g" },
+      body,
       cookie: token,
       origin: "https://evil.example",
     });
-    expect(crossSite.status).toBe(403);
-
     const sameSite = await call("/api/app/v1/quote", {
       method: "POST",
-      body: { plan_id: "dev_period_100g" },
+      body,
       cookie: token,
       origin: BASE,
     });
-    expect(sameSite.status).not.toBe(403);
+
+    // 拦人靠会话 + SameSite=Lax，不靠 Origin：老实现这里会是 403
+    expect(crossSite.status).not.toBe(403);
+    expect(sameSite.status).toBe(crossSite.status);
   });
 
   it("Bearer 请求不受 Origin 限制（原生壳）", async () => {

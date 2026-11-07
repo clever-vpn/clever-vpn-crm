@@ -46,12 +46,6 @@ export interface Env {
    * （与 cf-api/cf-dashboard 一致的本地联调做法）；生产环境绝不回显。
    */
   ENVIRONMENT?: string;
-  /**
-   * App 端跨域白名单（逗号分隔，精确匹配 Origin）：
-   * 例如 `https://app-web.clever-vpn.org,http://localhost:5180`。
-   * 为空时**不返回任何 CORS 头**（同源部署不需要）。
-   */
-  APP_ORIGINS?: string;
   /** 官网地址（独立静态站）。配了以后访问 CRM 根路径会 302 过去 */
   SITE_URL?: string;
   /** 可选：Cloudflare Email Service 绑定（未配置时用 RESEND_API_KEY） */

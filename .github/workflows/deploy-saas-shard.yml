@@ -122,7 +122,6 @@ jobs:
       # （实测：Refresh bindings 报「缺 HOSTS_KV_ID」）
       HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
       CRM_CODE_VERSION: ${{ github.sha }}
-      APP_ORIGINS: ${{ vars.APP_ORIGINS }}
       SITE_URL: ${{ vars.SITE_URL }}
     steps:
       - uses: actions/checkout@v5

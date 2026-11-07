@@ -145,8 +145,13 @@ curl -s -H "Cookie: crm_admin=<token>" -H 'x-crm-request: 1' -H 'content-type: a
 
 ## 5. 跨域
 
-`/api/app/v1/*` 只对 `APP_ORIGINS` 里的**精确 Origin** 回 CORS 头（`wrangler.jsonc`）：
-`https://app-web.clever-vpn.org, http://localhost:5180`。为空则不下发任何 CORS 头。
+`/api/app/v1/*` 对**所有** origin 回 `Access-Control-Allow-Origin: *`，不带
+`Access-Control-Allow-Credentials`。本地不需要配任何东西。
+
+- 想读接口的站点 / 调试页直接 `fetch` 就行；
+- 登录态走 `Authorization: Bearer`（跨源 Cookie 本来就用不了：`SameSite=Lax` +
+  跨源响应的 `Set-Cookie` 会被浏览器丢弃）；
+- **不要**加回 origin 白名单，也不要加 `Allow-Credentials`。
 
 ## 6. 数据库（本地）
 
@@ -193,7 +198,7 @@ npm run db:migrate:local   # 只 apply（不清库）
 | 现象 | 原因 / 处理 |
 |---|---|
 | `https://crm.clever-vpn.org` 502 | CRM 没起或没起在 8788；看 `/tmp/crm-dev.log` |
-| 页面能开但接口 CORS 报错 | `Origin` 不在 `APP_ORIGINS`；改 `wrangler.jsonc` 后重启 wrangler |
+| 页面能开但接口 CORS 报错 | 先看 `curl -i -X OPTIONS -H 'Origin: https://x' .../api/app/v1/plans` 有没有 `Allow-Origin: *`；没有就是跑的是旧代码 |
 | 浏览器证书告警 | Caddy 内部 CA 没被信任：`caddy trust`（或用 `Caddyfile` 里 `sign_with_root` 对应的根证书） |
 | `send-code` 不给 `code` | `ENVIRONMENT` 被设成了 `production` |
 | 本地够不到线上 `crm.clever-vpn.org` | hosts 钉到 127.0.0.1 了；用 `curl --resolve` 指定真实 IP |
