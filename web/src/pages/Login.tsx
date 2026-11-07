@@ -19,7 +19,9 @@ import Turnstile from "../Turnstile";
  */
 export default function Login({ onDone }: { onDone: () => void | Promise<void> }) {
   const [stage, setStage] = useState<"password" | "totp">("password");
-  const [mode, setMode] = useState<"password" | "email">("password");
+  const [mode, setMode] = useState<"password" | "email" | "reset">("password");
+  /** 重置成功后的绿条提示（跨模式保留：用户回到登录框还能看到） */
+  const [notice, setNotice] = useState("");
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [devCode, setDevCode] = useState("");
   const [cooldown, setCooldown] = useState(0);
@@ -47,18 +49,29 @@ export default function Login({ onDone }: { onDone: () => void | Promise<void> }
     return fallback;
   }
 
-  async function sendEmailCode(email: string) {
+  /**
+   * 发验证码。`purpose` 只影响调哪个端点 —— 两条流程的码在服务端互相不能用
+   * （`email_codes` 的哈希入参含 purpose）。
+   */
+  async function sendCode(email: string, purpose: "login" | "reset") {
     setBusy(true);
     setError("");
     setDevCode("");
     try {
-      const res = await api.loginEmailStart(email, turnstileToken);
+      const res =
+        purpose === "login"
+          ? await api.loginEmailStart(email, turnstileToken)
+          : await api.passwordForgot(email, turnstileToken);
       setCooldown(res.cooldown ?? 60);
       if (res.code) setDevCode(res.code);
+      if (purpose === "reset") {
+        // 恒定响应：服务端不告诉我们这个邮箱是不是管理员，这里也不能暗示
+        setNotice("如果这个邮箱是管理员账号，重置码已经发出。请查收（含垃圾邮件箱）。");
+      }
     } catch (err) {
       setError(
         err instanceof ApiError && err.code === "email_unavailable"
-          ? "服务端未配置邮件发送，请使用密码登录"
+          ? "服务端未配置邮件发送，无法自助重置，请联系运营"
           : failMessage(err, "验证码发送失败，请稍后再试"),
       );
     } finally {
@@ -102,6 +115,27 @@ export default function Login({ onDone }: { onDone: () => void | Promise<void> }
     }
   }
 
+  async function submitReset(values: { email: string; code: string; next: string }) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api.passwordReset(values.email, values.code, values.next);
+      setMode("password");
+      setNotice("密码已重设，请用新密码登录。");
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.code === "weak_password"
+          ? "新密码至少 12 位"
+          : err instanceof ApiError && err.code === "invalid_code"
+            ? "验证码不正确或已过期"
+            : failMessage(err, "重设失败，请稍后再试"),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitTotp(values: { code: string }) {
     setBusy(true);
     setError("");
@@ -134,23 +168,26 @@ export default function Login({ onDone }: { onDone: () => void | Promise<void> }
         >
           <div style={{ width: "100%", maxWidth: 380 }}>
             <Typography.Title level={3} style={{ marginBottom: 4 }}>
-              {stage === "totp" ? "两步验证" : "登录"}
+              {stage === "totp" ? "两步验证" : mode === "reset" ? "重设密码" : "登录"}
             </Typography.Title>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 20 }}>
               {stage === "totp"
                 ? "输入认证器中的 6 位验证码。"
-                : mode === "email"
-                  ? "给管理员邮箱发一封 6 位验证码。"
-                  : "单管理员账号，仅授权运营者使用。"}
+                : mode === "reset"
+                  ? "给管理员邮箱发 6 位验证码，验证通过后设置新密码。"
+                  : mode === "email"
+                    ? "给管理员邮箱发一封 6 位验证码。"
+                    : "单管理员账号，仅授权运营者使用。"}
             </Typography.Paragraph>
 
-            {stage !== "totp" && emailModeAvailable && (
+            {stage !== "totp" && emailModeAvailable && mode !== "reset" && (
               <Segmented
                 block
                 value={mode}
                 onChange={(v) => {
                   setMode(v as "password" | "email");
                   setError("");
+                  setNotice("");
                 }}
                 options={[
                   { label: "密码", value: "password" },
@@ -160,11 +197,42 @@ export default function Login({ onDone }: { onDone: () => void | Promise<void> }
               />
             )}
 
+            {notice && <Alert type="success" showIcon message={notice} style={{ marginBottom: 16 }} />}
+
             {stage === "totp" ? (
               <TotpForm busy={busy} error={error} onSubmit={submitTotp} onBack={() => setStage("password")} />
+            ) : mode === "reset" ? (
+              <ResetForm
+                busy={busy}
+                cooldown={cooldown}
+                devCode={devCode}
+                error={error}
+                siteKey={siteKey}
+                onTurnstile={setTurnstileToken}
+                onSend={(email) => sendCode(email, "reset")}
+                onSubmit={submitReset}
+                onBack={() => {
+                  setMode("password");
+                  setError("");
+                  setNotice("");
+                }}
+              />
             ) : mode === "password" ? (
               <>
-                <PasswordForm busy={busy} onSubmit={submitPassword} />
+                <PasswordForm
+                  busy={busy}
+                  onSubmit={submitPassword}
+                  /* 没配发信就没有"忘记密码"这条路 —— 不给点了会报错的入口 */
+                  onForgot={
+                    emailModeAvailable
+                      ? () => {
+                          setMode("reset");
+                          setError("");
+                          setNotice("");
+                        }
+                      : undefined
+                  }
+                />
                 {siteKey && <Turnstile siteKey={siteKey} onToken={setTurnstileToken} />}
                 {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
               </>
@@ -176,7 +244,7 @@ export default function Login({ onDone }: { onDone: () => void | Promise<void> }
                 error={error}
                 siteKey={siteKey}
                 onTurnstile={setTurnstileToken}
-                onSend={sendEmailCode}
+                onSend={(email) => sendCode(email, "login")}
                 onSubmit={submitEmailCode}
               />
             )}
@@ -190,9 +258,12 @@ export default function Login({ onDone }: { onDone: () => void | Promise<void> }
 function PasswordForm({
   busy,
   onSubmit,
+  onForgot,
 }: {
   busy: boolean;
   onSubmit: (v: { email: string; password: string }) => void;
+  /** 不传 = 服务端发不了信 ⇒ 不显示入口（而不是显示了再报错） */
+  onForgot?: () => void;
 }) {
   return (
     <Form layout="vertical" size="large" requiredMark={false} onFinish={onSubmit}>
@@ -216,6 +287,107 @@ function PasswordForm({
       <Button type="primary" htmlType="submit" size="large" block loading={busy}>
         登录
       </Button>
+      {onForgot && (
+        <div style={{ textAlign: "center", marginTop: 14 }}>
+          <Typography.Link onClick={onForgot} style={{ fontSize: 13 }}>
+            忘记密码？
+          </Typography.Link>
+        </div>
+      )}
+    </Form>
+  );
+}
+
+/**
+ * 忘记密码：邮箱验证码 → 设新密码。
+ *
+ * 只有两个字段是必填的（码、新密码），邮箱是为了指定发给谁 —— 与登录页共用同一套
+ * 冷却（60s）与 dev 回显，避免多一套逻辑。
+ */
+function ResetForm({
+  busy,
+  cooldown,
+  devCode,
+  error,
+  siteKey,
+  onTurnstile,
+  onSend,
+  onSubmit,
+  onBack,
+}: {
+  busy: boolean;
+  cooldown: number;
+  devCode: string;
+  error: string;
+  siteKey: string | null;
+  onTurnstile: (token: string) => void;
+  onSend: (email: string) => void;
+  onSubmit: (v: { email: string; code: string; next: string }) => void;
+  onBack: () => void;
+}) {
+  const [form] = Form.useForm<{ email: string; code: string; next: string }>();
+  return (
+    <Form form={form} layout="vertical" size="large" requiredMark={false} onFinish={onSubmit}>
+      <Form.Item
+        name="email"
+        rules={[{ required: true, message: "请输入管理员邮箱" }]}
+        style={{ marginBottom: 16 }}
+      >
+        <Input prefix={<MailOutlined />} placeholder="管理员邮箱" autoComplete="username" />
+      </Form.Item>
+      <Form.Item style={{ marginBottom: 16 }}>
+        <Space.Compact style={{ width: "100%" }}>
+          <Form.Item name="code" noStyle rules={[{ required: true, message: "请输入验证码" }]}>
+            <Input
+              prefix={<NumberOutlined />}
+              placeholder="6 位验证码"
+              inputMode="numeric"
+              maxLength={6}
+              autoComplete="one-time-code"
+            />
+          </Form.Item>
+          <Button
+            onClick={() => onSend(form.getFieldValue("email") ?? "")}
+            disabled={busy || cooldown > 0}
+          >
+            {cooldown > 0 ? `${cooldown}s` : "发送验证码"}
+          </Button>
+        </Space.Compact>
+      </Form.Item>
+      <Form.Item
+        name="next"
+        rules={[
+          { required: true, message: "请输入新密码" },
+          { min: 12, message: "新密码至少 12 位" },
+        ]}
+        style={{ marginBottom: 12 }}
+      >
+        <Input.Password
+          prefix={<LockOutlined />}
+          placeholder="新密码（至少 12 位）"
+          autoComplete="new-password"
+        />
+      </Form.Item>
+
+      {devCode && (
+        <Alert
+          type="success"
+          showIcon
+          message={`开发环境回显验证码：${devCode}`}
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      {siteKey && <Turnstile siteKey={siteKey} onToken={onTurnstile} />}
+      {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
+
+      <Button type="primary" htmlType="submit" size="large" block loading={busy}>
+        重设密码
+      </Button>
+      <div style={{ textAlign: "center", marginTop: 14 }}>
+        <Typography.Link onClick={onBack} style={{ fontSize: 13 }}>
+          返回登录
+        </Typography.Link>
+      </div>
     </Form>
   );
 }

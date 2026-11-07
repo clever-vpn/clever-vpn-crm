@@ -3,7 +3,8 @@
  *
  * 复用 `email_codes` 表（App 端登录也在用），靠 `purpose` 区分：
  *   - `admin_login`    后台"用邮箱验证码登录"
- *   - `admin_password` 后台"用邮箱验证码改密码"
+ *   - `admin_password` 后台"用邮箱验证码改密码"（已登录）
+ *   - `admin_reset`    后台"忘记密码"自助重置（**未登录**）
  *   - `login`          App 端登录（`src/app/router.ts`）
  *
  * 规则（与 App 端一致，且更保守）：
@@ -18,7 +19,7 @@ import { codeEmail, emailCodeAvailable, isDevEnv, sendMail } from "../mail";
 
 import type { Env } from "../env";
 
-export type CodePurpose = "admin_login" | "admin_password" | "login";
+export type CodePurpose = "admin_login" | "admin_password" | "admin_reset" | "login";
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 const COOLDOWN_MS = 60 * 1000;
