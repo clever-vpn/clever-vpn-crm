@@ -23,7 +23,7 @@
  *   HOSTS_KV_ID       站内 KV（与 site-serve 共用同一个命名空间）
  * 可选：
  *   CRM_CONTRACT_VERSION（默认与 wrangler.jsonc 同步维护）、
- *   APP_ORIGINS、SITE_URL、EMAIL_FROM（默认 noreply@clever-vpn.org）
+ *   SITE_URL、EMAIL_FROM（默认 noreply@clever-vpn.org）
  *
  * ⚠️ **邮件必须在分片里可用**：后台的「邮箱验证码登录」和「忘记密码」都靠它
  * （契约 `site-hosting` §4.8.3）。以前这份配置没带 `send_email`，分片上的
@@ -72,7 +72,6 @@ const vars = {
   CRM_CODE_VERSION: process.env.CRM_CODE_VERSION ?? "dev",
   CRM_CONTRACT_VERSION: process.env.CRM_CONTRACT_VERSION ?? "19",
   ENVIRONMENT: "production",
-  APP_ORIGINS: process.env.APP_ORIGINS ?? "",
   SITE_URL: process.env.SITE_URL ?? "",
   // 发信人：域名须已在本账号完成 Email Sending 验证（与 cf-api 用同一个）
   EMAIL_FROM: process.env.EMAIL_FROM ?? "noreply@clever-vpn.org",

@@ -71,7 +71,6 @@
     "CRM_CODE_VERSION": "dev",
     "CRM_CONTRACT_VERSION": "19",
     "ENVIRONMENT": "production",
-    "APP_ORIGINS": "https://app.clever-vpn.org",
     // 租户 id 来自 KV，不是常量 —— 所以这里不能有 CRM_TENANT_ID
     "SITE_URL": ""
   }

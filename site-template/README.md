@@ -26,14 +26,14 @@ R2、GitHub Pages、自家服务器都行），通过 HTTP 调 CRM 的接口。
 
 2. **把本目录上传到你选好的静态托管**，确保 `index.html` 在根路径。
 
-3. **在 CRM 侧登记这个域名**（`wrangler.jsonc` 的 vars）：
+3. **把站点地址告诉 CRM**（可选，只影响"访问 CRM 根路径跳到哪"）：
 
    ```jsonc
-   "APP_ORIGINS": "https://www.你的域名.com",  // 允许跨域调 /api/app/v1
-   "SITE_URL": "https://www.你的域名.com"      // 可选：访问 CRM 根路径时跳到这里
+   "SITE_URL": "https://www.你的域名.com"
    ```
 
-   改完 `wrangler deploy`。`APP_ORIGINS` 没配对，浏览器会拦掉静态站的所有请求。
+   跨域**不用登记**：`/api/app/v1/*` 对所有 origin 回 `Access-Control-Allow-Origin: *`。
+   站点的域名怎么换都不影响接口，绑自定义域名也不用回来改配置。
 
 ## 文件说明
 
