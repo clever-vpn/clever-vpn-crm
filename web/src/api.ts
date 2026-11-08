@@ -204,7 +204,7 @@ export const api = {
   loginEmailVerify: (email: string, code: string) =>
     call<{ ok?: true; totp_required?: boolean }>("POST", "/login/email/verify", { email, code }),
   logout: () => call<{ ok: true }>("POST", "/logout"),
-  /** 站点：状态 / 发布 / 回滚（产物在 R2，指针在 KV，见 contracts/site-delivery.md §6） */
+  /** 站点：状态 / 发布 / 回滚（产物在 R2，指针在 KV，见 contracts/site-studio-crm.md §6） */
   site: () => call<SiteStateView>("GET", "/site"),
   sitePublish: () => call<SitePublishResult>("POST", "/site/publish", {}),
   siteRollback: (version: number) =>

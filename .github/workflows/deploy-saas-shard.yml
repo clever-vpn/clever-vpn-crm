@@ -6,7 +6,7 @@
 #   deploy-saas-site.yml    site-serve（站点出口，零 D1）
 #   deploy-saas-router.yml  router（*.根域名 → shard，service binding）
 #
-# 契约：clever-vpn-docs/docs/contracts/site-hosting.md §4.5
+# 契约：clever-vpn-docs/docs/contracts/cf-api-hosting.md §4.5
 #
 # 为什么是这个形状：
 #   1. `wrangler deploy` 是**连绑定一起提交**的。若 CI 取完清单再部署，期间 cf-api

@@ -1,6 +1,6 @@
 {
   // site-serve：客户站点的出口。零 D1，只读 KV 指针 + R2 产物。
-  // 契约：clever-vpn-docs/docs/contracts/site-hosting.md
+  // 契约：clever-vpn-docs/docs/contracts/cf-api-hosting.md
   //
   // 自部署与 SaaS 跑的是同一份代码；差别只在"谁把这两个绑定填上"。
   // 本地开发不需要真实 id（wrangler dev 会用本地模拟）。

@@ -489,7 +489,7 @@ export async function handleAdminApi(
   const settingsResponse = await handleAdminSettings(request, env);
   if (settingsResponse) return settingsResponse;
 
-  // ── 站点：发布 / 回滚 / 状态（产物在 R2，指针在 KV，见 contracts/site-delivery.md §6）──
+  // ── 站点：发布 / 回滚 / 状态（产物在 R2，指针在 KV，见 contracts/site-studio-crm.md §6）──
   const siteResponse = await handleAdminSite(request, env, tenantId, admin.email);
   if (siteResponse) return siteResponse;
 

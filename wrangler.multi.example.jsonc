@@ -3,7 +3,7 @@
  *
  * 一个 shard = 一个 Worker 脚本 + 一批 D1 库。租户不跑自己的代码，跑的是同一份脚本，
  * 差别只在"这个请求该用哪个库"：`host → KV → slot → env['DB_' + slot]`
- * （ADR 0004、clever-vpn-docs 的 contracts/site-hosting.md §2.2）。
+ * （ADR 0004、clever-vpn-docs 的 contracts/cf-api-hosting.md §2.2）。
  *
  * 真实配置由 cf-api/CI 程序化生成，不要手改线上 shard：
  *   - `DB_0…DB_N` 按该 shard 实际承载的租户数生成（2 000 租户/shard）；

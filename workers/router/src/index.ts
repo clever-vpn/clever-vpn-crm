@@ -8,7 +8,7 @@
  * service binding 是部署期静态的，所以片数变化时要重新部署本 worker
  * （`deploy-saas-router.yml`，清单由 cf-api 的 `/platform/shards` 给）。
  *
- * 契约：`clever-vpn-docs/docs/contracts/site-hosting.md` §2、§1.1、§4.4
+ * 契约：`clever-vpn-docs/docs/contracts/cf-api-hosting.md` §2、§1.1、§4.4
  *   - 未知 host ⇒ 404（**绝不回落默认租户**）
  *   - `status=suspended` ⇒ 410（域名解析得到、只是停了）
  *   - 片绑定缺失 ⇒ 503（部署事故，不是租户问题）
