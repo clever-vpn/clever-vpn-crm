@@ -133,6 +133,8 @@ export default function Site() {
       const res = await api.saveSiteSettings({
         site_name: String(values.site_name ?? ""),
         tagline: String(values.tagline ?? ""),
+        hero_title: String(values.hero_title ?? ""),
+        hero_sub: String(values.hero_sub ?? ""),
         color,
         contact_email: String(values.contact_email ?? ""),
         footer_note: String(values.footer_note ?? ""),
@@ -310,6 +312,8 @@ export default function Site() {
         initialValues={{
           site_name: settings?.siteName ?? "",
           tagline: settings?.tagline ?? "",
+          hero_title: settings?.heroTitle ?? "",
+          hero_sub: settings?.heroSub ?? "",
           color: settings?.color ?? "#3b82f6",
           contact_email: settings?.contactEmail ?? "",
           footer_note: settings?.footerNote ?? "",
@@ -332,6 +336,22 @@ export default function Site() {
           extra="用在搜索引擎摘要里（meta description）"
         >
           <Input placeholder="例如：快、稳、不记日志的 VPN" />
+        </Form.Item>
+        <Form.Item
+          label="首页大标题"
+          name="hero_title"
+          rules={[{ max: 40, message: "最多 40 个字符" }]}
+          extra="首页最大那行字。留空用默认文案"
+        >
+          <Input placeholder="例如：一键连上，快得像本地网络" />
+        </Form.Item>
+        <Form.Item
+          label="首页副标题"
+          name="hero_sub"
+          rules={[{ max: 120, message: "最多 120 个字符" }]}
+          extra="标题下面那行解释。留空则不显示"
+        >
+          <Input placeholder="例如：一个账号，三端通用，不限速不计日志" />
         </Form.Item>
         <Form.Item label="主色" name="color" extra="按钮与强调色">
           <ColorPicker format="hex" disabledAlpha />

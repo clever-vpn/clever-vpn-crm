@@ -1033,6 +1033,10 @@ export const siteSettings = sqliteTable("site_settings", {
   site_name: text("site_name").notNull().default(""),
   /** 一句话介绍（meta description） */
   tagline: text("tagline").notNull().default(""),
+  /** 首页大标题；空 = 用模板默认文案 */
+  hero_title: text("hero_title"),
+  /** 首页副标题；空 = 不显示 */
+  hero_sub: text("hero_sub"),
   /** 主色 `#rrggbb`；空 = 用模板默认 */
   color: text("color"),
   /** 客服邮箱（页脚展示，同时作为 mailto） */

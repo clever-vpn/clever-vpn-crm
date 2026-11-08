@@ -278,4 +278,36 @@ describe("品牌设置：漏用/空值这些坑", () => {
     expect(html).toContain('href="mailto:help@acme.test"');
     expect(html).toContain("联系我们");
   });
+  it("首页大标题留空 ⇒ 用默认文案（首页永远不出现空 h1）", async () => {
+    await seedTemplate({
+      "index.html": "<h1>{{site.hero_title}}</h1><p class=\"lead\">{{site.hero_sub}}</p>",
+    });
+    await saveSiteSettings(env, { site_name: "Acme" });
+
+    await publishSite(env, TENANT, { apiBase: BASE });
+    const html = await (
+      await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
+    )?.text();
+    expect(html).toContain("<h1>连通世界，只需要一次点击。</h1>");
+    // 副标题留空 ⇒ 空串（模板用 `:empty` 把它藏起来，不留一行空白）
+    expect(html).toContain('<p class="lead"></p>');
+  });
+
+  it("首页大标题/副标题可配，且过 HTML 转义", async () => {
+    await seedTemplate({
+      "index.html": "<h1>{{site.hero_title}}</h1><p>{{site.hero_sub}}</p>",
+    });
+    await saveSiteSettings(env, {
+      site_name: "Acme",
+      hero_title: '快 <script>不稳</h1>"',
+      hero_sub: "一个账号，三端通用",
+    });
+
+    await publishSite(env, TENANT, { apiBase: BASE });
+    const html = await (
+      await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
+    )?.text();
+    expect(html).toContain("<h1>快 &lt;script&gt;不稳&lt;/h1&gt;&quot;</h1>");
+    expect(html).toContain("<p>一个账号，三端通用</p>");
+  });
 });

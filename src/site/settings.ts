@@ -11,6 +11,10 @@ import type { Env } from "../env";
 export interface SiteSettings {
   siteName: string;
   tagline: string;
+  /** 首页大标题；空 = 用模板默认文案 */
+  heroTitle: string | null;
+  /** 首页副标题；空 = 不显示 */
+  heroSub: string | null;
   /** `#rrggbb`；空 = 用模板默认 */
   color: string | null;
   contactEmail: string | null;
@@ -20,6 +24,9 @@ export interface SiteSettings {
 }
 
 export const SETTINGS_ROW_ID = 1;
+
+/** 首页大标题的默认文案：租户没配时用它，避免首页出现空标题 */
+export const DEFAULT_HERO_TITLE = "连通世界，只需要一次点击。";
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -31,13 +38,16 @@ export type SettingsResult =
 /** 读设置；没有就往回填默认值（站点名留空时由调用方兜底成 CRM 品牌名） */
 export async function readSiteSettings(env: Env): Promise<SiteSettings> {
   const row = await env.DB.prepare(
-    `SELECT site_name, tagline, color, contact_email, footer_note, updated_at
+    `SELECT site_name, tagline, hero_title, hero_sub, color, contact_email,
+            footer_note, updated_at
        FROM site_settings WHERE id = ?`,
   )
     .bind(SETTINGS_ROW_ID)
     .first<{
       site_name: string;
       tagline: string;
+      hero_title: string | null;
+      hero_sub: string | null;
       color: string | null;
       contact_email: string | null;
       footer_note: string | null;
@@ -47,6 +57,8 @@ export async function readSiteSettings(env: Env): Promise<SiteSettings> {
   return {
     siteName: row?.site_name ?? "",
     tagline: row?.tagline ?? "",
+    heroTitle: row?.hero_title ?? null,
+    heroSub: row?.hero_sub ?? null,
     color: row?.color ?? null,
     contactEmail: row?.contact_email ?? null,
     footerNote: row?.footer_note ?? null,
@@ -79,6 +91,16 @@ export async function saveSiteSettings(
     return { ok: false, code: "bad_tagline", message: tagline.slice(6) };
   }
 
+  // 首页大标题/副标题：**空串 = 用模板默认**，所以这里不区分"没传"和"传了空"
+  const heroTitle = str(input.hero_title, 40, "首页大标题");
+  if (typeof heroTitle === "string" && heroTitle.startsWith("__err:")) {
+    return { ok: false, code: "bad_hero_title", message: heroTitle.slice(6) };
+  }
+  const heroSub = str(input.hero_sub, 120, "首页副标题");
+  if (typeof heroSub === "string" && heroSub.startsWith("__err:")) {
+    return { ok: false, code: "bad_hero_sub", message: heroSub.slice(6) };
+  }
+
   let color: string | null = null;
   if (typeof input.color === "string" && input.color.trim()) {
     color = input.color.trim();
@@ -102,10 +124,14 @@ export async function saveSiteSettings(
 
   const now = new Date().toISOString();
   await env.DB.prepare(
-    `INSERT INTO site_settings (id, site_name, tagline, color, contact_email, footer_note, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO site_settings
+       (id, site_name, tagline, hero_title, hero_sub, color, contact_email,
+        footer_note, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
-       site_name = excluded.site_name, tagline = excluded.tagline, color = excluded.color,
+       site_name = excluded.site_name, tagline = excluded.tagline,
+       hero_title = excluded.hero_title, hero_sub = excluded.hero_sub,
+       color = excluded.color,
        contact_email = excluded.contact_email, footer_note = excluded.footer_note,
        updated_at = excluded.updated_at`,
   )
@@ -113,6 +139,8 @@ export async function saveSiteSettings(
       SETTINGS_ROW_ID,
       (name as string | null) ?? "",
       (tagline as string | null) ?? "",
+      heroTitle === "" ? null : (heroTitle as string | null),
+      heroSub === "" ? null : (heroSub as string | null),
       color,
       email,
       footer,
@@ -141,6 +169,11 @@ export function tokensOf(
   return {
     "{{site.name}}": escapeHtml(name),
     "{{site.tagline}}": escapeHtml(settings.tagline),
+    // 首页大标题：空 = 模板默认文案；副标题：空 = 空串（模板用 `:empty` 隐藏）
+    "{{site.hero_title}}": escapeHtml(
+      settings.heroTitle || DEFAULT_HERO_TITLE,
+    ),
+    "{{site.hero_sub}}": escapeHtml(settings.heroSub ?? ""),
     // 空值回落到模板默认色：留空会让 `--brand: ;` 变成非法 CSS，整份样式失效
     "{{site.color}}": settings.color ?? "#3b82f6",
     "{{site.contact}}": escapeHtml(settings.contactEmail ?? ""),

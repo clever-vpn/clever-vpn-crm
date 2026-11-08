@@ -64,6 +64,13 @@
       "when": 1794116548838,
       "tag": "0008_fine_joystick",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794119036645,
+      "tag": "0009_slim_mandarin",
+      "breakpoints": true
     }
   ]
 }

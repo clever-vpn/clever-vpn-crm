@@ -180,6 +180,10 @@ export interface SitePublishResult {
 export interface SiteSettingsView {
   siteName: string;
   tagline: string;
+  /** 首页大标题；null = 用模板默认文案 */
+  heroTitle: string | null;
+  /** 首页副标题；null = 不显示 */
+  heroSub: string | null;
   color: string | null;
   contactEmail: string | null;
   footerNote: string | null;
@@ -229,6 +233,8 @@ export const api = {
   saveSiteSettings: (input: Partial<{
     site_name: string;
     tagline: string;
+    hero_title: string;
+    hero_sub: string;
     color: string;
     contact_email: string;
     footer_note: string;

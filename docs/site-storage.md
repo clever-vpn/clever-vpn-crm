@@ -61,6 +61,8 @@ site:<tenant>:active   { n }                                写：本仓发布
 |---|---|---|
 | `{{site.name}}` | `site_name`，空则用兜底名 | 转义后写入 |
 | `{{site.tagline}}` | `tagline` | 转义 |
+| `{{site.hero_title}}` | `hero_title`，空则用默认文案 | 转义 |
+| `{{site.hero_sub}}` | `hero_sub` | 转义；空 ⇒ 空串（模板用 `:empty` 隐藏） |
 | `{{site.color}}` | `color`（`#rrggbb`） | 不转义，需已校验 |
 | `{{site.contact}}` | `contact_email` | 转义 |
 | `{{site.contact_link}}` | `contact_email` | **整段 `<a>`**；没配就渲染空串（避免空的 `mailto:`） |
