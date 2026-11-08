@@ -12,7 +12,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
 import { activeKey, lintManifest, publishSite, siteState } from "../../src/site/publish";
-import { readSiteSettings, saveSiteSettings } from "../../src/site/settings";
+import {
+  buildScope,
+  readSiteSettings,
+  saveSiteSettings,
+} from "../../src/site/settings";
 
 const TENANT = "42";
 const BASE = "https://acme.clever-panel.win";
@@ -211,6 +215,12 @@ describe("站点设置：单行 JSON + rev 乐观锁", () => {
     expect(
       await saveSiteSettings(env, { values: { site: { nickname: "x" } } }),
     ).toMatchObject({ ok: false, code: "unknown_field" });
+    // 下载链接只收 http(s)：`javascript:` 会被直接写进 `href`
+    for (const bad of ["javascript:alert(1)", "//cdn.example.com/a.dmg", "ftp://x/y"]) {
+      expect(
+        await saveSiteSettings(env, { values: { site: { download: { ios: bad } } } }),
+      ).toMatchObject({ ok: false, code: "bad_url" });
+    }
   });
 
   it("整份替换、rev 递增、永远只有一行", async () => {
@@ -237,6 +247,33 @@ describe("站点设置：单行 JSON + rev 乐观锁", () => {
     expect(
       await saveSiteSettings(env, { ifRev: rev, values: { site: { name: "B" } } }),
     ).toMatchObject({ ok: true });
+  });
+
+  it("下载入口：逐平台保存，空串等于没上架", async () => {
+    const r = await saveSiteSettings(env, {
+      values: {
+        site: {
+          download: {
+            ios: "https://apps.apple.com/app/id1",
+            windows: "https://dl.example.com/Acme.exe",
+            android: "",
+            note: "Windows 版只有 64 位",
+          },
+        },
+      },
+    });
+    expect(r).toMatchObject({ ok: true });
+    const got = await readSiteSettings(env);
+    const scope = buildScope(got.values, "兜底") as {
+      site: { download: Record<string, string> };
+    };
+    expect(scope.site.download).toEqual({
+      ios: "https://apps.apple.com/app/id1",
+      android: "",
+      windows: "https://dl.example.com/Acme.exe",
+      macos: "",
+      note: "Windows 版只有 64 位",
+    });
   });
 });
 

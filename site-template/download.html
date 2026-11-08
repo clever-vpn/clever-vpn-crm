@@ -35,16 +35,30 @@
         用同一个账号登录即可连接。购买与续费在网页上也能完成。
       </p>
 
+      <p class="hint" data-if="site.download.note" style="margin:-4px 0 18px">
+        {{site.download.note}}
+      </p>
+
       <div class="grid cols-2">
-        <div class="card">
-          <h2>iPhone / iPad / Mac</h2>
+        <div class="card" data-if="site.download.ios">
+          <h2>iPhone / iPad</h2>
           <p class="hint">从 App Store 安装，装好后用邮箱登录。</p>
-          <a class="btn" id="apple" href="#" rel="noopener">前往 App Store</a>
+          <a class="btn" href="{{site.download.ios}}" rel="noopener">前往 App Store</a>
         </div>
-        <div class="card">
+        <div class="card" data-if="site.download.android">
           <h2>Android</h2>
-          <p class="hint">从 Google Play 安装，或用下方安装包。</p>
-          <a class="btn" id="google" href="#" rel="noopener">前往 Google Play</a>
+          <p class="hint">从 Google Play 安装，装好后用邮箱登录。</p>
+          <a class="btn" href="{{site.download.android}}" rel="noopener">前往 Google Play</a>
+        </div>
+        <div class="card" data-if="site.download.windows">
+          <h2>Windows</h2>
+          <p class="hint">下载安装包，双击安装；64 位 Windows 10 及以上。</p>
+          <a class="btn" href="{{site.download.windows}}" rel="noopener">下载 Windows 版</a>
+        </div>
+        <div class="card" data-if="site.download.macos">
+          <h2>Mac</h2>
+          <p class="hint">下载 dmg，拖进「应用程序」；Apple 芯片与 Intel 都支持。</p>
+          <a class="btn" href="{{site.download.macos}}" rel="noopener">下载 Mac 版</a>
         </div>
       </div>
 
@@ -67,7 +81,8 @@
       </div>
 
       <p class="hint" style="margin-top:16px">
-        商店链接由租户在部署时配置，不写死在模板里。
+        没找到你的系统？
+        <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">写信问我们</a>
       </p>
     </main>
 
@@ -101,13 +116,6 @@
         </div>
       </div>
     </footer>
-
-    <script src="config.js"></script>
-    <script>
-      // 商店链接由发布环境注入（config.js），模板不写死
-      if (window.SITE_LINKS?.apple) document.getElementById("apple").href = window.SITE_LINKS.apple;
-      if (window.SITE_LINKS?.google) document.getElementById("google").href = window.SITE_LINKS.google;
-    </script>
 
   </body>
 </html>

@@ -191,6 +191,14 @@ export interface SiteValues {
     layout?: { shell?: string };
     theme?: { brand?: string; bg?: string; text?: string };
     icon?: { mark?: string; image?: string | null };
+    /** 下载入口：每平台一个官方链接，空 = 该平台不显示 */
+    download?: {
+      ios?: string;
+      android?: string;
+      windows?: string;
+      macos?: string;
+      note?: string;
+    };
   };
 }
 

@@ -15,7 +15,7 @@ import type { Env } from "../env";
 
 export const SETTINGS_ROW_ID = 1;
 
-type Kind = "text" | "color" | "email" | "enum" | "asset";
+type Kind = "text" | "color" | "email" | "enum" | "asset" | "url";
 
 interface FieldSpec {
   kind: Kind;
@@ -41,6 +41,13 @@ export const SETTING_FIELDS: Record<string, FieldSpec> = {
   "site.theme.text": { kind: "color" },
   "site.icon.mark": { kind: "text", max: 8 },
   "site.icon.image": { kind: "asset", max: 200 },
+  // 下载入口：**每平台一个官方链接**，留空 = 该平台不出现在下载页
+  // （模板用 `data-if` 整卡隐藏，不做"敬请期待"占位）
+  "site.download.ios": { kind: "url", max: 300 },
+  "site.download.android": { kind: "url", max: 300 },
+  "site.download.windows": { kind: "url", max: 300 },
+  "site.download.macos": { kind: "url", max: 300 },
+  "site.download.note": { kind: "text", max: 120 },
 };
 
 /** 首页大标题留空时的默认文案（避免首页出现空 `<h1>`） */
@@ -64,6 +71,11 @@ export type SaveResult =
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+/**
+ * 只收 http(s)。允许 `//host/path` 这种协议相对写法会跟着站点域名走，
+ * 换个域名就指向错地方；`javascript:` / `data:` 更不能进 `href`。
+ */
+const URL_RE = /^https?:\/\/[^\s"'<>]+$/i;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -109,6 +121,12 @@ function validate(flat: Record<string, unknown>): { code: string; message: strin
     }
     if (spec.kind === "email" && text && !EMAIL.test(text)) {
       return { code: "bad_email", message: `${path} 邮箱格式不对` };
+    }
+    if (spec.kind === "url" && text && !URL_RE.test(text)) {
+      return {
+        code: "bad_url",
+        message: `${path} 必须以 https:// 或 http:// 开头`,
+      };
     }
     if (spec.kind === "enum" && text && !(spec.values ?? []).includes(text)) {
       return {
@@ -207,6 +225,7 @@ export function buildScope(
   const layout = isObj(site.layout) ? site.layout : {};
   const theme = isObj(site.theme) ? site.theme : {};
   const icon = isObj(site.icon) ? site.icon : {};
+  const download = isObj(site.download) ? site.download : {};
 
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
   const name = str(site.name) || fallbackName;
@@ -231,6 +250,14 @@ export function buildScope(
         text: str(theme.text) || "#0d1626",
       },
       icon: { mark: str(icon.mark), image: str(icon.image) || null },
+      // 空串 = 没有这个平台，模板据此整块隐藏
+      download: {
+        ios: str(download.ios),
+        android: str(download.android),
+        windows: str(download.windows),
+        macos: str(download.macos),
+        note: str(download.note),
+      },
       // ── 派生：不存库，发布时算 ──
       //
       // 只派生**纯文本**。曾经这里有个 `contact_link`（整段 `<a>`），现在去掉了：
