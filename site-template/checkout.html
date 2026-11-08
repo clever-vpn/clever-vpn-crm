@@ -10,14 +10,14 @@
   <body>
     <header class="site">
       <div class="wrap bar">
-        <a class="brand" href="index.html" data-eid="global.header.brand">
+        <a class="brand" href="index.html">
           <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
             <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
                   stroke="currentColor" stroke-width="1.2" opacity=".55" />
             <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
           </svg>
-          <span data-eid="global.header.name">{{site.name}}</span>
+          <span>{{site.name}}</span>
         </a>
         <nav>
           <a href="index.html#features">特性</a>
@@ -25,14 +25,14 @@
           <a href="download.html">下载</a>
           <a href="account.html">我的</a>
         </nav>
-        <a class="btn sm" href="pricing.html" data-eid="global.header.cta">立即开始</a>
+        <a class="btn sm" href="pricing.html">立即开始</a>
       </div>
     </header>
 
     <main class="wrap">
       <div class="narrow" style="margin:0 auto">
-        <h1 data-eid="checkout.title">确认订单</h1>
-        <p class="lead" data-eid="checkout.lead">
+        <h1>确认订单</h1>
+        <p class="lead">
           金额与有效期由服务端报价给出，这里只确认一次。
         </p>
         <div id="flash"></div>
@@ -68,9 +68,9 @@
       <div class="wrap">
         <div class="cols">
           <div>
-            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
-            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
-            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+            <div class="brand">{{site.name}}</div>
+            <p>{{site.tagline}}</p>
+            <p></p>
           </div>
           <div>
             <h4>产品</h4>
@@ -89,7 +89,7 @@
           </div>
         </div>
         <div class="legal">
-          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>{{site.footer}}</span>
           <span>支付与订阅服务由本网站提供</span>
         </div>
       </div>

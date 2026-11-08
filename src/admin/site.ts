@@ -55,10 +55,22 @@ export async function handleAdminSite(
   }
 
   if (method === "PUT" && path === "/site/settings") {
-    const result = await saveSiteSettings(env, await readBody(request));
-    return result.ok
-      ? json({ ok: true, settings: result.settings })
-      : json({ error: result.code, message: result.message }, 400);
+    const body = (await readBody(request)) as {
+      if_rev?: unknown;
+      values?: unknown;
+    };
+    const result = await saveSiteSettings(env, {
+      ifRev: typeof body.if_rev === "number" ? body.if_rev : undefined,
+      values: body.values,
+    });
+    if (result.ok) {
+      return json({ ok: true, ...result.settings });
+    }
+    // 乐观锁冲突是 409，其余是 400：前端据此决定"提示重试"还是"指出哪个字段"
+    return json(
+      { error: result.code, message: result.message },
+      result.code === "rev_conflict" ? 409 : 400,
+    );
   }
 
   // ── 域名绑定：**只有 multi（SaaS）才有这一步** ──

@@ -185,46 +185,56 @@ describe("config.js：发布时注入 CRM 地址", () => {
   });
 });
 
-describe("品牌设置：发布时烘焙进产物", () => {
-  it("校验：主色必须 #rrggbb、邮箱要像邮箱、长度有上限", async () => {
-    expect(await saveSiteSettings(env, { color: "red" })).toMatchObject({
-      ok: false,
-      code: "bad_color",
-    });
-    expect(await saveSiteSettings(env, { contact_email: "nope" })).toMatchObject({
-      ok: false,
-      code: "bad_email",
-    });
+describe("站点设置：单行 JSON + rev 乐观锁", () => {
+  it("校验：色值、邮箱、长度、未知字段", async () => {
     expect(
-      await saveSiteSettings(env, { site_name: "x".repeat(41) }),
-    ).toMatchObject({ ok: false, code: "bad_site_name" });
+      await saveSiteSettings(env, { values: { site: { theme: { brand: "red" } } } }),
+    ).toMatchObject({ ok: false, code: "bad_color" });
+    expect(
+      await saveSiteSettings(env, { values: { site: { contact_email: "nope" } } }),
+    ).toMatchObject({ ok: false, code: "bad_email" });
+    expect(
+      await saveSiteSettings(env, { values: { site: { name: "x".repeat(41) } } }),
+    ).toMatchObject({ ok: false, code: "too_long" });
+    expect(
+      await saveSiteSettings(env, { values: { site: { nickname: "x" } } }),
+    ).toMatchObject({ ok: false, code: "unknown_field" });
   });
 
-  it("保存后读回一致（幂等：重复写只有一个租户行）", async () => {
-    await saveSiteSettings(env, {
-      site_name: "Acme VPN",
-      tagline: "快、稳、不记日志",
-      color: "#123456",
-      contact_email: "help@acme.test",
+  it("整份替换、rev 递增、永远只有一行", async () => {
+    const a = await saveSiteSettings(env, { values: { site: { name: "Acme VPN" } } });
+    expect(a.ok && a.settings.rev).toBe(1);
+    const b = await saveSiteSettings(env, {
+      values: { site: { name: "Acme 2", tagline: "快" } },
     });
-    await saveSiteSettings(env, {
-      site_name: "Acme VPN 2",
-      tagline: "快、稳、不记日志",
-      color: "#123456",
-      contact_email: "help@acme.test",
-    });
-    const s = await readSiteSettings(env);
-    expect(s.siteName).toBe("Acme VPN 2");
-    const rows = await env.DB.prepare("SELECT COUNT(*) AS c FROM site_settings").first<{ c: number }>();
+    expect(b.ok && b.settings.rev).toBe(2);
+    const got = await readSiteSettings(env);
+    expect(got.values).toMatchObject({ site: { name: "Acme 2", tagline: "快" } });
+    const rows = await env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM site_settings",
+    ).first<{ c: number }>();
     expect(rows?.c).toBe(1);
   });
 
-  it("发布把占位符换成设置值；没设的用兜底名", async () => {
+  it("rev 不匹配 ⇒ rev_conflict（后台与 studio 同时改）", async () => {
+    const first = await saveSiteSettings(env, { values: { site: { name: "A" } } });
+    const rev = first.ok ? first.settings.rev : 0;
+    expect(
+      await saveSiteSettings(env, { ifRev: rev - 1, values: { site: { name: "B" } } }),
+    ).toMatchObject({ ok: false, code: "rev_conflict" });
+    expect(
+      await saveSiteSettings(env, { ifRev: rev, values: { site: { name: "B" } } }),
+    ).toMatchObject({ ok: true });
+  });
+});
+
+describe("发布：把设置烘焙进产物", () => {
+  it("占位符替换；没设的用兜底名与默认文案", async () => {
     await seedTemplate({
       "index.html":
-        "<title>{{site.name}}</title><p>{{site.tagline}}</p><footer>{{site.footer}}</footer>",
+        "<title>{{site.name}}</title><h1>{{site.hero.title}}</h1><footer>{{site.footer}}</footer>",
     });
-    await saveSiteSettings(env, { site_name: "Acme VPN", tagline: "快、稳" });
+    await saveSiteSettings(env, { values: { site: { name: "Acme VPN" } } });
 
     const r = await publishSite(env, TENANT, { apiBase: BASE });
     expect(r.ok).toBe(true);
@@ -233,36 +243,38 @@ describe("品牌设置：发布时烘焙进产物", () => {
       await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
     )?.text();
     expect(html).toContain("<title>Acme VPN</title>");
-    expect(html).toContain("<p>快、稳</p>");
+    // 标题留空 ⇒ 默认文案，首页不会出现空 h1
+    expect(html).toContain("<h1>连通世界，只需要一次点击。</h1>");
     // 版权行没设 ⇒ 自动生成，且带当前年份
     expect(html).toMatch(/© \d{4} Acme VPN/);
   });
 
-  it("模板用了没定义的槽 ⇒ 发布被拦，线上不变", async () => {
+  it("模板用了没有数据的路径 ⇒ 发布被拦，线上不变", async () => {
     await seedTemplate({ "index.html": "<h1>{{site.nickname}}</h1>" });
     const r = await publishSite(env, TENANT, { apiBase: BASE });
     expect(r).toMatchObject({ ok: false, code: "template_token_unknown" });
     expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
   });
-});
 
-describe("品牌设置：漏用/空值这些坑", () => {
-  it("主色留空 ⇒ 回落到默认色（否则 --brand: ; 整份 CSS 失效）", async () => {
+  it("主题色留空 ⇒ 回落默认色（否则 `--brand: ;` 整份 CSS 失效）", async () => {
     await seedTemplate({
       "index.html": "<h1>{{site.name}}</h1>",
-      "site.css": ":root{--brand: {{site.color}};}",
+      "site.css": ":root{--brand: {{site.theme.brand}};}",
     });
-    await saveSiteSettings(env, { site_name: "Acme", color: "" });
+    await saveSiteSettings(env, { values: { site: { name: "Acme" } } });
 
     await publishSite(env, TENANT, { apiBase: BASE });
     const css = await (
       await SITES.get(`sites/${TENANT}/versions/1/public/site.css`)
     )?.text();
-    expect(css).toContain("--brand: #3b82f6");
+    expect(css).toContain("--brand: #4f46e5");
   });
 
-  it("配了客服邮箱 ⇒ 页脚出现 mailto 链接；没配 ⇒ 什么都不渲染", async () => {
-    await seedTemplate({ "index.html": "<footer>{{site.contact_link}}</footer>" });
+  it("配了客服邮箱 ⇒ 页脚出现 mailto；没配 ⇒ 整段链接消失", async () => {
+    await seedTemplate({
+      "index.html":
+        '<footer><a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a></footer>',
+    });
 
     await publishSite(env, TENANT, { apiBase: BASE });
     let html = await (
@@ -270,7 +282,9 @@ describe("品牌设置：漏用/空值这些坑", () => {
     )?.text();
     expect(html).toContain("<footer></footer>");
 
-    await saveSiteSettings(env, { site_name: "Acme", contact_email: "help@acme.test" });
+    await saveSiteSettings(env, {
+      values: { site: { name: "Acme", contact_email: "help@acme.test" } },
+    });
     await publishSite(env, TENANT, { apiBase: BASE });
     html = await (
       await SITES.get(`sites/${TENANT}/versions/2/public/index.html`)
@@ -278,36 +292,21 @@ describe("品牌设置：漏用/空值这些坑", () => {
     expect(html).toContain('href="mailto:help@acme.test"');
     expect(html).toContain("联系我们");
   });
-  it("首页大标题留空 ⇒ 用默认文案（首页永远不出现空 h1）", async () => {
-    await seedTemplate({
-      "index.html": "<h1>{{site.hero_title}}</h1><p class=\"lead\">{{site.hero_sub}}</p>",
-    });
-    await saveSiteSettings(env, { site_name: "Acme" });
 
-    await publishSite(env, TENANT, { apiBase: BASE });
-    const html = await (
-      await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
-    )?.text();
-    expect(html).toContain("<h1>连通世界，只需要一次点击。</h1>");
-    // 副标题留空 ⇒ 空串（模板用 `:empty` 把它藏起来，不留一行空白）
-    expect(html).toContain('<p class="lead"></p>');
-  });
-
-  it("首页大标题/副标题可配，且过 HTML 转义", async () => {
+  it("设置值过 HTML 转义（站点名里能放引号，不会破坏属性）", async () => {
     await seedTemplate({
-      "index.html": "<h1>{{site.hero_title}}</h1><p>{{site.hero_sub}}</p>",
+      "index.html": '<h1 title="{{site.name}}">{{site.name}}</h1>',
     });
     await saveSiteSettings(env, {
-      site_name: "Acme",
-      hero_title: '快 <script>不稳</h1>"',
-      hero_sub: "一个账号，三端通用",
+      values: { site: { name: '快 <script>不稳</h1>"' } },
     });
 
     await publishSite(env, TENANT, { apiBase: BASE });
     const html = await (
       await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
     )?.text();
-    expect(html).toContain("<h1>快 &lt;script&gt;不稳&lt;/h1&gt;&quot;</h1>");
-    expect(html).toContain("<p>一个账号，三端通用</p>");
+    expect(html).toContain(
+      '<h1 title="快 &lt;script&gt;不稳&lt;/h1&gt;&quot;">快 &lt;script&gt;不稳&lt;/h1&gt;&quot;</h1>',
+    );
   });
 });

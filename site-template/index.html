@@ -8,17 +8,17 @@
     <link rel="stylesheet" href="site.css" />
   </head>
   <body>
-    <!-- 每个可编辑单元带稳定锚点：site-studio 靠 data-eid 定位，不靠猜 -->
+    <!-- 模板由 studio 与 harness 编辑；取值只有 {{path}} 一种写法 -->
     <header class="site">
       <div class="wrap bar">
-        <a class="brand" href="index.html" data-eid="global.header.brand">
+        <a class="brand" href="index.html">
           <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
             <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
                   stroke="currentColor" stroke-width="1.2" opacity=".55" />
             <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
           </svg>
-          <span data-eid="global.header.name">{{site.name}}</span>
+          <span>{{site.name}}</span>
         </a>
         <nav>
           <a href="#features">特性</a>
@@ -26,7 +26,7 @@
           <a href="download.html">下载</a>
           <a href="account.html">我的</a>
         </nav>
-        <a class="btn sm" href="pricing.html" data-eid="global.header.cta">立即开始</a>
+        <a class="btn sm" href="pricing.html">立即开始</a>
       </div>
     </header>
 
@@ -34,12 +34,12 @@
       <section class="hero">
         <div class="wrap inner">
           <div>
-            <span class="badge" data-eid="home.hero.badge">一个账号，三端通用</span>
-            <h1 data-eid="home.hero.title">{{site.hero_title}}</h1>
-            <p class="lead" data-eid="home.hero.sub">{{site.hero_sub}}</p>
+            <span class="badge">一个账号，三端通用</span>
+            <h1>{{site.hero.title}}</h1>
+            <p class="lead" data-if="site.hero.sub">{{site.hero.sub}}</p>
             <div class="actions">
-              <a class="btn" href="pricing.html" data-eid="home.hero.cta">查看套餐</a>
-              <a class="linkish" href="download.html" data-eid="home.hero.cta2">下载客户端 →</a>
+              <a class="btn" href="pricing.html">查看套餐</a>
+              <a class="linkish" href="download.html">下载客户端 →</a>
             </div>
           </div>
           <div class="art" aria-hidden="true">
@@ -70,18 +70,18 @@
 
       <section class="wrap">
         <!-- 只写能兑现的事实，不写编造的节点数 / 星级 -->
-        <div class="facts" data-eid="home.facts">
+        <div class="facts">
           <div>
-            <b data-eid="home.facts.1.title">不限速不限量</b>
-            <span data-eid="home.facts.1.desc">按套餐给带宽，不按天掐你</span>
+            <b>不限速不限量</b>
+            <span>按套餐给带宽，不按天掐你</span>
           </div>
           <div>
-            <b data-eid="home.facts.2.title">一个账号，三端通用</b>
-            <span data-eid="home.facts.2.desc">手机、电脑、浏览器同步登录</span>
+            <b>一个账号，三端通用</b>
+            <span>手机、电脑、浏览器同步登录</span>
           </div>
           <div>
-            <b data-eid="home.facts.3.title">不记浏览日志</b>
-            <span data-eid="home.facts.3.desc">只保留计费必需的数据</span>
+            <b>不记浏览日志</b>
+            <span>只保留计费必需的数据</span>
           </div>
         </div>
       </section>
@@ -89,8 +89,8 @@
       <section class="band" id="features">
         <div class="wrap">
           <div class="section-head">
-            <h2 data-eid="home.features.title">为什么选我们</h2>
-            <p data-eid="home.features.sub">四件事做好就够了，不用记一堆参数。</p>
+            <h2>为什么选我们</h2>
+            <p>四件事做好就够了，不用记一堆参数。</p>
           </div>
           <div class="grid cols-2">
             <div class="card feature">
@@ -99,8 +99,8 @@
                   <path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12L13 2Z" />
                 </svg>
               </div>
-              <h3 data-eid="home.features.1.title">真的快</h3>
-              <p data-eid="home.features.1.desc">中转专线直连，晚高峰也不掉速；看 4K 不用等缓冲。</p>
+              <h3>真的快</h3>
+              <p>中转专线直连，晚高峰也不掉速；看 4K 不用等缓冲。</p>
             </div>
             <div class="card feature">
               <div class="ico">
@@ -109,8 +109,8 @@
                   <path d="M9 12.2l2.1 2.1L15.4 10" />
                 </svg>
               </div>
-              <h3 data-eid="home.features.2.title">真的稳</h3>
-              <p data-eid="home.features.2.desc">一条线路不通自动换，不用你自己试哪个节点能连。</p>
+              <h3>真的稳</h3>
+              <p>一条线路不通自动换，不用你自己试哪个节点能连。</p>
             </div>
             <div class="card feature">
               <div class="ico">
@@ -120,8 +120,8 @@
                   <path d="M12 14.6v2.2" />
                 </svg>
               </div>
-              <h3 data-eid="home.features.3.title">只看计费，不看你去哪</h3>
-              <p data-eid="home.features.3.desc">不记录访问内容，不出售数据；账单只算流量与时长。</p>
+              <h3>只看计费，不看你去哪</h3>
+              <p>不记录访问内容，不出售数据；账单只算流量与时长。</p>
             </div>
             <div class="card feature">
               <div class="ico">
@@ -131,8 +131,8 @@
                   <path d="M6.2 17.2h.01M9.8 17.2h.01M13.4 17.2h.01" stroke-width="2.4" />
                 </svg>
               </div>
-              <h3 data-eid="home.features.4.title">装完就能用</h3>
-              <p data-eid="home.features.4.desc">没有配置文件、没有节点列表，登录后点一下连接。</p>
+              <h3>装完就能用</h3>
+              <p>没有配置文件、没有节点列表，登录后点一下连接。</p>
             </div>
           </div>
         </div>
@@ -143,43 +143,43 @@
           <div class="grid cols-2">
             <div>
               <div class="section-head">
-                <h2 data-eid="home.steps.title">三步开始</h2>
-                <p data-eid="home.steps.sub">全程不需要改任何设置。</p>
+                <h2>三步开始</h2>
+                <p>全程不需要改任何设置。</p>
               </div>
               <ol class="steps" style="padding:0;margin:0">
                 <li>
-                  <b data-eid="home.steps.1.title">选套餐并支付</b>
-                  <span data-eid="home.steps.1.desc">支持常用支付方式，付完立刻到账。</span>
+                  <b>选套餐并支付</b>
+                  <span>支持常用支付方式，付完立刻到账。</span>
                 </li>
                 <li>
-                  <b data-eid="home.steps.2.title">用邮箱登录</b>
-                  <span data-eid="home.steps.2.desc">邮箱加验证码，不需要记密码。</span>
+                  <b>用邮箱登录</b>
+                  <span>邮箱加验证码，不需要记密码。</span>
                 </li>
                 <li>
-                  <b data-eid="home.steps.3.title">下载客户端并连接</b>
-                  <span data-eid="home.steps.3.desc">装好后登录一次，之后一键连接。</span>
+                  <b>下载客户端并连接</b>
+                  <span>装好后登录一次，之后一键连接。</span>
                 </li>
               </ol>
             </div>
             <div class="card">
               <div class="section-head" style="margin-bottom:14px">
-                <h2 data-eid="home.faq.title">常见问题</h2>
+                <h2>常见问题</h2>
               </div>
-              <details class="faq" data-eid="home.faq.1">
-                <summary data-eid="home.faq.1.q">支持几台设备？</summary>
-                <p data-eid="home.faq.1.a">一个账号可在手机、电脑、浏览器上同时登录，具体台数见套餐说明。</p>
+              <details class="faq">
+                <summary>支持几台设备？</summary>
+                <p>一个账号可在手机、电脑、浏览器上同时登录，具体台数见套餐说明。</p>
               </details>
-              <details class="faq" data-eid="home.faq.2">
-                <summary data-eid="home.faq.2.q">能退款吗？</summary>
-                <p data-eid="home.faq.2.a">购买后 7 天内未使用流量可申请退款，具体见服务条款。</p>
+              <details class="faq">
+                <summary>能退款吗？</summary>
+                <p>购买后 7 天内未使用流量可申请退款，具体见服务条款。</p>
               </details>
-              <details class="faq" data-eid="home.faq.3">
-                <summary data-eid="home.faq.3.q">换设备要重新买吗？</summary>
-                <p data-eid="home.faq.3.a">不需要。同一个账号在新设备上登录即可，旧设备登出就行。</p>
+              <details class="faq">
+                <summary>换设备要重新买吗？</summary>
+                <p>不需要。同一个账号在新设备上登录即可，旧设备登出就行。</p>
               </details>
-              <details class="faq" data-eid="home.faq.4">
-                <summary data-eid="home.faq.4.q">连不上怎么办？</summary>
-                <p data-eid="home.faq.4.a">
+              <details class="faq">
+                <summary>连不上怎么办？</summary>
+                <p>
                   先换一个节点；还不行就把时间和错误提示发给客服邮箱。
                 </p>
               </details>
@@ -189,10 +189,10 @@
       </section>
 
       <section class="wrap" style="padding-top:52px">
-        <div class="cta-card" data-eid="home.cta">
-          <h2 data-eid="home.cta.title">现在开始，几分钟就能连上</h2>
-          <p data-eid="home.cta.desc">先看套餐，选一个合适的；随时可以升到更大的套餐。</p>
-          <a class="btn" href="pricing.html" data-eid="home.cta.button">查看套餐</a>
+        <div class="cta-card">
+          <h2>现在开始，几分钟就能连上</h2>
+          <p>先看套餐，选一个合适的；随时可以升到更大的套餐。</p>
+          <a class="btn" href="pricing.html">查看套餐</a>
         </div>
       </section>
     </main>
@@ -201,9 +201,9 @@
       <div class="wrap">
         <div class="cols">
           <div>
-            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
-            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
-            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+            <div class="brand">{{site.name}}</div>
+            <p>{{site.tagline}}</p>
+            <p></p>
           </div>
           <div>
             <h4>产品</h4>
@@ -222,7 +222,7 @@
           </div>
         </div>
         <div class="legal">
-          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>{{site.footer}}</span>
           <span>支付与订阅服务由本网站提供</span>
         </div>
       </div>

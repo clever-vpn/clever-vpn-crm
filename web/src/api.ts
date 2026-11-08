@@ -177,16 +177,27 @@ export interface SitePublishResult {
   templateVersion: string;
 }
 
+/**
+ * 站点设置 = **单行 JSON**，键就是模板里写的路径（`site.hero.title`）。
+ * 与模板包的 `data.schema.json` 同构（standards/site-template.md §3）。
+ */
+export interface SiteValues {
+  site?: {
+    name?: string;
+    tagline?: string;
+    contact_email?: string;
+    footer_note?: string;
+    hero?: { title?: string; sub?: string; layout?: string };
+    layout?: { shell?: string };
+    theme?: { brand?: string; bg?: string; text?: string };
+    icon?: { mark?: string; image?: string | null };
+  };
+}
+
 export interface SiteSettingsView {
-  siteName: string;
-  tagline: string;
-  /** 首页大标题；null = 用模板默认文案 */
-  heroTitle: string | null;
-  /** 首页副标题；null = 不显示 */
-  heroSub: string | null;
-  color: string | null;
-  contactEmail: string | null;
-  footerNote: string | null;
+  /** 乐观锁；保存时回传，冲突返 409 */
+  rev: number;
+  values: SiteValues;
   updatedAt: string | null;
 }
 
@@ -230,15 +241,8 @@ export const api = {
   site: () => call<SiteStateView>("GET", "/site"),
   sitePublish: () => call<SitePublishResult>("POST", "/site/publish", {}),
   siteSettings: () => call<{ settings: SiteSettingsView }>("GET", "/site/settings"),
-  saveSiteSettings: (input: Partial<{
-    site_name: string;
-    tagline: string;
-    hero_title: string;
-    hero_sub: string;
-    color: string;
-    contact_email: string;
-    footer_note: string;
-  }>) => call<{ ok: true; settings: SiteSettingsView }>("PUT", "/site/settings", input),
+  saveSiteSettings: (input: { if_rev: number; values: SiteValues }) =>
+    call<{ ok: true; rev: number; values: SiteValues }>("PUT", "/site/settings", input),
   siteDomain: () => call<SiteDomainView>("GET", "/site/domain"),
   siteRollback: (version: number) =>
     call<{ ok: true; active: number }>("POST", "/site/rollback", { version }),
