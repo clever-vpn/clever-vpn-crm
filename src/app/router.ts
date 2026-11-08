@@ -565,11 +565,18 @@ async function route(request: Request, env: Env, path: string, method: string): 
         payment_methods: paymentMethodsOf(plan, availableMethods),
       };
       const best = promos.get(plan.id);
+      const promoPrice = best?.promo_price_minor ?? null;
+      const listPrice = plan.price_minor;
       const promo = {
-        // 划线价：就是套餐标价
-        promo_price_minor: best?.promo_price_minor ?? null,
+        promo_price_minor: promoPrice,
         // null = 没有公开活动；文案由 CRM 给（含人群前缀），App 不拼
         promo_badge: best?.badge_label ?? null,
+        // ── 渲染字段（契约 A.1.1）：**前端不需要再做任何价格判断** ──
+        // 直接渲染这个价；`display_price_minor ?? price_minor` 是给老 CRM 的兜底。
+        display_price_minor: promoPrice ?? listPrice,
+        // 只有活动价**真的更低**才给划线价，否则 100→100 会变成假折扣。
+        compare_at_price_minor:
+          promoPrice !== null && promoPrice < listPrice ? listPrice : null,
       };
       if (!viewer) {
         return {
@@ -577,6 +584,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
           ...promo,
           action: "login_required" as const,
           reason: "登录后购买",
+          // 商品本身可下单 —— 只差登录这一步，不能因此把按钮置灰
+          buyable: true,
           next_expires_at: null,
         };
       }
@@ -586,6 +595,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
         ...promo,
         // App 不做任何判断：按 action 渲染 购买 / 续订 / 升级 按钮
         action: quote.action,
+        // 只有 `blocked` 才是真的不能下单
+        buyable: quote.action !== "blocked",
         reason: quote.reason,
         // 只有续订给“续订后有效期至…”，升级的到期日与应付由 /quote 给
         next_expires_at: quote.action === "renewal" ? quote.expires_at : null,
