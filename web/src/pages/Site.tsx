@@ -6,6 +6,7 @@ import {
   Col,
   ColorPicker,
   Descriptions,
+  Divider,
   Form,
   Input,
   Popconfirm,
@@ -333,6 +334,13 @@ export default function Site() {
               mark: settings?.values?.site?.icon?.mark ?? "",
               image: settings?.values?.site?.icon?.image ?? null,
             },
+            download: {
+              ios: settings?.values?.site?.download?.ios ?? "",
+              android: settings?.values?.site?.download?.android ?? "",
+              windows: settings?.values?.site?.download?.windows ?? "",
+              macos: settings?.values?.site?.download?.macos ?? "",
+              note: settings?.values?.site?.download?.note ?? "",
+            },
           },
         }}
         onFinish={saveSettings}
@@ -389,6 +397,46 @@ export default function Site() {
         >
           <Input placeholder="© 2026 Acme Inc." />
         </Form.Item>
+
+        <Divider orientation="left" plain>
+          下载入口
+        </Divider>
+        <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+          填了哪个就显示哪个；空着的平台在下载页上整块不出现。
+        </Typography.Paragraph>
+        {(
+          [
+            ["ios", "iPhone / iPad（App Store）", "https://apps.apple.com/app/id000000000"],
+            ["android", "Android（Google Play）", "https://play.google.com/store/apps/details?id=..."],
+            ["windows", "Windows 安装包", "https://dl.example.com/AcmeVPN-Setup.exe"],
+            ["macos", "Mac 安装包", "https://dl.example.com/AcmeVPN.dmg"],
+          ] as const
+        ).map(([key, label, placeholder]) => (
+          <Form.Item
+            key={key}
+            label={label}
+            name={["site", "download", key]}
+            rules={[
+              {
+                pattern: /^https?:\/\/\S+$/i,
+                message: "必须是 http:// 或 https:// 开头的完整地址",
+              },
+              { max: 300, message: "最多 300 个字符" },
+            ]}
+            extra="留空 = 不上架这个平台"
+          >
+            <Input placeholder={placeholder} />
+          </Form.Item>
+        ))}
+        <Form.Item
+          label="下载页补充说明"
+          name={["site", "download", "note"]}
+          rules={[{ max: 120, message: "最多 120 个字符" }]}
+          extra="例如「iOS 版正在 TestFlight 内测」。留空则不显示"
+        >
+          <Input placeholder="例如：Windows 版暂时只有 64 位" />
+        </Form.Item>
+
         <Space>
           <Button type="primary" htmlType="submit" loading={busy}>
             保存
