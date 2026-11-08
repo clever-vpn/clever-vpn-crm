@@ -15,7 +15,8 @@
  * 与 cf-api 的分工：域名/证书/KV 写穿归 cf-api；**站点产物与 active 指针归这里**
  * （指针是 CRM 自己的东西，site-serve 只读它）。
  */
-import { leftoverTokens, readSiteSettings, tokensOf } from "./settings";
+import { renderTemplate } from "./render";
+import { buildScope, readSiteSettings } from "./settings";
 
 import type { Env } from "../env";
 
@@ -216,7 +217,7 @@ export async function publishSite(
   // 品牌设置：**发布时烘焙**（site-crm.md §0.1）。读不到就用空值，绝不因此失败 ——
   // 站点名留空时回落到模板里写死的名字（替换表里给空串，占位符会被清掉）。
   const settings = await readSiteSettings(env);
-  const tokens = tokensOf(settings, input.brandFallback ?? "我的站点");
+  const scope = buildScope(settings.values, input.brandFallback ?? "我的站点");
 
   // 版本号：以 D1 为准（KV 只是指针，不能当计数器用）
   const maxRow = await env.DB.prepare(
@@ -244,21 +245,18 @@ export async function publishSite(
     if (isText(rel)) {
       const text =
         typeof body === "string" ? body : await new Response(body).text();
-      let out = text;
-      for (const [k, v] of Object.entries(tokens)) out = out.split(k).join(v);
-
-      // 模板用了没定义的槽 ⇒ 发布前就拦（否则线上会露出 `{{site.xxx}}`）
-      const left = leftoverTokens(out);
-      if (left.length > 0) {
+      // 三个指令 + 取值（standards/site-template.md §1）：
+      // 先 data-if 后 data-repeat，开标签在条目作用域里重算，只删引擎自己的属性。
+      const r = renderTemplate(text, scope);
+      // 模板用了没有数据的路径 ⇒ 发布前就拦（否则线上会露出 `{{site.xxx}}`）
+      if (r.missing.length > 0) {
         return err(
           "template_token_unknown",
-          `模板里有未定义的占位符：${left.join("、")}`,
-          [
-            `可用：{{site.name}} / {{site.tagline}} / {{site.color}} / {{site.contact}} / {{site.footer}}`,
-          ],
+          `模板里有未定义的占位符：${r.missing.join("、")}`,
+          ["对照模板包的 data.schema.json 补齐字段，或从模板里删掉这段"],
         );
       }
-      body = out;
+      body = r.html;
     }
 
     await sites.put(`${target}${rel}`, body, {

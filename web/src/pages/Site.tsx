@@ -25,6 +25,7 @@ import {
   type SiteDomainView,
   type SiteStateView,
   type SiteSettingsView,
+  type SiteValues,
   type SiteVersion,
 } from "../api";
 
@@ -121,25 +122,27 @@ export default function Site() {
     }
   }
 
-  async function saveSettings(values: Record<string, unknown>) {
+  async function saveSettings(raw: unknown) {
     setBusy(true);
+    const values = raw as SiteValues;
     try {
-      const picked = values.color as
+      const picked = values.site?.theme?.brand as
         | string
         | { toHexString?: () => string }
         | undefined;
-      const color =
-        typeof picked === "string" ? picked : picked?.toHexString?.() ?? "";
+      const brand =
+        typeof picked === "string" ? picked : (picked?.toHexString?.() ?? "");
       const res = await api.saveSiteSettings({
-        site_name: String(values.site_name ?? ""),
-        tagline: String(values.tagline ?? ""),
-        hero_title: String(values.hero_title ?? ""),
-        hero_sub: String(values.hero_sub ?? ""),
-        color,
-        contact_email: String(values.contact_email ?? ""),
-        footer_note: String(values.footer_note ?? ""),
+        if_rev: settings?.rev ?? 0,
+        values: {
+          ...values,
+          site: {
+            ...(values.site ?? {}),
+            theme: { ...(values.site?.theme ?? {}), brand },
+          },
+        },
       });
-      setSettings(res.settings);
+      setSettings({ ...res, updatedAt: null });
       message.success("已保存。要让线上生效，还需要点「发布」重新发布一次");
       setTab("publish");
     } catch (e) {
@@ -310,20 +313,34 @@ export default function Site() {
       <Form
         layout="vertical"
         initialValues={{
-          site_name: settings?.siteName ?? "",
-          tagline: settings?.tagline ?? "",
-          hero_title: settings?.heroTitle ?? "",
-          hero_sub: settings?.heroSub ?? "",
-          color: settings?.color ?? "#3b82f6",
-          contact_email: settings?.contactEmail ?? "",
-          footer_note: settings?.footerNote ?? "",
+          site: {
+            name: settings?.values?.site?.name ?? "",
+            tagline: settings?.values?.site?.tagline ?? "",
+            contact_email: settings?.values?.site?.contact_email ?? "",
+            footer_note: settings?.values?.site?.footer_note ?? "",
+            hero: {
+              title: settings?.values?.site?.hero?.title ?? "",
+              sub: settings?.values?.site?.hero?.sub ?? "",
+              layout: settings?.values?.site?.hero?.layout ?? "split",
+            },
+            layout: { shell: settings?.values?.site?.layout?.shell ?? "top" },
+            theme: {
+              brand: settings?.values?.site?.theme?.brand ?? "#4f46e5",
+              bg: settings?.values?.site?.theme?.bg ?? "#ffffff",
+              text: settings?.values?.site?.theme?.text ?? "#0d1626",
+            },
+            icon: {
+              mark: settings?.values?.site?.icon?.mark ?? "",
+              image: settings?.values?.site?.icon?.image ?? null,
+            },
+          },
         }}
         onFinish={saveSettings}
         style={{ maxWidth: 560 }}
       >
         <Form.Item
           label="站点名称"
-          name="site_name"
+          name={["site", "name"]}
           rules={[{ max: 40, message: "最多 40 个字符" }]}
           extra="用在浏览器标签页标题和页脚版权行"
         >
@@ -331,7 +348,7 @@ export default function Site() {
         </Form.Item>
         <Form.Item
           label="一句话介绍"
-          name="tagline"
+          name={["site", "tagline"]}
           rules={[{ max: 120, message: "最多 120 个字符" }]}
           extra="用在搜索引擎摘要里（meta description）"
         >
@@ -339,7 +356,7 @@ export default function Site() {
         </Form.Item>
         <Form.Item
           label="首页大标题"
-          name="hero_title"
+          name={["site", "hero", "title"]}
           rules={[{ max: 40, message: "最多 40 个字符" }]}
           extra="首页最大那行字。留空用默认文案"
         >
@@ -347,18 +364,18 @@ export default function Site() {
         </Form.Item>
         <Form.Item
           label="首页副标题"
-          name="hero_sub"
+          name={["site", "hero", "sub"]}
           rules={[{ max: 120, message: "最多 120 个字符" }]}
           extra="标题下面那行解释。留空则不显示"
         >
           <Input placeholder="例如：一个账号，三端通用，不限速不计日志" />
         </Form.Item>
-        <Form.Item label="主色" name="color" extra="按钮与强调色">
+        <Form.Item label="主色" name={["site", "theme", "brand"]} extra="按钮与强调色（主题里还有背景色与正文色，可后续扩展）">
           <ColorPicker format="hex" disabledAlpha />
         </Form.Item>
         <Form.Item
           label="客服邮箱"
-          name="contact_email"
+          name={["site", "contact_email"]}
           rules={[{ type: "email", message: "邮箱格式不对" }]}
           extra="留空则不显示"
         >
@@ -366,7 +383,7 @@ export default function Site() {
         </Form.Item>
         <Form.Item
           label="页脚版权行"
-          name="footer_note"
+          name={["site", "footer_note"]}
           rules={[{ max: 80, message: "最多 80 个字符" }]}
           extra="留空则自动生成「© 年份 站点名称」"
         >

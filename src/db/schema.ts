@@ -1029,7 +1029,18 @@ export const siteVersions = sqliteTable(
 export const siteSettings = sqliteTable("site_settings", {
   /** 只有一个租户，用固定主键 1 */
   id: integer("id").primaryKey(),
-  /** 站点名（`<title>` 与页脚都用它） */
+  /**
+   * **全部设置：单行 JSON**。键 = 模板里写的路径（`site.hero.title` …），
+   * 与模板包的 `data.schema.json` 同构（standards/site-template.md §3）。
+   *
+   * 为什么不是一个字段一列：字段集合由模板声明，列式会一直加列。
+   */
+  values: text("values").notNull().default("{}"),
+  /** 乐观锁：每次写 +1。CRM 后台与 studio 都能改，`PUT` 带 `if_rev`，不匹配返 409 */
+  rev: integer("rev").notNull().default(0),
+  // ── 以下 7 列是 v1 的列式字段，**已废弃**：数据搬进 `values` 后只读不再写。
+  // 删列要重建表，留到下一版（standards/site-template.md §11.3）。
+  /** @deprecated 用 `values.site.name` */
   site_name: text("site_name").notNull().default(""),
   /** 一句话介绍（meta description） */
   tagline: text("tagline").notNull().default(""),

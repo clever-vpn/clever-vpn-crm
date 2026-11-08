@@ -71,6 +71,13 @@
       "when": 1794119036645,
       "tag": "0009_slim_mandarin",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794143128216,
+      "tag": "0010_perfect_meltdown",
+      "breakpoints": true
     }
   ]
 }

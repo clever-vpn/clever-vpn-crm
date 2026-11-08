@@ -8,7 +8,7 @@
  * 只有 `--brand` 是租户可配的，其余颜色都从它派生 —— 换一个主色，整站协调。
  */
 :root {
-  --brand: {{site.color}};
+  --brand: {{site.theme.brand}};
   --brand-ink: color-mix(in srgb, var(--brand) 78%, #0b1020);
   --brand-soft: color-mix(in srgb, var(--brand) 9%, #ffffff);
   --brand-line: color-mix(in srgb, var(--brand) 26%, #ffffff);
