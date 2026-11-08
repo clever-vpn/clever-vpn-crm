@@ -172,6 +172,20 @@ jobs:
       - name: Render wrangler.shard.jsonc + settings.json
         run: node scripts/render-shard-config.mjs --manifest manifest.json
 
+      # ---- 2.2.1 迁移扇出：**先迁移、再部署** ----
+      # 分片里所有租户共用一份代码，但每个租户一个 D1；漏迁移的表现是
+      # "新功能一上线就 500（no such table）"，而不是部署失败。
+      # `d1_migrations` 表记录已应用项，重复执行安全；迁移只允许向后兼容的追加。
+      - name: Apply tenant migrations（逐库）
+        run: |
+          set -euo pipefail
+          mapfile -t DBS < <(jq -r '.bindings[].database_name' manifest.json)
+          echo "将在 ${#DBS[@]} 个库上应用迁移：${DBS[*]}"
+          for db in "${DBS[@]}"; do
+            echo "── $db"
+            npx wrangler d1 migrations apply "$db" --remote --config wrangler.shard.jsonc
+          done
+
       # ---- 2.3 构建 + 部署 ----
       - run: npm ci
       - run: npm run build:web
