@@ -78,6 +78,13 @@
       "when": 1794143128216,
       "tag": "0010_perfect_meltdown",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794150824559,
+      "tag": "0011_swift_lady_vermin",
+      "breakpoints": true
     }
   ]
 }

@@ -218,7 +218,7 @@ export async function publishSite(
   // 品牌设置：**发布时烘焙**（site-crm.md §0.1）。读不到就用空值，绝不因此失败 ——
   // 站点名留空时回落到模板里写死的名字（替换表里给空串，占位符会被清掉）。
   const settings = await readSiteSettings(env);
-  const scope = buildScope(settings.values, input.brandFallback ?? "我的站点");
+  const scope = buildScope(settings, input.brandFallback ?? "我的站点");
 
   // 版本号：以 D1 为准（KV 只是指针，不能当计数器用）
   const maxRow = await env.DB.prepare(

@@ -1,0 +1,1 @@
+ALTER TABLE `site_settings` ADD `collections` text DEFAULT '{}' NOT NULL;

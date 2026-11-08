@@ -58,10 +58,13 @@ export async function handleAdminSite(
     const body = (await readBody(request)) as {
       if_rev?: unknown;
       values?: unknown;
+      /** `{ downloads: [...] }`；**不传就不动**（老客户端只改设置时别清空集合） */
+      collections?: unknown;
     };
     const result = await saveSiteSettings(env, {
       ifRev: typeof body.if_rev === "number" ? body.if_rev : undefined,
       values: body.values,
+      collections: body.collections,
     });
     if (result.ok) {
       return json({ ok: true, ...result.settings });

@@ -215,12 +215,6 @@ describe("站点设置：单行 JSON + rev 乐观锁", () => {
     expect(
       await saveSiteSettings(env, { values: { site: { nickname: "x" } } }),
     ).toMatchObject({ ok: false, code: "unknown_field" });
-    // 下载链接只收 http(s)：`javascript:` 会被直接写进 `href`
-    for (const bad of ["javascript:alert(1)", "//cdn.example.com/a.dmg", "ftp://x/y"]) {
-      expect(
-        await saveSiteSettings(env, { values: { site: { download: { ios: bad } } } }),
-      ).toMatchObject({ ok: false, code: "bad_url" });
-    }
   });
 
   it("整份替换、rev 递增、永远只有一行", async () => {
@@ -249,31 +243,78 @@ describe("站点设置：单行 JSON + rev 乐观锁", () => {
     ).toMatchObject({ ok: true });
   });
 
-  it("下载入口：逐平台保存，空串等于没上架", async () => {
+  it("下载入口是集合：同平台可以挂多个渠道", async () => {
     const r = await saveSiteSettings(env, {
-      values: {
-        site: {
-          download: {
-            ios: "https://apps.apple.com/app/id1",
-            windows: "https://dl.example.com/Acme.exe",
-            android: "",
-            note: "Windows 版只有 64 位",
-          },
-        },
+      values: { site: { download: { note: "Windows 版只有 64 位" } } },
+      collections: {
+        downloads: [
+          { platform: "windows", kind: "file", label: "64 位安装包", url: "https://dl.test/win-x64.exe" },
+          { platform: "windows", kind: "file", label: "32 位安装包", url: "https://dl.test/win-x86.exe" },
+          { platform: "ios", kind: "store", label: "", url: "https://apps.apple.com/app/id1" },
+        ],
       },
     });
     expect(r).toMatchObject({ ok: true });
+
     const got = await readSiteSettings(env);
-    const scope = buildScope(got.values, "兜底") as {
-      site: { download: Record<string, string> };
-    };
-    expect(scope.site.download).toEqual({
-      ios: "https://apps.apple.com/app/id1",
-      android: "",
-      windows: "https://dl.example.com/Acme.exe",
-      macos: "",
-      note: "Windows 版只有 64 位",
+    // label 留空 ⇒ 按 kind 兜一个，别在页面上留个空按钮
+    expect(got.collections.downloads[2]).toMatchObject({
+      platform: "ios",
+      label: "应用商店",
     });
+
+    const scope = buildScope(got, "兜底") as unknown as {
+      site: { download: Record<string, Array<{ label: string; url: string }>> };
+    };
+    const windows: Array<{ label: string }> = scope.site.download.windows ?? [];
+    expect(windows).toHaveLength(2);
+    expect(windows[0]?.label).toBe("64 位安装包");
+    expect(scope.site.download.macos).toEqual([]);
+  });
+
+  it("下载入口的校验：平台/渠道是封闭集合，链接只收 http(s)", async () => {
+    const base = { values: {}, collections: { downloads: [] as unknown[] } };
+    const save = (item: Record<string, unknown>) =>
+      saveSiteSettings(env, {
+        ...base,
+        collections: { downloads: [item] },
+      });
+
+    expect(await save({ platform: "symbian", kind: "store", url: "https://a.b" }))
+      .toMatchObject({ ok: false, code: "bad_platform" });
+    expect(await save({ platform: "ios", kind: "torrent", url: "https://a.b" }))
+      .toMatchObject({ ok: false, code: "bad_kind" });
+    for (const bad of ["javascript:alert(1)", "//cdn.example.com/a.dmg", "ftp://x/y", ""]) {
+      expect(await save({ platform: "ios", kind: "file", url: bad })).toMatchObject({
+        ok: false,
+        code: "bad_url",
+      });
+    }
+    expect(
+      await saveSiteSettings(env, {
+        values: {},
+        collections: {
+          downloads: Array.from({ length: 21 }, () => ({
+            platform: "ios",
+            kind: "file",
+            url: "https://a.b/c",
+          })),
+        },
+      }),
+    ).toMatchObject({ ok: false, code: "too_many" });
+  });
+
+  it("只改设置、不传集合 ⇒ 下载入口原样保留", async () => {
+    await saveSiteSettings(env, {
+      values: { site: { name: "A" } },
+      collections: {
+        downloads: [{ platform: "macos", kind: "file", url: "https://dl.test/a.dmg" }],
+      },
+    });
+    const r = await saveSiteSettings(env, { values: { site: { name: "B" } } });
+    expect(r).toMatchObject({ ok: true });
+    const got = await readSiteSettings(env);
+    expect(got.collections.downloads).toHaveLength(1);
   });
 });
 
