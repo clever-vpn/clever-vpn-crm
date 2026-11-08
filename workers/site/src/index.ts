@@ -1,5 +1,5 @@
 /**
- * site-serve：客户站点的出口 Worker（契约 `contracts/site-hosting.md`）。
+ * site-serve：客户站点的出口 Worker（契约 `contracts/cf-api-hosting.md`）。
  *
  * 链路只有一条：
  *   Host → KV[host:{host}] → tenant → KV[site:{tenant}:active] → R2 取文件
@@ -123,7 +123,7 @@ function platformFile(path: string, map: HostMap, env: SiteEnv): Response | null
 
 /**
  * 平台脚本：只做两件事 —— 给打到 CRM 的请求补 Authorization、读写登录态。
- * 规格见 `contracts/site-runtime.md` §6（不许 console.error、不覆盖已有 header）。
+ * 规格见 `contracts/site-crm.md` §6（不许 console.error、不覆盖已有 header）。
  */
 const API_JS = `(function () {
   var BASE = window.CRM_API_BASE || "";
@@ -172,7 +172,7 @@ export default {
     }
 
     const map = await resolveHost(env, host);
-    // 未知 host 一律 404，**绝不回落默认租户**（contracts/site-hosting.md §8）
+    // 未知 host 一律 404，**绝不回落默认租户**（contracts/cf-api-hosting.md §8）
     if (!map) return notFound(`unknown host: ${host}`);
     if (map.status === "suspended") {
       return new Response("站点已暂停", {

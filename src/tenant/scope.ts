@@ -1,7 +1,7 @@
 /**
  * 多租户取库：**唯一**一条链路 —— `host → KV → slot → env['DB_' + slot]`。
  *
- * 两个模式共用同一份实现（ADR 0004、contracts/site-hosting.md §2.2）：
+ * 两个模式共用同一份实现（ADR 0004、contracts/cf-api-hosting.md §2.2）：
  *   single（默认，自部署）：直接用 `env.DB`，行为与之前完全一致；
  *   multi（SaaS 分片）    ：KV 里查 host 对应的 slot，再从绑定里取库。
  *
@@ -66,7 +66,7 @@ export class TenantResolveError extends Error {
  * single：`env.DB` 原样传出（**零行为变化**）。
  * multi ：`host → KV[host:*] → slot → env['DB_'+slot]`；任何一步缺失都抛
  * `TenantResolveError`，由入口翻译成明确的 5xx/4xx —— **绝不回落到默认租户**
- * （contracts/site-hosting.md §8）。
+ * （contracts/cf-api-hosting.md §8）。
  */
 export async function scopeToTenant(
   request: Request,

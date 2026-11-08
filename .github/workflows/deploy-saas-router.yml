@@ -3,7 +3,7 @@
 # 它只做 Host → KV → 转发到对应 shard 的 service binding。片数变化时必须重新跑本
 # workflow（service binding 是部署期静态的）。
 #
-# 契约：clever-vpn-docs/docs/contracts/site-hosting.md §1.1 / §2
+# 契约：clever-vpn-docs/docs/contracts/cf-api-hosting.md §1.1 / §2
 name: deploy-saas-router
 
 on:

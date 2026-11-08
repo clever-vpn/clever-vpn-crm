@@ -1,8 +1,8 @@
 /**
  * 站点发布：**模板实例化 → 写 R2 → 最后一步切 KV 指针**。
  *
- * 契约：`contracts/site-delivery.md` §6.1 / §6.3、`contracts/site-hosting.md` §3、
- * `contracts/site-runtime.md` §0.1。
+ * 契约：`contracts/site-studio-crm.md` §6.1 / §6.3、`contracts/cf-api-hosting.md` §3、
+ * `contracts/site-crm.md` §0.1。
  *
  * 三条纪律：
  *  1. **渲染发生在发布时，不在请求时**：`site-serve` 只做「读指针 → 取文件」，

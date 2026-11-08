@@ -26,7 +26,7 @@
  *   { tag, schema_version, generated_at,
  *     files: [{ name, sha256, sql, statement_count }], statement_count }
  *
- * 契约：`clever-vpn-docs/docs/contracts/site-hosting.md` §4.5.4
+ * 契约：`clever-vpn-docs/docs/contracts/cf-api-hosting.md` §4.5.4
  */
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
