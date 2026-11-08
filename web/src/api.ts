@@ -177,6 +177,24 @@ export interface SitePublishResult {
   templateVersion: string;
 }
 
+export interface SiteSettingsView {
+  siteName: string;
+  tagline: string;
+  color: string | null;
+  contactEmail: string | null;
+  footerNote: string | null;
+  updatedAt: string | null;
+}
+
+export interface SiteDomainView {
+  /** multi（SaaS）才有域名绑定；自部署为 false */
+  supported: boolean;
+  mode: string;
+  /** supported=true 但平台侧还没实现时为 false */
+  available?: boolean;
+  reason: string;
+}
+
 export const api = {
   bootstrap: () => call<Bootstrap>("GET", "/bootstrap"),
   setup: (token: string, email: string, password: string, turnstileToken?: string) =>
@@ -207,6 +225,15 @@ export const api = {
   /** 站点：状态 / 发布 / 回滚（产物在 R2，指针在 KV，见 contracts/site-studio-crm.md §6） */
   site: () => call<SiteStateView>("GET", "/site"),
   sitePublish: () => call<SitePublishResult>("POST", "/site/publish", {}),
+  siteSettings: () => call<{ settings: SiteSettingsView }>("GET", "/site/settings"),
+  saveSiteSettings: (input: Partial<{
+    site_name: string;
+    tagline: string;
+    color: string;
+    contact_email: string;
+    footer_note: string;
+  }>) => call<{ ok: true; settings: SiteSettingsView }>("PUT", "/site/settings", input),
+  siteDomain: () => call<SiteDomainView>("GET", "/site/domain"),
   siteRollback: (version: number) =>
     call<{ ok: true; active: number }>("POST", "/site/rollback", { version }),
   me: () => call<Me>("GET", "/me"),

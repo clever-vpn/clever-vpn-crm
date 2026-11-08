@@ -1017,3 +1017,27 @@ export const siteVersions = sqliteTable(
     uqSeq: uniqueIndex("uq_site_versions_seq").on(t.seq),
   }),
 );
+
+/**
+ * 站点品牌设置（一行一个租户）。**发布时**把这些值烘焙进产物，运行时不再回填
+ * （`clever-vpn-docs/docs/contracts/site-crm.md` §0.1）。
+ *
+ * 为什么单开一张表而不是塞进 settings 的 key-value：
+ * 这些字段有明确语义与校验（主色必须是 #rrggbb、名称有长度上限），混进通用 KV
+ * 就没人管边界了。
+ */
+export const siteSettings = sqliteTable("site_settings", {
+  /** 只有一个租户，用固定主键 1 */
+  id: integer("id").primaryKey(),
+  /** 站点名（`<title>` 与页脚都用它） */
+  site_name: text("site_name").notNull().default(""),
+  /** 一句话介绍（meta description） */
+  tagline: text("tagline").notNull().default(""),
+  /** 主色 `#rrggbb`；空 = 用模板默认 */
+  color: text("color"),
+  /** 客服邮箱（页脚展示，同时作为 mailto） */
+  contact_email: text("contact_email"),
+  /** 版权行；空 = 自动生成 `© <年> <站点名>` */
+  footer_note: text("footer_note"),
+  updated_at: text("updated_at").notNull().default(""),
+});

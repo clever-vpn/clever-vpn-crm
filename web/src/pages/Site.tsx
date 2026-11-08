@@ -4,13 +4,17 @@ import {
   Button,
   Card,
   Col,
+  ColorPicker,
   Descriptions,
+  Form,
+  Input,
   Popconfirm,
   Row,
   Space,
   Statistic,
   Table,
   Tag,
+  Tabs,
   Typography,
   message,
 } from "antd";
@@ -18,21 +22,26 @@ import {
 import {
   api,
   ApiError,
+  type SiteDomainView,
   type SiteStateView,
+  type SiteSettingsView,
   type SiteVersion,
 } from "../api";
 
 /**
- * 网站：**只做两件事**——看一眼现在线上是哪一版，点一下发布。
+ * 网站：三个页签，一屏一件事。
+ *
+ *   发布   → 看一眼线上是哪一版，点一下发布（唯一的 primary 按钮）
+ *   站点设置 → 名称 / 介绍 / 主色 / 客服邮箱 / 页脚，**发布后才生效**
+ *   域名   → **只有 SaaS（multi）模式才有**；自部署由租户自己在 Cloudflare 挂
  *
  * 三条刻意的取舍（评审时别改回去）：
  *
- *  1. **一个主按钮**。页面里只有「发布站点」是 primary，回滚是表格里的次要操作。
- *     零技术租户面对两个同权重按钮时不知道该点哪个。
- *  2. **失败要说人话**。L0 闸门返回的 `issues[]` 逐条列出来（"缺 index.html"
- *     比 "l0_failed" 有用一百倍）；不给用户看错误码。
- *  3. **发布不等于保存**。发布是把当前数据渲染成静态文件写进 R2 再切指针，
- *     所以这里显示的永远是"线上"，改数据后要再点一次发布。
+ *  1. **发布只有一个 primary 按钮**。回滚是版本表里的次要操作 —— 两个同权重按钮，
+ *     零技术租户不知道该点哪个。
+ *  2. **失败说人话**：闸门返回的 `issues[]` 逐条列出来，不把错误码丢给用户。
+ *  3. **"保存"不等于"发布"**：品牌值是**发布时烘焙**进静态文件的，页面上必须写明
+ *     "改完要重新发布"，否则租户会以为保存完就该变。
  */
 const fmtBytes = (n: number): string =>
   n < 1024
@@ -50,16 +59,25 @@ const fmtTime = (iso: string): string => {
 
 export default function Site() {
   const [state, setState] = useState<SiteStateView | null>(null);
+  const [settings, setSettings] = useState<SiteSettingsView | null>(null);
+  const [domain, setDomain] = useState<SiteDomainView | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [issues, setIssues] = useState<string[]>([]);
+  const [tab, setTab] = useState("publish");
 
   const load = useCallback(async () => {
     try {
-      setState(await api.site());
+      const [s, st, d] = await Promise.all([
+        api.site(),
+        api.siteSettings(),
+        api.siteDomain(),
+      ]);
+      setState(s);
+      setSettings(st.settings);
+      setDomain(d);
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "读不到站点状态";
-      message.error(msg);
+      message.error(e instanceof ApiError ? e.message : "读不到站点状态");
     } finally {
       setLoading(false);
     }
@@ -100,6 +118,32 @@ export default function Site() {
       await load();
     } catch (e) {
       message.error(e instanceof ApiError ? e.message : "回滚失败");
+    }
+  }
+
+  async function saveSettings(values: Record<string, unknown>) {
+    setBusy(true);
+    try {
+      const picked = values.color as
+        | string
+        | { toHexString?: () => string }
+        | undefined;
+      const color =
+        typeof picked === "string" ? picked : picked?.toHexString?.() ?? "";
+      const res = await api.saveSiteSettings({
+        site_name: String(values.site_name ?? ""),
+        tagline: String(values.tagline ?? ""),
+        color,
+        contact_email: String(values.contact_email ?? ""),
+        footer_note: String(values.footer_note ?? ""),
+      });
+      setSettings(res.settings);
+      message.success("已保存。要让线上生效，还需要点「发布」重新发布一次");
+      setTab("publish");
+    } catch (e) {
+      message.error(e instanceof ApiError ? e.message : "保存失败");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -153,7 +197,7 @@ export default function Site() {
     },
   ];
 
-  return (
+  const publishTab = (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
@@ -163,9 +207,12 @@ export default function Site() {
               value={active === null ? "尚未发布" : `第 ${active} 版`}
               loading={loading}
             />
-            <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+            <Typography.Paragraph
+              type="secondary"
+              style={{ marginTop: 12, marginBottom: 0 }}
+            >
               {published
-                ? `发布于 ${fmtTime(published.created_at)}。改完数据要再点一次「发布站点」才会生效。`
+                ? `发布于 ${fmtTime(published.created_at)}。改完设置要再点一次「发布站点」才会生效。`
                 : "点下面的「发布站点」，把当前内容生成静态文件并发到线上。"}
             </Typography.Paragraph>
           </Card>
@@ -178,7 +225,10 @@ export default function Site() {
               loading={loading}
               suffix="个"
             />
-            <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+            <Typography.Paragraph
+              type="secondary"
+              style={{ marginTop: 12, marginBottom: 0 }}
+            >
               回滚不需要重新渲染：把指针指回旧版本即可，秒级生效。
             </Typography.Paragraph>
           </Card>
@@ -220,11 +270,7 @@ export default function Site() {
             onConfirm={publish}
             disabled={busy || !templateReady}
           >
-            <Button
-              type="primary"
-              loading={busy}
-              disabled={!templateReady}
-            >
+            <Button type="primary" loading={busy} disabled={!templateReady}>
               发布站点
             </Button>
           </Popconfirm>
@@ -255,5 +301,113 @@ export default function Site() {
         />
       </Card>
     </Space>
+  );
+
+  const settingsTab = (
+    <Card>
+      <Form
+        layout="vertical"
+        initialValues={{
+          site_name: settings?.siteName ?? "",
+          tagline: settings?.tagline ?? "",
+          color: settings?.color ?? "#3b82f6",
+          contact_email: settings?.contactEmail ?? "",
+          footer_note: settings?.footerNote ?? "",
+        }}
+        onFinish={saveSettings}
+        style={{ maxWidth: 560 }}
+      >
+        <Form.Item
+          label="站点名称"
+          name="site_name"
+          rules={[{ max: 40, message: "最多 40 个字符" }]}
+          extra="用在浏览器标签页标题和页脚版权行"
+        >
+          <Input placeholder="例如：Acme VPN" />
+        </Form.Item>
+        <Form.Item
+          label="一句话介绍"
+          name="tagline"
+          rules={[{ max: 120, message: "最多 120 个字符" }]}
+          extra="用在搜索引擎摘要里（meta description）"
+        >
+          <Input placeholder="例如：快、稳、不记日志的 VPN" />
+        </Form.Item>
+        <Form.Item label="主色" name="color" extra="按钮与强调色">
+          <ColorPicker format="hex" disabledAlpha />
+        </Form.Item>
+        <Form.Item
+          label="客服邮箱"
+          name="contact_email"
+          rules={[{ type: "email", message: "邮箱格式不对" }]}
+          extra="留空则不显示"
+        >
+          <Input placeholder="help@example.com" />
+        </Form.Item>
+        <Form.Item
+          label="页脚版权行"
+          name="footer_note"
+          rules={[{ max: 80, message: "最多 80 个字符" }]}
+          extra="留空则自动生成「© 年份 站点名称」"
+        >
+          <Input placeholder="© 2026 Acme Inc." />
+        </Form.Item>
+        <Space>
+          <Button type="primary" htmlType="submit" loading={busy}>
+            保存
+          </Button>
+          <Typography.Text type="secondary">
+            保存后线上不会立刻变，需要重新发布
+          </Typography.Text>
+        </Space>
+      </Form>
+    </Card>
+  );
+
+  const domainTab = (
+    <Card title="站点域名">
+      {domain === null ? (
+        <Typography.Text type="secondary">加载中…</Typography.Text>
+      ) : domain.supported ? (
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Alert
+            type="info"
+            showIcon
+            message="托管模式：域名由平台代为绑定"
+            description={domain.reason}
+          />
+          <Typography.Text type="secondary">
+            绑定流程：填域名 → 按提示加一条解析记录 → 平台自动签发证书（通常 5 分钟，最多 24
+            小时）。
+          </Typography.Text>
+        </Space>
+      ) : (
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Alert
+            type="info"
+            showIcon
+            message="自部署模式：域名由你自己管理"
+            description={domain.reason}
+          />
+          <Typography.Text type="secondary">
+            具体做法：在 Cloudflare 里给 <code>site-serve</code> 这个 Worker 添加 Custom
+            Domain，并让 <code>KV[host:你的域名]</code> 指向
+            <code>{'{ tenant_id, slot, status }'}</code>。
+          </Typography.Text>
+        </Space>
+      )}
+    </Card>
+  );
+
+  return (
+    <Tabs
+      activeKey={tab}
+      onChange={setTab}
+      items={[
+        { key: "publish", label: "发布", children: publishTab },
+        { key: "settings", label: "站点设置", children: settingsTab },
+        { key: "domain", label: "域名", children: domainTab },
+      ]}
+    />
   );
 }
