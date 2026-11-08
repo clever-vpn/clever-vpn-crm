@@ -52,6 +52,13 @@ export interface PublishInput {
   templateVersion?: string;
   /** 触发者（写进 D1，便于"这版是谁发的"） */
   actor?: string;
+  /**
+   * 站点调 CRM 的基址（= CRM 自己的 origin，如 `https://acme.clever-panel.win`）。
+   *
+   * **必须由发布方给**：模板里的 `config.js` 只有占位值，站点与 CRM 不同域，
+   * 发上去之后没人能改它。渲染发生在发布时，就必须在这一步把它定死。
+   */
+  apiBase?: string;
 }
 
 export interface PublishOk {
@@ -165,6 +172,14 @@ export async function publishSite(
   }
   if (!tenantId) return err("no_tenant", "拿不到租户 ID，不知道往哪个前缀写");
 
+  const apiBase = (input.apiBase ?? "").trim().replace(/\/+$/, "");
+  if (!/^https?:\/\/[^/]+$/.test(apiBase)) {
+    return err(
+      "api_base_missing",
+      "不知道该告诉站点去哪个地址调 CRM（apiBase 缺失或格式不对）",
+    );
+  }
+
   const template = input.template ?? "basic";
   const templateVersion = input.templateVersion ?? "v1";
   const prefix = templatePrefix(template, templateVersion);
@@ -200,7 +215,15 @@ export async function publishSite(
     const rel = o.key.slice(prefix.length);
     const obj = await sites.get(o.key);
     if (!obj) return err("read_failed", `读不到模板对象：${o.key}`);
-    await sites.put(`${target}${rel}`, obj.body, {
+
+    // `config.js` 是模板里**唯一需要外部输入**的文件：发布时把 CRM 地址写死。
+    // 站点与 CRM 不同域，发上去了就没人能改，所以这步必须在发布时做。
+    const body =
+      rel === "config.js"
+        ? `// 由 CRM 在发布时写入（不要手改；改 CRM 地址请重新发布）\nwindow.CRM_API_BASE = ${JSON.stringify(apiBase)};\n`
+        : obj.body;
+
+    await sites.put(`${target}${rel}`, body, {
       httpMetadata: obj.httpMetadata,
       customMetadata: { template: `${template}@${templateVersion}` },
     });

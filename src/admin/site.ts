@@ -51,6 +51,9 @@ export async function handleAdminSite(
   if (method === "POST" && path === "/site/publish") {
     const body = await readBody(request);
     const result = await publishSite(env, tenantId, {
+      // 站点调 CRM 的地址：默认就是管理后台自己的 origin（租户看到哪个域就用哪个）；
+      // 需要固定成别的值（比如后台同时挂了多个域）时用 SITE_API_BASE 覆盖。
+      apiBase: (env.SITE_API_BASE ?? "").trim() || new URL(request.url).origin,
       template: typeof body.template === "string" ? body.template : undefined,
       templateVersion:
         typeof body.template_version === "string"

@@ -54,6 +54,11 @@ export interface Env {
   ENVIRONMENT?: string;
   /** 官网地址（独立静态站）。配了以后访问 CRM 根路径会 302 过去 */
   SITE_URL?: string;
+  /**
+   * 发布站点时写进产物 `config.js` 的 CRM 基址。留空 = 用发布者访问的那个 origin。
+   * 只有"后台同时挂多个域名、但站点必须固定打某一个"时才需要显式配。
+   */
+  SITE_API_BASE?: string;
   /** 可选：Cloudflare Email Service 绑定（未配置时用 RESEND_API_KEY） */
   EMAIL?: { send(options: Record<string, unknown>): Promise<unknown> };
   /** 可选：Resend API key（HTTP 发信，与 EMAIL 绑定二选一） */
