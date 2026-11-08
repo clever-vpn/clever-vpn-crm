@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
 import { activeKey, lintManifest, publishSite, siteState } from "../../src/site/publish";
+import { readSiteSettings, saveSiteSettings } from "../../src/site/settings";
 
 const TENANT = "42";
 const BASE = "https://acme.clever-panel.win";
@@ -180,6 +181,67 @@ describe("config.js：发布时注入 CRM 地址", () => {
     await seedTemplate();
     const result = await publishSite(env, TENANT, {});
     expect(result).toMatchObject({ ok: false, code: "api_base_missing" });
+    expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
+  });
+});
+
+describe("品牌设置：发布时烘焙进产物", () => {
+  it("校验：主色必须 #rrggbb、邮箱要像邮箱、长度有上限", async () => {
+    expect(await saveSiteSettings(env, { color: "red" })).toMatchObject({
+      ok: false,
+      code: "bad_color",
+    });
+    expect(await saveSiteSettings(env, { contact_email: "nope" })).toMatchObject({
+      ok: false,
+      code: "bad_email",
+    });
+    expect(
+      await saveSiteSettings(env, { site_name: "x".repeat(41) }),
+    ).toMatchObject({ ok: false, code: "bad_site_name" });
+  });
+
+  it("保存后读回一致（幂等：重复写只有一个租户行）", async () => {
+    await saveSiteSettings(env, {
+      site_name: "Acme VPN",
+      tagline: "快、稳、不记日志",
+      color: "#123456",
+      contact_email: "help@acme.test",
+    });
+    await saveSiteSettings(env, {
+      site_name: "Acme VPN 2",
+      tagline: "快、稳、不记日志",
+      color: "#123456",
+      contact_email: "help@acme.test",
+    });
+    const s = await readSiteSettings(env);
+    expect(s.siteName).toBe("Acme VPN 2");
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS c FROM site_settings").first<{ c: number }>();
+    expect(rows?.c).toBe(1);
+  });
+
+  it("发布把占位符换成设置值；没设的用兜底名", async () => {
+    await seedTemplate({
+      "index.html":
+        "<title>{{site.name}}</title><p>{{site.tagline}}</p><footer>{{site.footer}}</footer>",
+    });
+    await saveSiteSettings(env, { site_name: "Acme VPN", tagline: "快、稳" });
+
+    const r = await publishSite(env, TENANT, { apiBase: BASE });
+    expect(r.ok).toBe(true);
+
+    const html = await (
+      await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
+    )?.text();
+    expect(html).toContain("<title>Acme VPN</title>");
+    expect(html).toContain("<p>快、稳</p>");
+    // 版权行没设 ⇒ 自动生成，且带当前年份
+    expect(html).toMatch(/© \d{4} Acme VPN/);
+  });
+
+  it("模板用了没定义的槽 ⇒ 发布被拦，线上不变", async () => {
+    await seedTemplate({ "index.html": "<h1>{{site.nickname}}</h1>" });
+    const r = await publishSite(env, TENANT, { apiBase: BASE });
+    expect(r).toMatchObject({ ok: false, code: "template_token_unknown" });
     expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
   });
 });

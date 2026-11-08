@@ -15,6 +15,8 @@
  * 与 cf-api 的分工：域名/证书/KV 写穿归 cf-api；**站点产物与 active 指针归这里**
  * （指针是 CRM 自己的东西，site-serve 只读它）。
  */
+import { leftoverTokens, readSiteSettings, tokensOf } from "./settings";
+
 import type { Env } from "../env";
 
 /** 与 `clever-vpn-app/scripts/check-web.mjs` 的 `LIMITS` 同源；改这里就是改契约 */
@@ -52,6 +54,11 @@ export interface PublishInput {
   templateVersion?: string;
   /** 触发者（写进 D1，便于"这版是谁发的"） */
   actor?: string;
+  /**
+   * 站点名为空时的兜底名（一般是 CRM 自己的品牌名）。
+   * 只在模板里写了 `{{site.name}}` 而租户还没设名字时用得上。
+   */
+  brandFallback?: string;
   /**
    * 站点调 CRM 的基址（= CRM 自己的 origin，如 `https://acme.clever-panel.win`）。
    *
@@ -96,6 +103,10 @@ const templatePrefix = (template: string, version: string): string =>
 
 /** 指针 key：`site-serve` 读的就是它，读的是 `{ n }` */
 export const activeKey = (tenantId: string): string => `site:${tenantId}:active`;
+
+/** 需要做占位符替换的类型；其余（png/woff2/ico…）原样透传 */
+const isText = (key: string): boolean =>
+  /[.](html|css|js|json|txt|xml|svg)$/i.test(key);
 
 const extOf = (key: string): string => {
   const base = key.slice(key.lastIndexOf("/") + 1);
@@ -202,6 +213,11 @@ export async function publishSite(
     return err("l0_failed", "产物没有通过发布前检查", issues);
   }
 
+  // 品牌设置：**发布时烘焙**（site-crm.md §0.1）。读不到就用空值，绝不因此失败 ——
+  // 站点名留空时回落到模板里写死的名字（替换表里给空串，占位符会被清掉）。
+  const settings = await readSiteSettings(env);
+  const tokens = tokensOf(settings, input.brandFallback ?? "我的站点");
+
   // 版本号：以 D1 为准（KV 只是指针，不能当计数器用）
   const maxRow = await env.DB.prepare(
     `SELECT COALESCE(MAX(seq), 0) AS n FROM site_versions`,
@@ -218,10 +234,32 @@ export async function publishSite(
 
     // `config.js` 是模板里**唯一需要外部输入**的文件：发布时把 CRM 地址写死。
     // 站点与 CRM 不同域，发上去了就没人能改，所以这步必须在发布时做。
-    const body =
+    let body: ReadableStream | string =
       rel === "config.js"
         ? `// 由 CRM 在发布时写入（不要手改；改 CRM 地址请重新发布）\nwindow.CRM_API_BASE = ${JSON.stringify(apiBase)};\n`
         : obj.body;
+
+    // 文本类产物做 `{{site.*}}` 替换（**发布时烘焙**，见 site-crm.md §0.1）。
+    // 二进制（png / woff2）原样透传，不做解码。
+    if (isText(rel)) {
+      const text =
+        typeof body === "string" ? body : await new Response(body).text();
+      let out = text;
+      for (const [k, v] of Object.entries(tokens)) out = out.split(k).join(v);
+
+      // 模板用了没定义的槽 ⇒ 发布前就拦（否则线上会露出 `{{site.xxx}}`）
+      const left = leftoverTokens(out);
+      if (left.length > 0) {
+        return err(
+          "template_token_unknown",
+          `模板里有未定义的占位符：${left.join("、")}`,
+          [
+            `可用：{{site.name}} / {{site.tagline}} / {{site.color}} / {{site.contact}} / {{site.footer}}`,
+          ],
+        );
+      }
+      body = out;
+    }
 
     await sites.put(`${target}${rel}`, body, {
       httpMetadata: obj.httpMetadata,

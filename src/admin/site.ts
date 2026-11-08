@@ -10,6 +10,7 @@
  * 模板上传（构建期由 `npm run site:template:upload` 做）。
  */
 import { publishSite, siteState, activeKey } from "../site/publish";
+import { readSiteSettings, saveSiteSettings } from "../site/settings";
 
 import type { Env } from "../env";
 
@@ -46,6 +47,42 @@ export async function handleAdminSite(
 
   if (method === "GET" && path === "/site") {
     return json(await siteState(env, tenantId));
+  }
+
+  // ── 品牌设置：发布时烘焙进产物，改完要重新发布才生效 ──
+  if (method === "GET" && path === "/site/settings") {
+    return json({ settings: await readSiteSettings(env) });
+  }
+
+  if (method === "PUT" && path === "/site/settings") {
+    const result = await saveSiteSettings(env, await readBody(request));
+    return result.ok
+      ? json({ ok: true, settings: result.settings })
+      : json({ error: result.code, message: result.message }, 400);
+  }
+
+  // ── 域名绑定：**只有 multi（SaaS）才有这一步** ──
+  //
+  // 自部署时，站点域名是租户在自己的 Cloudflare 里给 site-serve 加 Custom Domain，
+  // CRM 根本插不上手；SaaS 下域名动作一律走 cf-api（它才持有云凭据，
+  // cf-api-hosting.md §1）。所以这里**按模式分流**，并且如实报告"平台侧还没做"。
+  if (method === "GET" && path === "/site/domain") {
+    const mode = (env.MODE ?? "single").toLowerCase();
+    if (mode !== "multi") {
+      return json({
+        supported: false,
+        mode,
+        reason:
+          "自部署模式下域名由你自己管理：在 Cloudflare 里给 site-serve 加 Custom Domain 即可，CRM 不参与。",
+      });
+    }
+    return json({
+      supported: true,
+      mode,
+      available: false,
+      reason:
+        "托管模式下域名由平台代为绑定，但 cf-api 的三个端点（申请 / 查询状态 / 解绑）尚未实现。",
+    });
   }
 
   if (method === "POST" && path === "/site/publish") {
