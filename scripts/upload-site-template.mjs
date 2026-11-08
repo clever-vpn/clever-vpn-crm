@@ -16,6 +16,7 @@
  * 因为**版本不可变**是发布回滚的前提。
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import vm from "node:vm";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -70,6 +71,38 @@ function walk(dir, out = []) {
 const files = walk(SRC);
 if (files.length === 0) {
   console.error(`✘ ${SRC} 里没有文件`);
+  process.exit(1);
+}
+
+// ── 上传前语法检查：**模板是脸面，一个 JS 语法错整页就白屏** ──
+//
+// 真实踩过：`fetch(`${API_BASE}/...plans`})` 多了一个 `}`，整段 `<script>` 不执行，
+// 表现是"套餐列表不显示"，而页面本身 200、控制台才有错。这类错必须在**上传时**拦，
+// 不能等租户点发布后在线上发现。
+const syntaxErrors = [];
+for (const abs of files) {
+  const rel = relative(SRC, abs).split("\\").join("/");
+  const text = readFileSync(abs, "utf8");
+  const scripts = [];
+  if (rel.endsWith(".js")) scripts.push([rel, text]);
+  if (rel.endsWith(".html")) {
+    // 只检查内联脚本（`src=` 的另算）
+    const re = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+    let m;
+    let i = 0;
+    while ((m = re.exec(text))) scripts.push([`${rel}#inline${++i}`, m[1]]);
+  }
+  for (const [label, code] of scripts) {
+    try {
+      new vm.Script(code, { filename: label });
+    } catch (e) {
+      syntaxErrors.push(`${label}: ${e.message}`);
+    }
+  }
+}
+if (syntaxErrors.length > 0) {
+  console.error("✘ 模板里有 JS 语法错误，拒绝上传：");
+  for (const e of syntaxErrors) console.error("  - " + e);
   process.exit(1);
 }
 
