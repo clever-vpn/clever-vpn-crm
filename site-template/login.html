@@ -4,45 +4,99 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>登录 · {{site.name}}</title>
-    <meta name="robots" content="noindex" />
+    <meta name="description" content="{{site.tagline}}" />
     <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
-      <div class="wrap">
-        <a class="brand" href="index.html">{{site.name}}</a>
+      <div class="wrap bar">
+        <a class="brand" href="index.html" data-eid="global.header.brand">
+          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
+                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
+            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
+          </svg>
+          <span data-eid="global.header.name">{{site.name}}</span>
+        </a>
         <nav>
+          <a href="index.html#features">特性</a>
           <a href="pricing.html">套餐</a>
+          <a href="download.html">下载</a>
           <a href="account.html">我的</a>
         </nav>
+        <a class="btn sm" href="pricing.html" data-eid="global.header.cta">查看套餐</a>
       </div>
     </header>
 
-    <main class="wrap" style="max-width: 420px">
-      <h1>登录 / 注册</h1>
-      <p class="lead">只需邮箱，无需密码。同一个账号在 App 里也能用。</p>
+    <main class="wrap">
+      <div class="narrow" style="margin:0 auto">
+        <h1 data-eid="login.title">登录 / 注册</h1>
+        <p class="lead" data-eid="login.lead">
+          只需邮箱，无需密码。同一个账号在 App 里也能用。
+        </p>
 
-      <div class="card grid">
-        <div class="row">
-          <input id="email" class="grow" type="email" placeholder="you@example.com" autocomplete="email" />
-          <button id="send">发送验证码</button>
+        <div class="card stack">
+          <div>
+            <label class="inline" style="display:block;margin-bottom:7px">邮箱</label>
+            <div class="row">
+              <input id="email" class="grow" type="email" placeholder="you@example.com" autocomplete="email" />
+              <button id="send" type="button" class="ghost">发送验证码</button>
+            </div>
+          </div>
+          <div id="devcode" class="hint" hidden></div>
+          <div>
+            <label class="inline" style="display:block;margin-bottom:7px">验证码</label>
+            <div class="row">
+              <input id="code" class="grow" type="text" placeholder="6 位验证码" inputmode="numeric" maxlength="6" />
+              <button id="verify" type="button">登录</button>
+            </div>
+          </div>
+          <div>
+            <label class="inline" style="display:block;margin-bottom:7px">邀请码（选填）</label>
+            <input id="ref" class="grow" style="width:100%" type="text" placeholder="朋友给你的码" />
+            <p class="hint" style="margin:8px 0 0">
+              填了才有归因与首单奖励，不填照样注册。
+            </p>
+          </div>
+          <div id="flash"></div>
         </div>
-        <div id="devcode" class="hint" hidden></div>
-        <div class="row">
-          <input id="code" class="grow" type="text" placeholder="6 位验证码" inputmode="numeric" maxlength="6" />
-          <button id="verify">登录</button>
-        </div>
-        <div class="row">
-          <input id="ref" class="grow" type="text" placeholder="邀请码（选填）" />
-        </div>
-        <div class="hint">邀请码不是必填：填了才有归因与首单奖励，不填照样注册。</div>
-        <div id="flash"></div>
+
+        <p class="hint" style="margin-top:16px">
+          继续即表示你同意 <a href="legal/terms.html">服务条款</a> 与
+          <a href="legal/privacy.html">隐私政策</a>。
+        </p>
       </div>
     </main>
 
     <footer class="site">
       <div class="wrap">
-        <a href="legal/terms.html">服务条款</a> · <a href="legal/privacy.html">隐私政策</a>
+        <div class="cols">
+          <div>
+            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
+            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
+            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+          </div>
+          <div>
+            <h4>产品</h4>
+            <ul>
+              <li><a href="pricing.html">套餐与价格</a></li>
+              <li><a href="download.html">下载客户端</a></li>
+              <li><a href="account.html">我的账号</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>条款</h4>
+            <ul>
+              <li><a href="legal/terms.html">服务条款</a></li>
+              <li><a href="legal/privacy.html">隐私政策</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>支付与订阅服务由本网站提供</span>
+        </div>
       </div>
     </footer>
 
@@ -118,5 +172,6 @@
         }
       });
     </script>
+
   </body>
 </html>

@@ -4,43 +4,111 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>下载 · {{site.name}}</title>
+    <meta name="description" content="{{site.tagline}}" />
     <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
-      <div class="wrap">
-        <a class="brand" href="index.html">{{site.name}}</a>
+      <div class="wrap bar">
+        <a class="brand" href="index.html" data-eid="global.header.brand">
+          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
+                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
+            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
+          </svg>
+          <span data-eid="global.header.name">{{site.name}}</span>
+        </a>
         <nav>
+          <a href="index.html#features">特性</a>
           <a href="pricing.html">套餐</a>
+          <a href="download.html" class="active">下载</a>
           <a href="account.html">我的</a>
         </nav>
+        <a class="btn sm" href="pricing.html" data-eid="global.header.cta">查看套餐</a>
       </div>
     </header>
 
     <main class="wrap">
-      <h1>下载客户端</h1>
-      <p class="lead">登录后即可连接。购买与续费在网页上也能完成。</p>
+      <h1 data-eid="download.title">下载客户端</h1>
+      <p class="lead" data-eid="download.lead">
+        用同一个账号登录即可连接。购买与续费在网页上也能完成。
+      </p>
+
       <div class="grid cols-2">
         <div class="card">
-          <h3 style="margin-top:0">iOS / macOS</h3>
-          <p class="hint">在 App Store 搜索应用，或使用下面的链接。</p>
-          <a class="btn" id="apple" href="#" rel="noopener">App Store</a>
+          <h2 data-eid="download.apple.title">iPhone / iPad / Mac</h2>
+          <p class="hint" data-eid="download.apple.desc">从 App Store 安装，装好后用邮箱登录。</p>
+          <a class="btn" id="apple" href="#" rel="noopener">前往 App Store</a>
         </div>
         <div class="card">
-          <h3 style="margin-top:0">Android</h3>
-          <p class="hint">在 Google Play 安装，或下载 APK。</p>
-          <a class="btn" id="google" href="#" rel="noopener">Google Play</a>
+          <h2 data-eid="download.android.title">Android</h2>
+          <p class="hint" data-eid="download.android.desc">从 Google Play 安装，或用下方安装包。</p>
+          <a class="btn" id="google" href="#" rel="noopener">前往 Google Play</a>
         </div>
       </div>
+
+      <div class="card soft" style="margin-top:18px">
+        <h2 data-eid="download.help.title">装好之后</h2>
+        <ol class="steps" style="padding:0;margin:0">
+          <li>
+            <b>用购买时的邮箱登录</b>
+            <span>不需要密码，收一次验证码即可。</span>
+          </li>
+          <li>
+            <b>点「连接」</b>
+            <span>线路会自动选最优的一条，不用自己挑节点。</span>
+          </li>
+          <li>
+            <b>连不上时</b>
+            <span>先换一条线路；还不行就把错误提示发给客服。</span>
+          </li>
+        </ol>
+      </div>
+
       <p class="hint" style="margin-top:16px">
-        当前页面是模板：下载地址由租户在部署时配置（品牌与商店链接都不写死在代码里）。
+        商店链接由租户在部署时配置，不写死在模板里。
       </p>
     </main>
 
     <footer class="site">
       <div class="wrap">
-        <a href="legal/terms.html">服务条款</a> · <a href="legal/privacy.html">隐私政策</a>
+        <div class="cols">
+          <div>
+            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
+            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
+            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+          </div>
+          <div>
+            <h4>产品</h4>
+            <ul>
+              <li><a href="pricing.html">套餐与价格</a></li>
+              <li><a href="download.html">下载客户端</a></li>
+              <li><a href="account.html">我的账号</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>条款</h4>
+            <ul>
+              <li><a href="legal/terms.html">服务条款</a></li>
+              <li><a href="legal/privacy.html">隐私政策</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>支付与订阅服务由本网站提供</span>
+        </div>
       </div>
     </footer>
+
+    <script src="config.js"></script>
+    <script src="api.js"></script>
+    <script>
+      // 商店链接由发布环境注入（config.js），模板不写死
+      if (window.SITE_LINKS?.apple) document.getElementById("apple").href = window.SITE_LINKS.apple;
+      if (window.SITE_LINKS?.google) document.getElementById("google").href = window.SITE_LINKS.google;
+    </script>
+
   </body>
 </html>

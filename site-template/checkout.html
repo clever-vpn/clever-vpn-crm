@@ -4,42 +4,96 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>确认订单 · {{site.name}}</title>
-    <meta name="robots" content="noindex" />
+    <meta name="description" content="{{site.tagline}}" />
     <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
-      <div class="wrap">
-        <a class="brand" href="index.html">{{site.name}}</a>
+      <div class="wrap bar">
+        <a class="brand" href="index.html" data-eid="global.header.brand">
+          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
+                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
+            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
+          </svg>
+          <span data-eid="global.header.name">{{site.name}}</span>
+        </a>
         <nav>
-          <a href="pricing.html" class="active">套餐</a>
+          <a href="index.html#features">特性</a>
+          <a href="pricing.html">套餐</a>
+          <a href="download.html">下载</a>
           <a href="account.html">我的</a>
         </nav>
+        <a class="btn sm" href="pricing.html" data-eid="global.header.cta">立即开始</a>
       </div>
     </header>
 
-    <main class="wrap" style="max-width: 520px">
-      <h1>确认订单</h1>
-      <p class="lead">金额与有效期由服务端报价给出，这里只确认一次。</p>
-      <div id="flash"></div>
+    <main class="wrap">
+      <div class="narrow" style="margin:0 auto">
+        <h1 data-eid="checkout.title">确认订单</h1>
+        <p class="lead" data-eid="checkout.lead">
+          金额与有效期由服务端报价给出，这里只确认一次。
+        </p>
+        <div id="flash"></div>
 
-      <section class="card">
-        <dl id="summary" class="kv"></dl>
-        <div class="row" style="margin-top:16px">
-          <label class="hint">优惠码</label>
-          <input id="promo" class="grow" placeholder="选填，没有就留空" autocomplete="off" />
-          <button id="apply" class="btn ghost" type="button">使用</button>
+        <div class="card stack">
+          <dl id="summary" class="kv"></dl>
+
+          <div>
+            <label class="inline" style="display:block;margin-bottom:7px">优惠码</label>
+            <div class="row">
+              <input id="promo" class="grow" placeholder="选填，没有就留空" autocomplete="off" />
+              <button id="apply" type="button" class="ghost">使用</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="inline" style="display:block;margin-bottom:7px">支付方式</label>
+            <select id="method" class="grow" style="width:100%"></select>
+          </div>
+
+          <div class="actions" style="margin-top:6px">
+            <button id="pay" type="button">去支付</button>
+            <a class="btn ghost" href="pricing.html">返回</a>
+          </div>
+          <p class="hint" style="margin:0">
+            点「去支付」会跳到支付页面；付完回到这里就能看到结果。
+          </p>
         </div>
-        <div class="row" style="margin-top:16px">
-          <label class="hint">支付方式</label>
-          <select id="method" class="grow"></select>
-        </div>
-        <div class="row" style="margin-top:16px">
-          <button id="pay">去支付</button>
-          <a class="btn ghost" href="pricing.html">返回</a>
-        </div>
-      </section>
+      </div>
     </main>
+
+    <footer class="site">
+      <div class="wrap">
+        <div class="cols">
+          <div>
+            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
+            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
+            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+          </div>
+          <div>
+            <h4>产品</h4>
+            <ul>
+              <li><a href="pricing.html">套餐与价格</a></li>
+              <li><a href="download.html">下载客户端</a></li>
+              <li><a href="account.html">我的账号</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>条款</h4>
+            <ul>
+              <li><a href="legal/terms.html">服务条款</a></li>
+              <li><a href="legal/privacy.html">隐私政策</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>支付与订阅服务由本网站提供</span>
+        </div>
+      </div>
+    </footer>
 
 <script src="config.js"></script>
       <script src="api.js"></script>
@@ -161,5 +215,6 @@
         }
       });
     </script>
+
   </body>
 </html>
