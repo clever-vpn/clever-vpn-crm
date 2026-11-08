@@ -55,7 +55,7 @@ site:<tenant>:active   { n }                                写：本仓发布
 `site_settings`（本仓 D1，单行）：`site_name` / `tagline` / `color` / `contact_email`
 / `footer_note`。
 
-发布的替换表只有五个槽，**多一个都要先改契约**：
+发布的替换表只有六个槽，**多一个都要先改契约**：
 
 | 槽 | 来源 | 说明 |
 |---|---|---|
@@ -63,7 +63,11 @@ site:<tenant>:active   { n }                                写：本仓发布
 | `{{site.tagline}}` | `tagline` | 转义 |
 | `{{site.color}}` | `color`（`#rrggbb`） | 不转义，需已校验 |
 | `{{site.contact}}` | `contact_email` | 转义 |
+| `{{site.contact_link}}` | `contact_email` | **整段 `<a>`**；没配就渲染空串（避免空的 `mailto:`） |
 | `{{site.footer}}` | `footer_note`，空则 `© <年> <站点名>` | 转义 |
+
+> **空值必须回落到可用默认**：`{{site.color}}` 留空会让 `--brand: ;` 变成非法 CSS，
+> 整份样式失效 —— 所以它回落到 `#3b82f6`，而不是空串。
 
 产物里若残留**未定义**的 `{{site.xxx}}` ⇒ 发布直接失败（`template_token_unknown`），
 不让它漏到线上。

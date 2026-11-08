@@ -5,7 +5,7 @@
   --border: #1f2937;
   --text: #e8edf5;
   --dim: #97a3b6;
-  --brand: #3b82f6;
+  --brand: {{site.color}};
   --ok: #10b981;
   --warn: #f59e0b;
   --err: #ef4444;
