@@ -203,7 +203,7 @@ export const SDK_JS = `(function () {
             payment_method: methods[0].id,
             origin: "web",
             // 付完回**站点的**保底页（不是 CRM 域名）；order=<code> 由服务端拼
-            // 路径是产物里的静态文件：`_crm/return.html`（发布时写入 R2）
+            // 路径是产物里的静态文件：/_crm/return.html（发布时写入 R2）
             return_url: location.origin + "/_crm/return.html"
           };
           if (promo) { order.promo_code = promo; }
