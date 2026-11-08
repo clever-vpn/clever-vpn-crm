@@ -5,137 +5,227 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{site.name}}</title>
     <meta name="description" content="{{site.tagline}}" />
-    <style>
-      :root {
-        --bg: #0b0f17;
-        --surface: #121926;
-        --border: #1f2937;
-        --text: #e8edf5;
-        --dim: #97a3b6;
-        --brand: #3b82f6;
-        --radius: 12px;
-        --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: var(--font);
-        background: var(--bg);
-        color: var(--text);
-        line-height: 1.65;
-        -webkit-font-smoothing: antialiased;
-      }
-      .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px; }
-      header {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 22px 0; border-bottom: 1px solid var(--border);
-      }
-      .logo { font-weight: 600; letter-spacing: 0.2px; }
-      .logo span { color: var(--brand); }
-      nav a { color: var(--dim); text-decoration: none; margin-left: 20px; font-size: 14px; }
-      nav a:hover { color: var(--text); }
-
-      main { padding: 72px 0 56px; }
-      h1 {
-        font-size: clamp(30px, 5vw, 44px);
-        line-height: 1.2; margin: 0 0 16px; letter-spacing: -0.5px;
-      }
-      .lead { color: var(--dim); font-size: 17px; max-width: 620px; margin: 0 0 28px; }
-      .actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-      .btn {
-        display: inline-block; padding: 11px 20px; border-radius: var(--radius);
-        text-decoration: none; font-size: 15px; border: 1px solid var(--border);
-        color: var(--text);
-      }
-      .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
-      .btn.disabled { color: var(--dim); border-style: dashed; cursor: not-allowed; }
-      .note { color: var(--dim); font-size: 13px; margin-top: 14px; }
-
-      .grid {
-        display: grid; gap: 16px; margin-top: 56px;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      }
-      .grid.single { grid-template-columns: 1fr; margin-top: 40px; }
-      .card {
-        background: var(--surface); border: 1px solid var(--border);
-        border-radius: var(--radius); padding: 20px;
-      }
-      .card h2 { font-size: 15px; margin: 0 0 8px; }
-      .card p { margin: 0; color: var(--dim); font-size: 14px; }
-
-      footer {
-        border-top: 1px solid var(--border); padding: 24px 0 40px;
-        color: var(--dim); font-size: 13px;
-        display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-      }
-      footer a { color: var(--dim); text-decoration: none; margin-right: 16px; }
-      footer a:hover { color: var(--text); }
-      .badge {
-        display: inline-block; font-size: 12px; color: var(--dim);
-        border: 1px solid var(--border); border-radius: 999px;
-        padding: 2px 10px; margin-bottom: 18px;
-      }
-    </style>
+    <link rel="stylesheet" href="site.css" />
   </head>
   <body>
-    <div class="wrap">
-      <header>
-        <div class="logo">Clever <span>VPN</span></div>
-        <a class="brand" href="index.html">{{site.name}}</a>
+    <!-- 每个可编辑单元带稳定锚点：site-studio 靠 data-eid 定位，不靠猜 -->
+    <header class="site">
+      <div class="wrap bar">
+        <a class="brand" href="index.html" data-eid="global.header.brand">
+          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
+                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
+            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
+          </svg>
+          <span data-eid="global.header.name">{{site.name}}</span>
+        </a>
         <nav>
           <a href="#features">特性</a>
           <a href="pricing.html">套餐</a>
           <a href="download.html">下载</a>
           <a href="account.html">我的</a>
         </nav>
-      </header>
+        <a class="btn sm" href="pricing.html" data-eid="global.header.cta">立即开始</a>
+      </div>
+    </header>
 
-      <main>
-        <div class="badge">一个账号，三端通用</div>
-        <h1>连通世界，只需要一次点击。</h1>
-        <p class="lead">
-          智能选路、断网自动重连。Windows、macOS、iOS、Android 共用同一份订阅，
-          在网页上登录也能看到与客户端完全一致的有效期与剩余流量。
-        </p>
-        <div class="actions">
-          <a class="btn" href="pricing.html">查看套餐</a>
-          <a class="btn" href="download.html">下载客户端</a>
+    <main>
+      <section class="hero">
+        <div class="wrap inner">
+          <div>
+            <span class="badge" data-eid="home.hero.badge">一个账号，三端通用</span>
+            <h1 data-eid="home.hero.title">{{site.hero_title}}</h1>
+            <p class="lead" data-eid="home.hero.sub">{{site.hero_sub}}</p>
+            <div class="actions">
+              <a class="btn" href="pricing.html" data-eid="home.hero.cta">查看套餐</a>
+              <a class="linkish" href="download.html" data-eid="home.hero.cta2">下载客户端 →</a>
+            </div>
+          </div>
+          <div class="art" aria-hidden="true">
+            <!-- 只有品牌色参与：换主色，插画跟着变，不需要租户找图 -->
+            <svg viewBox="0 0 360 300" fill="none">
+              <defs>
+                <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="var(--brand)" stop-opacity=".18" />
+                  <stop offset="1" stop-color="var(--brand)" stop-opacity=".02" />
+                </linearGradient>
+              </defs>
+              <rect x="26" y="24" width="308" height="252" rx="22" fill="url(#g1)" />
+              <circle cx="180" cy="150" r="82" stroke="var(--brand)" stroke-opacity=".38" stroke-width="1.5" />
+              <circle cx="180" cy="150" r="54" stroke="var(--brand)" stroke-opacity=".22" stroke-width="1.2" />
+              <ellipse cx="180" cy="150" rx="82" ry="30" stroke="var(--brand)" stroke-opacity=".22" stroke-width="1.2" />
+              <ellipse cx="180" cy="150" rx="30" ry="82" stroke="var(--brand)" stroke-opacity=".22" stroke-width="1.2" />
+              <path d="M40 232c34-46 74-46 108-20s70 22 104-16" stroke="var(--brand)" stroke-width="2"
+                    stroke-linecap="round" stroke-opacity=".55" />
+              <circle cx="180" cy="150" r="13" fill="var(--brand)" />
+              <path d="M184 143l-11 11h8l-4 12 11-13h-8l4-10Z" fill="#fff" />
+              <circle cx="40" cy="232" r="5" fill="var(--brand)" />
+              <circle cx="252" cy="196" r="5" fill="var(--brand)" stroke-opacity=".6" />
+              <circle cx="98" cy="86" r="4" fill="var(--brand)" stroke-opacity=".45" />
+            </svg>
+          </div>
         </div>
-        <p class="note">已是用户？<a href="login.html">登录</a>查看你的订阅，无需在客户端里输入任何激活码。</p>
+      </section>
 
-        <section class="grid" id="features">
-          <div class="card">
-            <h2>一条线路，随时可用</h2>
-            <p>智能选择最优节点，切换网络后自动重连。</p>
+      <section class="wrap">
+        <!-- 只写能兑现的事实，不写编造的节点数 / 星级 -->
+        <div class="facts" data-eid="home.facts">
+          <div>
+            <b data-eid="home.facts.1.title">不限速不限量</b>
+            <span data-eid="home.facts.1.desc">按套餐给带宽，不按天掐你</span>
           </div>
-          <div class="card">
-            <h2>不记录浏览日志</h2>
-            <p>只保留计费与设备数量所需的账号数据。</p>
+          <div>
+            <b data-eid="home.facts.2.title">一个账号，三端通用</b>
+            <span data-eid="home.facts.2.desc">手机、电脑、浏览器同步登录</span>
           </div>
-          <div class="card">
-            <h2>三个平台一个账号</h2>
-            <p>Windows、macOS、Android 共用同一份订阅。</p>
+          <div>
+            <b data-eid="home.facts.3.title">不记浏览日志</b>
+            <span data-eid="home.facts.3.desc">只保留计费必需的数据</span>
           </div>
-        </section>
-
-        <section class="grid single" id="pricing">
-          <div class="card">
-            <h2>价格与订阅</h2>
-            <p>套餐、活动与加量包都在 <a href="pricing.html">套餐页</a>，登录后可直接下单。</p>
-          </div>
-        </section>
-      </main>
-
-      <footer>
-        <div>{{site.contact_link}}</div>
-        <div>
-          <a href="legal/terms.html">服务条款</a>
-          <a href="legal/privacy.html">隐私政策</a>
-          <a href="mailto:support@example.com">support@example.com</a>
         </div>
-        <div>{{site.footer}}</div>
-      </footer>
-    </div>
+      </section>
+
+      <section class="band" id="features">
+        <div class="wrap">
+          <div class="section-head">
+            <h2 data-eid="home.features.title">为什么选我们</h2>
+            <p data-eid="home.features.sub">四件事做好就够了，不用记一堆参数。</p>
+          </div>
+          <div class="grid cols-2">
+            <div class="card feature">
+              <div class="ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12L13 2Z" />
+                </svg>
+              </div>
+              <h3 data-eid="home.features.1.title">真的快</h3>
+              <p data-eid="home.features.1.desc">中转专线直连，晚高峰也不掉速；看 4K 不用等缓冲。</p>
+            </div>
+            <div class="card feature">
+              <div class="ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 21s7-3.6 7-9V5.6L12 3 5 5.6V12c0 5.4 7 9 7 9Z" />
+                  <path d="M9 12.2l2.1 2.1L15.4 10" />
+                </svg>
+              </div>
+              <h3 data-eid="home.features.2.title">真的稳</h3>
+              <p data-eid="home.features.2.desc">一条线路不通自动换，不用你自己试哪个节点能连。</p>
+            </div>
+            <div class="card feature">
+              <div class="ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4.5" y="10.5" width="15" height="10" rx="2.4" />
+                  <path d="M8.2 10.5V8a3.8 3.8 0 0 1 7.6 0v2.5" />
+                  <path d="M12 14.6v2.2" />
+                </svg>
+              </div>
+              <h3 data-eid="home.features.3.title">只看计费，不看你去哪</h3>
+              <p data-eid="home.features.3.desc">不记录访问内容，不出售数据；账单只算流量与时长。</p>
+            </div>
+            <div class="card feature">
+              <div class="ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="4.5" width="13" height="10" rx="2" />
+                  <path d="M18.5 9.5v9a2 2 0 0 1-2 2h-9" />
+                  <path d="M6.2 17.2h.01M9.8 17.2h.01M13.4 17.2h.01" stroke-width="2.4" />
+                </svg>
+              </div>
+              <h3 data-eid="home.features.4.title">装完就能用</h3>
+              <p data-eid="home.features.4.desc">没有配置文件、没有节点列表，登录后点一下连接。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band soft">
+        <div class="wrap">
+          <div class="grid cols-2">
+            <div>
+              <div class="section-head">
+                <h2 data-eid="home.steps.title">三步开始</h2>
+                <p data-eid="home.steps.sub">全程不需要改任何设置。</p>
+              </div>
+              <ol class="steps" style="padding:0;margin:0">
+                <li>
+                  <b data-eid="home.steps.1.title">选套餐并支付</b>
+                  <span data-eid="home.steps.1.desc">支持常用支付方式，付完立刻到账。</span>
+                </li>
+                <li>
+                  <b data-eid="home.steps.2.title">用邮箱登录</b>
+                  <span data-eid="home.steps.2.desc">邮箱加验证码，不需要记密码。</span>
+                </li>
+                <li>
+                  <b data-eid="home.steps.3.title">下载客户端并连接</b>
+                  <span data-eid="home.steps.3.desc">装好后登录一次，之后一键连接。</span>
+                </li>
+              </ol>
+            </div>
+            <div class="card">
+              <div class="section-head" style="margin-bottom:14px">
+                <h2 data-eid="home.faq.title">常见问题</h2>
+              </div>
+              <details class="faq" data-eid="home.faq.1">
+                <summary data-eid="home.faq.1.q">支持几台设备？</summary>
+                <p data-eid="home.faq.1.a">一个账号可在手机、电脑、浏览器上同时登录，具体台数见套餐说明。</p>
+              </details>
+              <details class="faq" data-eid="home.faq.2">
+                <summary data-eid="home.faq.2.q">能退款吗？</summary>
+                <p data-eid="home.faq.2.a">购买后 7 天内未使用流量可申请退款，具体见服务条款。</p>
+              </details>
+              <details class="faq" data-eid="home.faq.3">
+                <summary data-eid="home.faq.3.q">换设备要重新买吗？</summary>
+                <p data-eid="home.faq.3.a">不需要。同一个账号在新设备上登录即可，旧设备登出就行。</p>
+              </details>
+              <details class="faq" data-eid="home.faq.4">
+                <summary data-eid="home.faq.4.q">连不上怎么办？</summary>
+                <p data-eid="home.faq.4.a">
+                  先换一个节点；还不行就把时间和错误提示发给客服邮箱。
+                </p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="wrap" style="padding-top:52px">
+        <div class="cta-card" data-eid="home.cta">
+          <h2 data-eid="home.cta.title">现在开始，几分钟就能连上</h2>
+          <p data-eid="home.cta.desc">先看套餐，选一个合适的；随时可以升到更大的套餐。</p>
+          <a class="btn" href="pricing.html" data-eid="home.cta.button">查看套餐</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site">
+      <div class="wrap">
+        <div class="cols">
+          <div>
+            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
+            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
+            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+          </div>
+          <div>
+            <h4>产品</h4>
+            <ul>
+              <li><a href="pricing.html">套餐与价格</a></li>
+              <li><a href="download.html">下载客户端</a></li>
+              <li><a href="account.html">我的账号</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>条款</h4>
+            <ul>
+              <li><a href="legal/terms.html">服务条款</a></li>
+              <li><a href="legal/privacy.html">隐私政策</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>支付与订阅服务由本网站提供</span>
+        </div>
+      </div>
+    </footer>
   </body>
 </html>

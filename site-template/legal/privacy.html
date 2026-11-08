@@ -4,29 +4,105 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>隐私政策 · {{site.name}}</title>
-    <link rel="stylesheet" href="site.css" />
+    <meta name="description" content="{{site.tagline}}" />
+    <link rel="stylesheet" href="../site.css" />
   </head>
   <body>
     <header class="site">
-      <div class="wrap">
-        <a class="brand" href="../index.html">{{site.name}}</a>
-        <nav><a href="pricing.html">套餐</a><a href="account.html">我的</a></nav>
+      <div class="wrap bar">
+        <a class="brand" href="../index.html" data-eid="global.header.brand">
+          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
+                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
+            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
+          </svg>
+          <span data-eid="global.header.name">{{site.name}}</span>
+        </a>
+        <nav>
+          <a href="../index.html#features">特性</a>
+          <a href="../pricing.html">套餐</a>
+          <a href="../download.html">下载</a>
+          <a href="../account.html">我的</a>
+        </nav>
+        <a class="btn sm" href="../pricing.html" data-eid="global.header.cta">查看套餐</a>
       </div>
     </header>
-    <main class="wrap" style="max-width: 720px">
-      <h1>隐私政策</h1>
+
+    <main class="wrap" style="max-width:760px">
+      <h1 data-eid="legal.privacy.title">隐私政策</h1>
+      <p class="lead" data-eid="legal.privacy.lead">
+        我们只收集提供服务必须的数据，不记录你访问了哪些网站。
+      </p>
+
       <div class="card">
-        <p class="hint">
-          占位文本：上架时必须提供真实的《隐私政策》链接。请租户在部署前替换本页内容。
+        <p class="hint" style="margin-top:0">
+          模板说明：上架应用商店必须提供真实的隐私政策，并与客户端的实际采集行为一致。
+          租户在发布前应核对本页与 App 的隐私清单。
         </p>
-        <h2>我们收集什么</h2>
-        <p>仅收集提供服务所必需的信息：邮箱（登录）、订单与订阅记录、设备数量上限。</p>
-        <h2>我们不收集什么</h2>
-        <p>不记录你的浏览内容、DNS 查询内容与连接目标。</p>
-        <h2>数据保留</h2>
-        <p>账号与订单数据的保留期限以运营方政策为准；删除账号会撤销全部会话。</p>
+
+        <h2 data-eid="legal.privacy.1.q">1. 我们收集什么</h2>
+        <p data-eid="legal.privacy.1.a">
+          邮箱地址（用于登录与收据）、订单与支付状态、订阅与用量（流量、时长、到期
+          时间）、必要的设备与错误信息（用于排查连接问题）。
+        </p>
+
+        <h2 data-eid="legal.privacy.2.q">2. 我们不收集什么</h2>
+        <p data-eid="legal.privacy.2.a">
+          不记录你访问的网站与传输内容，不建立浏览画像，不出售或出租个人信息。
+        </p>
+
+        <h2 data-eid="legal.privacy.3.q">3. 数据用途</h2>
+        <p data-eid="legal.privacy.3.a">
+          仅用于开通与续订服务、计算用量、处理退款与支持请求、防范滥用。
+        </p>
+
+        <h2 data-eid="legal.privacy.4.q">4. 保存期限</h2>
+        <p data-eid="legal.privacy.4.a">
+          计费与订单记录按所在地财税要求保存；其余数据在账号注销后删除或匿名化。
+        </p>
+
+        <h2 data-eid="legal.privacy.5.q">5. 第三方</h2>
+        <p data-eid="legal.privacy.5.a">
+          支付由第三方支付服务商处理，我们不接触也不存储你的卡号与支付凭证。
+        </p>
+
+        <h2 data-eid="legal.privacy.6.q">6. 你的权利</h2>
+        <p data-eid="legal.privacy.6.a">
+          你可以查询、更正、导出或要求删除你的个人数据，通过页脚的联系方式提出即可。
+        </p>
       </div>
     </main>
-    <footer class="site"><div class="wrap"><a href="legal/terms.html">服务条款</a></div></footer>
+
+    <footer class="site">
+      <div class="wrap">
+        <div class="cols">
+          <div>
+            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
+            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
+            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+          </div>
+          <div>
+            <h4>产品</h4>
+            <ul>
+              <li><a href="../pricing.html">套餐与价格</a></li>
+              <li><a href="../download.html">下载客户端</a></li>
+              <li><a href="../account.html">我的账号</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>条款</h4>
+            <ul>
+              <li><a href="terms.html">服务条款</a></li>
+              <li><a href="privacy.html">隐私政策</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>支付与订阅服务由本网站提供</span>
+        </div>
+      </div>
+    </footer>
   </body>
 </html>

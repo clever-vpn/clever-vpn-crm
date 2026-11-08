@@ -3,95 +3,183 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>套餐与价格 · {{site.name}}</title>
-    <meta name="description" content="按月或按流量购买，随时续费升级。" />
+    <title>套餐 · {{site.name}}</title>
+    <meta name="description" content="{{site.tagline}}" />
     <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
-      <div class="wrap">
-        <a class="brand" href="index.html">{{site.name}}</a>
+      <div class="wrap bar">
+        <a class="brand" href="index.html" data-eid="global.header.brand">
+          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
+                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
+            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
+          </svg>
+          <span data-eid="global.header.name">{{site.name}}</span>
+        </a>
         <nav>
+          <a href="index.html#features">特性</a>
           <a href="pricing.html" class="active">套餐</a>
+          <a href="download.html">下载</a>
           <a href="account.html">我的</a>
         </nav>
+        <a class="btn sm" href="download.html" data-eid="global.header.cta">下载客户端</a>
       </div>
     </header>
 
     <main class="wrap">
-      <h1>选择套餐</h1>
-      <p class="lead">价格与可购买性全部由服务端计算，这里只负责展示。</p>
+      <h1 data-eid="pricing.title">选一个套餐</h1>
+      <p class="lead" data-eid="pricing.lead">
+        价格与权益以这里为准；随时可以升到更大的套餐，差价按未用完的部分折算。
+      </p>
+
       <div id="flash"></div>
-      <div id="plans" class="grid"></div>
+      <div id="plans" class="plans">
+        <div class="card"><div class="spinner-note">正在加载套餐…</div></div>
+      </div>
+
+      <div class="card soft" style="margin-top:22px">
+        <h2 data-eid="pricing.note.title">付款与退款</h2>
+        <p class="hint" style="margin:0" data-eid="pricing.note.desc">
+          付款成功后权益立即到账。未使用流量可在 7 天内申请退款，详见
+          <a href="legal/terms.html">服务条款</a>。
+        </p>
+      </div>
     </main>
 
     <footer class="site">
       <div class="wrap">
-        <a href="legal/terms.html">服务条款</a> · <a href="legal/privacy.html">隐私政策</a>
+        <div class="cols">
+          <div>
+            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
+            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
+            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+          </div>
+          <div>
+            <h4>产品</h4>
+            <ul>
+              <li><a href="pricing.html">套餐与价格</a></li>
+              <li><a href="download.html">下载客户端</a></li>
+              <li><a href="account.html">我的账号</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>条款</h4>
+            <ul>
+              <li><a href="legal/terms.html">服务条款</a></li>
+              <li><a href="legal/privacy.html">隐私政策</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>支付与订阅服务由本网站提供</span>
+        </div>
       </div>
     </footer>
 
-<script src="config.js"></script>
-      <script src="api.js"></script>
+    <script src="config.js"></script>
+    <script src="api.js"></script>
     <script>
+      /*
+       * 这个页面的纪律：**不含任何业务规则**。
+       *
+       *   · 价格  → 直接渲染 `display_price_minor`（活动价已由 CRM 算进）
+       *   · 划线  → 只有 `compare_at_price_minor` 有值才加删除线
+       *   · 能不能买 → 只读 `buyable`；为什么不能买 → 只显示 `reason`
+       *   · 按钮文案 → 只按 `action` 查表（契约 §2.4.8：前端不判断，只渲染）
+       *
+       * 反面教材（旧版做过）：`promo_price_minor < price_minor` 比较、按 action
+       * 自己 switch 出 "能不能买" 的集合、按 action 分支算应付金额。
+       */
       const $ = (id) => document.getElementById(id);
-      const yuan = (m) => (m === null || m === undefined ? '—' : `¥${(m / 100).toFixed(2)}`);
       const flash = (kind, text) => {
-        $('flash').innerHTML = text ? `<div class="${kind}">${text}</div>` : '';
+        $('flash').innerHTML = text ? `<div class="notice ${kind}">${text}</div>` : '';
       };
+      const esc = (s) =>
+        String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-      // 动作文案全部来自 CRM 的 action（契约 §2.4.8）：前端不做任何判断
-      const ACTION = {
-        buy: '立即购买', renewal: '续订', upgrade: '升级',
-        blocked: '不可购买', login_required: '登录后订阅',
-      };
-      const BUYABLE = new Set(['buy', 'renewal', 'upgrade']);
-      const KIND = { period: '周期套餐', traffic: '流量套餐', addon: '加量包' };
-
-      function quotaText(p) {
-        if (p.kind === 'period') {
-          return p.monthly_quota_gb === null ? '不限量' : `${p.monthly_quota_gb} GB / 月`;
+      /** 金额一律走 Intl：不写死 ¥，货币由 CRM 的 `currency` 决定 */
+      const money = (minor, currency) => {
+        if (typeof minor !== 'number') return '—';
+        try {
+          return new Intl.NumberFormat('zh-CN', {
+            style: 'currency',
+            currency: currency || 'CNY',
+          }).format(minor / 100);
+        } catch {
+          return `${(minor / 100).toFixed(2)} ${currency || ''}`.trim();
         }
-        return `${p.traffic_gb} GB`;
+      };
+
+      // 动作 → 文案。表里没有的动作按"不可购买"渲染，绝不自创动作。
+      const ACTION_LABEL = {
+        buy: '立即购买',
+        renewal: '续订',
+        upgrade: '升级到这个套餐',
+        login_required: '登录后订阅',
+        blocked: '暂不可购买',
+      };
+
+      const KIND_LABEL = { period: '周期套餐', traffic: '流量套餐', addon: '加量包' };
+
+      /** 权益行：只做单位拼接，不做判断 */
+      function specLines(p) {
+        const out = [];
+        if (p.kind === 'period') {
+          out.push(p.monthly_quota_gb === null ? '每月不限量' : `每月 ${p.monthly_quota_gb} GB`);
+        } else if (p.kind === 'traffic') {
+          out.push(p.traffic_gb === null ? '不限量' : `共 ${p.traffic_gb} GB`);
+        } else if (p.kind === 'addon') {
+          out.push(p.traffic_gb === null ? '加量包' : `加 ${p.traffic_gb} GB`);
+        }
+        const days = p.validity_days ?? p.term_days;
+        if (typeof days === 'number') out.push(`${days} 天有效期`);
+        if (typeof p.speed === 'string' && p.speed) out.push(p.speed);
+        if (typeof p.licence_limit === 'number') out.push(`${p.licence_limit} 台设备`);
+        if (p.action === 'renewal' && p.next_expires_at) {
+          out.push(`续订后有效期至 ${String(p.next_expires_at).slice(0, 10)}`);
+        }
+        return out;
       }
 
       function card(p) {
-        const canBuy = BUYABLE.has(p.action);
-        // 价格位用「活动价」（promo_price_minor），它**不是**这个人的应付：
-        // 未登录时只有"所有人都能用"的活动才会同时给出 payable，其余等登录。
-        const promoPrice =
-          typeof p.promo_price_minor === 'number' && p.promo_price_minor < p.price_minor
-            ? p.promo_price_minor
-            : null;
-        const price = promoPrice !== null
-          ? `<s>${yuan(p.price_minor)}</s>${yuan(promoPrice)}`
-          : yuan(p.price_minor);
-        // upgrade 的应付含残值，列表不给金额（契约：点开才由 /quote 给）
-        const payable = p.action === 'upgrade'
-          ? '点「升级」看应付'
-          : canBuy ? `应付 ${yuan(p.payable_minor)}` : '';
-        const note = p.action === 'renewal' && p.next_expires_at
-          ? `续订后有效期至 ${p.next_expires_at.slice(0, 10)}`
-          : p.reason || '';
+        const canBuy = p.buyable !== false;
+        const label = ACTION_LABEL[p.action] ?? ACTION_LABEL.blocked;
+        const href = p.action === 'login_required'
+          ? 'login.html?next=pricing.html'
+          : `checkout.html?plan=${encodeURIComponent(p.plan_id)}`;
+        // 兼容兜底（契约 A.1.1）：老服务端不给 `display_price_minor` 时退回标价
+        const price = typeof p.display_price_minor === 'number'
+          ? p.display_price_minor
+          : p.price_minor;
+        const was = typeof p.compare_at_price_minor === 'number'
+          ? `<span class="was">${esc(money(p.compare_at_price_minor, p.currency))}</span>`
+          : '';
 
         const el = document.createElement('div');
-        el.className = 'card plan';
+        el.className = 'plan' + (p.compare_at_price_minor ? ' hot' : '');
         el.innerHTML = `
-          <div class="row" style="justify-content:space-between">
-            <h3>${p.name}</h3>
-            <span class="price">${price}</span>
+          <div class="row" style="justify-content:space-between;align-items:flex-start">
+            <div>
+              <p class="plan-name">${esc(p.name)}</p>
+              <span class="tag">${esc(KIND_LABEL[p.kind] ?? p.kind)}</span>
+            </div>
+            ${p.promo_badge ? `<span class="badge">${esc(p.promo_badge)}</span>` : ''}
           </div>
-          <div class="badges">
-            <span class="badge">${KIND[p.kind] ?? p.kind}</span>
-            <span class="badge">${quotaText(p)}</span>
-            <span class="badge">${p.licence_limit} 台设备</span>
-            ${p.promo_badge ? `<span class="badge promo">${p.promo_badge}</span>` : ''}
+          <div class="amount">
+            <span class="now">${esc(money(price, p.currency))}</span>
+            ${was}
           </div>
-          <div class="meta">${canBuy ? payable : note}</div>
-          <div class="row" style="margin-top:14px">
+          <div class="per">${p.action === 'renewal' ? '续订价' : '实付价格'}</div>
+          <ul class="spec">${specLines(p).map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
+          <div class="plan-cta">
             ${canBuy
-              ? `<a class="btn" href="checkout.html?plan=${encodeURIComponent(p.plan_id)}">${ACTION[p.action]}</a>`
-              : `<a class="btn ghost" href="login.html?next=pricing.html">${p.action === 'login_required' ? '登录后订阅' : '不可购买'}</a>`}
+              ? `<a class="btn" href="${href}">${esc(label)}</a>`
+              : `<button class="ghost" type="button" disabled>${esc(label)}</button>`}
+            ${!canBuy && p.reason ? `<div class="blocked">${esc(p.reason)}</div>` : ''}
           </div>
         `;
         return el;
@@ -99,18 +187,22 @@
 
       (async () => {
         try {
-          const res = await fetch(`${API_BASE}/api/app/v1/plans`);
+          const res = await fetch(`${window.CRM_API_BASE}/api/app/v1/plans`);
           const plans = await res.json();
           if (!res.ok) throw new Error(plans?.error?.message || `HTTP ${res.status}`);
           const box = $('plans');
           box.innerHTML = '';
           if (!plans.length) {
-            box.innerHTML = '<div class="card hint">暂无可售套餐。</div>';
+            box.innerHTML = '<div class="card empty">现在没有在售套餐，请稍后再来。</div>';
             return;
           }
+          box.classList.toggle('cols-3', plans.length % 3 === 0 && plans.length > 2);
+          // 只有一个套餐时居中显示，别占半屏留一片空白
+          box.classList.toggle('solo', plans.length === 1);
           for (const p of plans) box.appendChild(card(p));
         } catch (e) {
-          flash('err', `加载套餐失败：${e.message}`);
+          $('plans').innerHTML = '';
+          flash('err', `加载套餐失败：${esc(e.message)}`);
         }
       })();
     </script>

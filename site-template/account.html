@@ -4,85 +4,122 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>我的 · {{site.name}}</title>
-    <meta name="robots" content="noindex" />
+    <meta name="description" content="{{site.tagline}}" />
     <link rel="stylesheet" href="site.css" />
   </head>
   <body>
     <header class="site">
-      <div class="wrap">
-        <a class="brand" href="index.html">{{site.name}}</a>
+      <div class="wrap bar">
+        <a class="brand" href="index.html" data-eid="global.header.brand">
+          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
+                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
+            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
+          </svg>
+          <span data-eid="global.header.name">{{site.name}}</span>
+        </a>
         <nav>
+          <a href="index.html#features">特性</a>
           <a href="pricing.html">套餐</a>
+          <a href="download.html">下载</a>
           <a href="account.html" class="active">我的</a>
-          <a href="#" id="logout">退出</a>
         </nav>
+        <a class="btn sm" href="pricing.html" data-eid="global.header.cta">查看套餐</a>
       </div>
     </header>
 
     <main class="wrap">
-      <h1>我的</h1>
-      <!-- 与 App 是同一个 /me 响应：文案（status_text）也来自服务端 -->
-      <p class="lead">这里的权益与 App 里显示的完全一致。</p>
+      <h1 data-eid="account.title">我的</h1>
+      <p class="lead" data-eid="account.lead">这里的权益与 App 里显示的完全一致。</p>
       <div id="flash"></div>
 
-      <section class="card">
+      <div class="card">
         <div class="row" style="justify-content:space-between">
           <h2 style="margin:0">当前权益</h2>
           <span id="state-tag" class="tag"></span>
         </div>
         <dl id="me" class="kv" style="margin-top:14px"></dl>
-        <div class="row" style="margin-top:16px">
+        <div class="actions" style="margin-top:18px">
           <a class="btn" href="pricing.html">续费 / 升级</a>
           <a class="btn ghost" href="download.html">下载 App</a>
         </div>
-      </section>
+      </div>
 
-      <section class="card" style="margin-top:18px">
-        <div class="row" style="justify-content:space-between">
-          <h2 style="margin:0">兑换码</h2>
-          <span class="tag">有码就能领</span>
+      <div class="grid cols-2" style="margin-top:16px">
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <h2 style="margin:0">兑换码</h2>
+            <span class="tag">有码就能领</span>
+          </div>
+          <p class="hint" style="margin:10px 0 0">
+            拿到活动码 / 渠道福利码后在这里输入，权益直接加到当前账号。
+          </p>
+          <div class="row" style="margin-top:14px">
+            <input id="redeem-code" class="grow mono" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="例如 GUOQING7" style="text-transform:uppercase;letter-spacing:1px" />
+            <button id="redeem-btn" class="ghost" type="button">兑换</button>
+          </div>
+          <div id="redeem-result" style="margin-top:12px"></div>
         </div>
-        <p class="hint" style="margin:10px 0 0">
-          拿到活动码 / 渠道福利码后在这里输入。兑换的权益会直接加到当前账号上。
-        </p>
-        <div class="row" style="margin-top:14px">
-          <input id="redeem-code" class="grow" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="输入兑换码，例如 GUOQING7"
-                 style="text-transform:uppercase;letter-spacing:1px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
-          <button id="redeem-btn" class="btn" type="button">兑换</button>
-        </div>
-        <div id="redeem-result" style="margin-top:12px"></div>
-      </section>
 
-      <section class="card" style="margin-top:18px">
-        <div class="row" style="justify-content:space-between">
-          <h2 style="margin:0">邀请好友</h2>
-          <span id="invite-count" class="tag"></span>
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <h2 style="margin:0">邀请好友</h2>
+            <span id="invite-count" class="tag"></span>
+          </div>
+          <p class="hint" style="margin:10px 0 0">
+            把码发给朋友，他在注册时（选填）填上即可。奖励只给权益。
+          </p>
+          <div class="row" style="margin-top:14px">
+            <code id="invite-code" class="mono grow" style="font-size:17px;letter-spacing:1px">—</code>
+            <button id="copy" class="ghost" type="button">复制</button>
+          </div>
+          <dl id="invite" class="kv" style="margin-top:14px"></dl>
         </div>
-        <p class="hint" style="margin:10px 0 0">
-          把码发给朋友，他在注册时（选填）填上即可。奖励只给权益，不提现。
-        </p>
-        <div class="row" style="margin-top:14px">
-          <code id="invite-code" class="mono grow" style="font-size:18px;letter-spacing:1px">—</code>
-          <button id="copy" class="btn ghost" type="button">复制</button>
-        </div>
-        <dl id="invite" class="kv" style="margin-top:14px"></dl>
-      </section>
+      </div>
 
-      <section class="card" style="margin-top:18px">
-        <h2 style="margin-top:0">订单</h2>
+      <div class="card" style="margin-top:16px">
+        <h2>订单</h2>
         <table>
           <thead>
-            <tr><th>单号</th><th>套餐</th><th>金额</th><th>状态</th><th>时间</th></tr>
+            <tr>
+              <th>单号</th><th>套餐</th><th class="num">金额</th><th>状态</th><th>时间</th>
+            </tr>
           </thead>
           <tbody id="orders"><tr><td colspan="5" class="hint">加载中…</td></tr></tbody>
         </table>
-      </section>
+      </div>
     </main>
 
     <footer class="site">
       <div class="wrap">
-        <a href="legal/terms.html">服务条款</a> · <a href="legal/privacy.html">隐私政策</a>
+        <div class="cols">
+          <div>
+            <div class="brand" data-eid="global.footer.name">{{site.name}}</div>
+            <p data-eid="global.footer.tagline">{{site.tagline}}</p>
+            <p data-eid="global.footer.contact">{{site.contact_link}}</p>
+          </div>
+          <div>
+            <h4>产品</h4>
+            <ul>
+              <li><a href="pricing.html">套餐与价格</a></li>
+              <li><a href="download.html">下载客户端</a></li>
+              <li><a href="account.html">我的账号</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>条款</h4>
+            <ul>
+              <li><a href="legal/terms.html">服务条款</a></li>
+              <li><a href="legal/privacy.html">隐私政策</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span data-eid="global.footer.copyright">{{site.footer}}</span>
+          <span>支付与订阅服务由本网站提供</span>
+        </div>
       </div>
     </footer>
 
@@ -268,5 +305,6 @@
         }
       });
     </script>
+
   </body>
 </html>
