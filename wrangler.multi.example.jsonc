@@ -48,6 +48,13 @@
   // 分片内的库。生成规则：slot = floor(全局 slot / 2000)，库名 `clever-vpn-crm-<slot>`。
   // 下面只列两个，真实 shard 会有几十到上千条 —— 由生成脚本按实际租户数产出，
   // 手写列表一定会漏（漏了就是请求期 500：`missing_db`，见 src/tenant/scope.ts）。
+  "r2_buckets": [
+    {
+      // 分片共用同一个 bucket，按 sites/<tenant>/ 前缀隔离
+      "binding": "SITES",
+      "bucket_name": "clever-sites"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB_0",

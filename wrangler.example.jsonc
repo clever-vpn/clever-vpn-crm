@@ -11,6 +11,13 @@
   "observability": {
     "enabled": true
   },
+  "r2_buckets": [
+    {
+      // 站点产物 + 模板（可选：不建站点可以不写这一段）
+      "binding": "SITES",
+      "bucket_name": "clever-sites"
+    }
+  ],
   "d1_databases": [
     {
       // 自托管只有一个库：1 Worker + 1 D1

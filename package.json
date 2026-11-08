@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "npm run test:unit && npm run test:workers",
     "check:migrations": "node scripts/migrations-check.mjs",
+    "site:template:upload": "node scripts/upload-site-template.mjs",
     "db:generate": "drizzle-kit generate",
     "db:reset": "bash scripts/reset-db.sh",
     "db:migrate:local": "wrangler d1 migrations apply clever-vpn-crm --local",

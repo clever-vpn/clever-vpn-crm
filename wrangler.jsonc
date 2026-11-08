@@ -25,6 +25,14 @@
   "triggers": {
     "crons": ["*/2 * * * *"]
   },
+  "r2_buckets": [
+    {
+      // 站点产物：sites/<租户>/versions/<n>/public/…
+      // 与 site-serve（workers/site）读写同一布局；不建站点可不绑
+      "binding": "SITES",
+      "bucket_name": "clever-sites"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

@@ -24,6 +24,7 @@ import { handleAdminGateways } from "./gateways";
 import { handleAdminStoreChannels } from "./store-channels";
 import { handleAdminPromotions } from "./promotions";
 import { handleAdminSettings } from "./settings";
+import { handleAdminSite } from "./site";
 import { handleAdminSubscriptions } from "./subscriptions";
 import { emailCodeAvailable, mailReady, sendMail } from "../mail";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
@@ -181,7 +182,12 @@ async function turnstileGuard(
   return fail(400, "turnstile_failed", "人机校验未通过，请刷新页面后重试");
 }
 
-export async function handleAdminApi(request: Request, env: Env): Promise<Response> {
+export async function handleAdminApi(
+  request: Request,
+  env: Env,
+  /** 当前租户 ID（多租户下由 `scopeToTenant` 解析）：站点发布要用它拼 R2 前缀与 KV 指针 */
+  tenantId: string,
+): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api\/admin/, "") || "/";
   const method = request.method;
@@ -482,6 +488,10 @@ export async function handleAdminApi(request: Request, env: Env): Promise<Respon
   // ── 运行期设置（发信配额等）──
   const settingsResponse = await handleAdminSettings(request, env);
   if (settingsResponse) return settingsResponse;
+
+  // ── 站点：发布 / 回滚 / 状态（产物在 R2，指针在 KV，见 contracts/site-delivery.md §6）──
+  const siteResponse = await handleAdminSite(request, env, tenantId, admin.email);
+  if (siteResponse) return siteResponse;
 
   if (method === "GET" && path === "/me") {
     return json({

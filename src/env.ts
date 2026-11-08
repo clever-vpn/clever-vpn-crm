@@ -7,8 +7,14 @@ export interface Env {
    * 按 `host → slot` 从 `DB_<slot>` 里挑一个放进 `env.DB`。
    */
   MODE?: string;
-  /** multi 专用：`host:* → { tenant_id, slot, shard, status }` */
+  /** multi 专用：`host:* → { tenant_id, slot, shard, status }`；也存站点指针 `site:<id>:active` */
   HOSTS?: KVNamespace;
+  /**
+   * 站点产物（R2）。键布局：`g/templates/<模板>/<版本>/…` 与
+   * `sites/<租户>/versions/<n>/public/…`，与 `workers/site`（site-serve）严格一致。
+   * 未绑定时站点功能整体不可用（发布返回 `r2_not_configured`），其余功能不受影响。
+   */
+  SITES?: R2Bucket;
   /** 静态资源（web/dist，含管理后台 SPA） */
   ASSETS: Fetcher;
 

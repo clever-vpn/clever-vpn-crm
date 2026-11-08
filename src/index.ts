@@ -113,7 +113,7 @@ export default {
     if (url.pathname.startsWith("/api/")) {
       await ensureSchema(env.DB);
       if (url.pathname.startsWith("/api/admin")) {
-        return handleAdminApi(request, env);
+        return handleAdminApi(request, env, scoped.tenantId);
       }
       if (url.pathname.startsWith("/api/app/v1")) {
         return handleAppApi(request, env);
