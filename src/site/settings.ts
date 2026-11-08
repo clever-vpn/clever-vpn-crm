@@ -127,7 +127,8 @@ export async function saveSiteSettings(
  * 把设置变成模板占位符的替换表。
  *
  * `{{site.name}}` / `{{site.tagline}}` / `{{site.color}}` / `{{site.contact}}` /
- * `{{site.footer}}` —— 只有这五个，多一个都要先改契约。
+ * `{{site.contact_link}}` / `{{site.footer}}` —— 只有这六个，多一个都要先改契约。
+ * （`contact_link` 是整段 `<a>`：没配邮箱就渲染空串，避免留一个空的 `mailto:`。）
  */
 export function tokensOf(
   settings: SiteSettings,
@@ -140,8 +141,13 @@ export function tokensOf(
   return {
     "{{site.name}}": escapeHtml(name),
     "{{site.tagline}}": escapeHtml(settings.tagline),
-    "{{site.color}}": settings.color ?? "",
+    // 空值回落到模板默认色：留空会让 `--brand: ;` 变成非法 CSS，整份样式失效
+    "{{site.color}}": settings.color ?? "#3b82f6",
     "{{site.contact}}": escapeHtml(settings.contactEmail ?? ""),
+    // 有邮箱才渲染整段链接；没有就渲染空串（不留一个 `mailto:` 空链接）
+    "{{site.contact_link}}": settings.contactEmail
+      ? `<a href="mailto:${escapeHtml(settings.contactEmail)}">联系我们</a>`
+      : "",
     "{{site.footer}}": escapeHtml(footer),
   };
 }

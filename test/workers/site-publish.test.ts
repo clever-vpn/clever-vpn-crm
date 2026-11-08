@@ -245,3 +245,37 @@ describe("品牌设置：发布时烘焙进产物", () => {
     expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
   });
 });
+
+describe("品牌设置：漏用/空值这些坑", () => {
+  it("主色留空 ⇒ 回落到默认色（否则 --brand: ; 整份 CSS 失效）", async () => {
+    await seedTemplate({
+      "index.html": "<h1>{{site.name}}</h1>",
+      "site.css": ":root{--brand: {{site.color}};}",
+    });
+    await saveSiteSettings(env, { site_name: "Acme", color: "" });
+
+    await publishSite(env, TENANT, { apiBase: BASE });
+    const css = await (
+      await SITES.get(`sites/${TENANT}/versions/1/public/site.css`)
+    )?.text();
+    expect(css).toContain("--brand: #3b82f6");
+  });
+
+  it("配了客服邮箱 ⇒ 页脚出现 mailto 链接；没配 ⇒ 什么都不渲染", async () => {
+    await seedTemplate({ "index.html": "<footer>{{site.contact_link}}</footer>" });
+
+    await publishSite(env, TENANT, { apiBase: BASE });
+    let html = await (
+      await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
+    )?.text();
+    expect(html).toContain("<footer></footer>");
+
+    await saveSiteSettings(env, { site_name: "Acme", contact_email: "help@acme.test" });
+    await publishSite(env, TENANT, { apiBase: BASE });
+    html = await (
+      await SITES.get(`sites/${TENANT}/versions/2/public/index.html`)
+    )?.text();
+    expect(html).toContain('href="mailto:help@acme.test"');
+    expect(html).toContain("联系我们");
+  });
+});
