@@ -14,8 +14,6 @@
  * single / multi 两种部署跑的是**同一份代码**：它只读 KV，不区分模式。
  */
 
-import { RETURN_HTML, SDK_JS } from "./sdk";
-
 export interface SiteEnv {
   HOSTS: KVNamespace;
   SITES: R2Bucket;
@@ -115,16 +113,10 @@ function platformFile(path: string, map: HostMap, env: SiteEnv): Response | null
       headers: { "content-type": MIME.js!, "cache-control": "public, max-age=300" },
     });
   }
-  if (path === "/_crm/sdk.js") {
-    return new Response(SDK_JS, {
-      headers: { "content-type": MIME.js!, "cache-control": "public, max-age=300" },
-    });
-  }
-  if (path === "/_crm/return") {
-    return new Response(RETURN_HTML, {
-      headers: { "content-type": MIME.html!, "cache-control": "no-store" },
-    });
-  }
+  // `/_crm/sdk.js` 与 `/_crm/return.html` 不在这里：它们是**发布产物**的一部分
+  // （`src/site/publish.ts` 每次发布写进 R2）。站点出口有两份实现（自部署这份、
+  // 托管 `site-serve`），SDK 抄两遍必然漂移。
+  //
   // 老页面还在引它：留一版空壳，避免 404（下一版删除）
   if (path === "/_crm/api.js") {
     return new Response(SHIM_JS, {
@@ -138,7 +130,8 @@ function platformFile(path: string, map: HostMap, env: SiteEnv): Response | null
  * 兼容壳：`/_crm/api.js` 只保留"什么都没做"的空实现。
  *
  * 旧版本会 patch `window.fetch` 补 Authorization、并暴露 `window.CRM.token`——
- * 那等于把长期凭证交给页面脚本。现在凭证只存在 `/_crm/sdk.js` 的闭包里。
+ * 那等于把长期凭证交给页面脚本。现在凭证只存在 `/_crm/sdk.js` 的闭包里
+ * （产物里那份，见 `src/site/sdk.ts`）。
  */
 const SHIM_JS = `(function () {
   if (!window.CRM_API_BASE && window.console) { console.warn("[crm] CRM_API_BASE 未配置"); }
@@ -177,8 +170,12 @@ export default {
       });
     }
 
+    // `/_crm/config.js` 是**算出来的**（跟着域名走），由代码送；
+    // `/_crm/sdk.js` 与 `/_crm/return.html` 是**发布产物**，落到下面的 R2 读。
     if (url.pathname.startsWith("/_crm/")) {
-      return platformFile(url.pathname, map, env) ?? notFound("no such platform file");
+      const res = platformFile(url.pathname, map, env);
+      if (res) return res;
+      // 其余 `/_crm/*` 当成普通产物继续往下走（不再 404）
     }
 
     const active = await activeVersion(env, map.tenant_id);
