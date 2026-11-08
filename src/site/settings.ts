@@ -41,12 +41,7 @@ export const SETTING_FIELDS: Record<string, FieldSpec> = {
   "site.theme.text": { kind: "color" },
   "site.icon.mark": { kind: "text", max: 8 },
   "site.icon.image": { kind: "asset", max: 200 },
-  // 下载入口：**每平台一个官方链接**，留空 = 该平台不出现在下载页
-  // （模板用 `data-if` 整卡隐藏，不做"敬请期待"占位）
-  "site.download.ios": { kind: "url", max: 300 },
-  "site.download.android": { kind: "url", max: 300 },
-  "site.download.windows": { kind: "url", max: 300 },
-  "site.download.macos": { kind: "url", max: 300 },
+  // 下载页的说明文字（入口本身是**集合** `downloads`，见 `DownloadItem`）
   "site.download.note": { kind: "text", max: 120 },
 };
 
@@ -58,10 +53,36 @@ const DEFAULT_BRAND = "#4f46e5";
 
 export type SiteValues = Record<string, unknown>;
 
+// ── 集合：下载入口 ──────────────────────────────────────────────
+//
+// 为什么是集合而不是"每平台一个 URL"：同一平台天然有多个渠道（App Store /
+// TestFlight / 官网直链 / 历史版本）。用设置字段只能选一个，租户就会回去改模板。
+//
+// 平台与渠道都是**封闭集合**：模板按平台分区块（`data-repeat="site.download.ios"`），
+// 平台名就是区块名，不能自由填写。
+
+export const DOWNLOAD_PLATFORMS = ["ios", "android", "windows", "macos"] as const;
+export const DOWNLOAD_KINDS = ["store", "file"] as const;
+/** 一条下载入口。`label` 空着时按 `kind` 兜文案，所以可选 */
+export interface DownloadItem {
+  platform: string;
+  kind: string;
+  label: string;
+  url: string;
+}
+export interface SiteCollections {
+  downloads: DownloadItem[];
+}
+export const EMPTY_COLLECTIONS: SiteCollections = { downloads: [] };
+/** 一条下载条目最多 20 个渠道：够用，且渲染出来还看得下去 */
+const MAX_DOWNLOADS = 20;
+const MAX_LABEL = 24;
+
 export interface SiteSettings {
   /** 乐观锁版本号；`PUT` 时回传，冲突返 409 */
   rev: number;
   values: SiteValues;
+  collections: SiteCollections;
   updatedAt: string | null;
 }
 
@@ -138,6 +159,79 @@ function validate(flat: Record<string, unknown>): { code: string; message: strin
   return null;
 }
 
+/**
+ * 规范化并校验下载条目。**整份替换**：前端提交什么就是什么，顺序即展示顺序。
+ *
+ * 归一化的三件事（都在这里做，读的时候不再兜）：
+ *   - `platform` / `kind` 必须是封闭集合里的值
+ *   - `url` 必须以 http(s) 开头（`javascript:` 会被写进 `href`）
+ *   - `label` 空着时按 `kind` 兜一个：商店 → 应用商店，文件 → 直接下载
+ */
+function normalizeDownloads(
+  raw: unknown,
+): { ok: true; items: DownloadItem[] } | { ok: false; code: string; message: string } {
+  if (raw === undefined || raw === null) return { ok: true, items: [] };
+  if (!Array.isArray(raw)) {
+    return { ok: false, code: "bad_collection", message: "downloads 必须是数组" };
+  }
+  if (raw.length > MAX_DOWNLOADS) {
+    return {
+      ok: false,
+      code: "too_many",
+      message: `下载入口最多 ${MAX_DOWNLOADS} 条`,
+    };
+  }
+  const items: DownloadItem[] = [];
+  for (const [i, entry] of raw.entries()) {
+    const idx = i + 1;
+    if (!isObj(entry)) {
+      return { ok: false, code: "bad_collection", message: `第 ${idx} 条不是对象` };
+    }
+    const platform = typeof entry.platform === "string" ? entry.platform.trim() : "";
+    if (!(DOWNLOAD_PLATFORMS as readonly string[]).includes(platform)) {
+      return {
+        ok: false,
+        code: "bad_platform",
+        message: `第 ${idx} 条的平台只能是 ${DOWNLOAD_PLATFORMS.join(" / ")}`,
+      };
+    }
+    const kind = typeof entry.kind === "string" ? entry.kind.trim() : "";
+    if (!(DOWNLOAD_KINDS as readonly string[]).includes(kind)) {
+      return {
+        ok: false,
+        code: "bad_kind",
+        message: `第 ${idx} 条的渠道只能是 ${DOWNLOAD_KINDS.join(" / ")}`,
+      };
+    }
+    const url = typeof entry.url === "string" ? entry.url.trim() : "";
+    if (!url) {
+      return { ok: false, code: "bad_url", message: `第 ${idx} 条缺少链接` };
+    }
+    if (url.length > 300 || !URL_RE.test(url)) {
+      return {
+        ok: false,
+        code: "bad_url",
+        message: `第 ${idx} 条的链接必须以 https:// 或 http:// 开头（最长 300 字符）`,
+      };
+    }
+    const rawLabel = typeof entry.label === "string" ? entry.label.trim() : "";
+    if (rawLabel.length > MAX_LABEL) {
+      return {
+        ok: false,
+        code: "too_long",
+        message: `第 ${idx} 条的按钮文字最多 ${MAX_LABEL} 个字符`,
+      };
+    }
+    items.push({
+      platform,
+      kind,
+      label: rawLabel || (kind === "store" ? "应用商店" : "直接下载"),
+      url,
+    });
+  }
+  return { ok: true, items };
+}
+
 const trimLeaves = (v: unknown): unknown => {
   if (isObj(v)) {
     const out: Record<string, unknown> = {};
@@ -151,21 +245,39 @@ const trimLeaves = (v: unknown): unknown => {
 export async function readSiteSettings(env: Env): Promise<SiteSettings> {
   // `values` 是 SQLite 保留字（INSERT ... VALUES），必须加反引号
   const row = await env.DB.prepare(
-    "SELECT `values`, rev, updated_at FROM site_settings WHERE id = ?",
+    "SELECT `values`, collections, rev, updated_at FROM site_settings WHERE id = ?",
   )
     .bind(SETTINGS_ROW_ID)
-    .first<{ values: string; rev: number; updated_at: string }>();
+    .first<{
+      values: string;
+      collections: string;
+      rev: number;
+      updated_at: string;
+    }>();
 
   let values: SiteValues = {};
-  if (row?.values) {
-    try {
-      const parsed = JSON.parse(row.values) as unknown;
-      if (isObj(parsed)) values = parsed;
-    } catch {
-      // 坏 JSON 当空处理：宁可回到默认值，也不要让发布失败
-    }
+  let collections: SiteCollections = EMPTY_COLLECTIONS;
+  try {
+    const parsed = JSON.parse(row?.values ?? "{}") as unknown;
+    if (isObj(parsed)) values = parsed;
+  } catch {
+    // 坏 JSON 当空处理：宁可回到默认值，也不要让发布失败
   }
-  return { rev: Number(row?.rev ?? 0), values, updatedAt: row?.updated_at ?? null };
+  try {
+    const parsed = JSON.parse(row?.collections ?? "{}") as unknown;
+    const items = isObj(parsed) ? parsed.downloads : null;
+    if (Array.isArray(items)) {
+      collections = { downloads: items as DownloadItem[] };
+    }
+  } catch {
+    // 同上
+  }
+  return {
+    rev: Number(row?.rev ?? 0),
+    values,
+    collections,
+    updatedAt: row?.updated_at ?? null,
+  };
 }
 
 /**
@@ -176,7 +288,7 @@ export async function readSiteSettings(env: Env): Promise<SiteSettings> {
  */
 export async function saveSiteSettings(
   env: Env,
-  input: { ifRev?: number; values: unknown },
+  input: { ifRev?: number; values: unknown; collections?: unknown },
 ): Promise<SaveResult> {
   if (!isObj(input.values)) {
     return { ok: false, code: "bad_values", message: "values 必须是对象" };
@@ -195,17 +307,34 @@ export async function saveSiteSettings(
   const bad = validate(flat);
   if (bad) return { ok: false, code: bad.code, message: bad.message };
 
+  // 集合：**没传就保持原样**（老客户端只发 settings 时不该把下载入口清空）
+  let collections = current.collections;
+  if (input.collections !== undefined) {
+    const raw = isObj(input.collections) ? input.collections.downloads : input.collections;
+    const norm = normalizeDownloads(raw);
+    if (!norm.ok) return { ok: false, code: norm.code, message: norm.message };
+    collections = { downloads: norm.items };
+  }
+
   const rev = current.rev + 1;
   const now = new Date().toISOString();
   await env.DB.prepare(
-    "INSERT INTO site_settings (id, `values`, rev, updated_at) VALUES (?, ?, ?, ?) " +
+    "INSERT INTO site_settings (id, `values`, collections, rev, updated_at) " +
+      "VALUES (?, ?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET " +
-      "`values` = excluded.`values`, rev = excluded.rev, updated_at = excluded.updated_at",
+      "`values` = excluded.`values`, collections = excluded.collections, " +
+      "rev = excluded.rev, updated_at = excluded.updated_at",
   )
-    .bind(SETTINGS_ROW_ID, JSON.stringify(values), rev, now)
+    .bind(
+      SETTINGS_ROW_ID,
+      JSON.stringify(values),
+      JSON.stringify(collections),
+      rev,
+      now,
+    )
     .run();
 
-  return { ok: true, settings: { rev, values, updatedAt: now } };
+  return { ok: true, settings: { rev, values, collections, updatedAt: now } };
 }
 
 /**
@@ -216,10 +345,12 @@ export async function saveSiteSettings(
  *   - 派生值（`contact_link` / `footer`）——它们**不存库**，每次发布时算
  */
 export function buildScope(
-  values: SiteValues,
+  settings: { values: SiteValues; collections?: SiteCollections },
   fallbackName: string,
   now = new Date(),
 ): Record<string, unknown> {
+  const values = settings.values;
+  const downloads = settings.collections?.downloads ?? [];
   const site = isObj(values.site) ? values.site : {};
   const hero = isObj(site.hero) ? site.hero : {};
   const layout = isObj(site.layout) ? site.layout : {};
@@ -250,13 +381,17 @@ export function buildScope(
         text: str(theme.text) || "#0d1626",
       },
       icon: { mark: str(icon.mark), image: str(icon.image) || null },
-      // 空串 = 没有这个平台，模板据此整块隐藏
+      // 下载入口按**平台分组**：模板写 `data-if="site.download.ios"` 决定整块
+      // 出不出现，写 `data-repeat="site.download.ios"` 决定这一平台有几个按钮。
+      // 空数组 = 这个平台没有入口（`data-if` 把空数组也当空，见 `render.ts`）。
       download: {
-        ios: str(download.ios),
-        android: str(download.android),
-        windows: str(download.windows),
-        macos: str(download.macos),
         note: str(download.note),
+        ...Object.fromEntries(
+          DOWNLOAD_PLATFORMS.map((p) => [
+            p,
+            downloads.filter((d) => d.platform === p),
+          ]),
+        ),
       },
       // ── 派生：不存库，发布时算 ──
       //

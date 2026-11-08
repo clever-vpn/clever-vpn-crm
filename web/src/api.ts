@@ -191,21 +191,28 @@ export interface SiteValues {
     layout?: { shell?: string };
     theme?: { brand?: string; bg?: string; text?: string };
     icon?: { mark?: string; image?: string | null };
-    /** 下载入口：每平台一个官方链接，空 = 该平台不显示 */
-    download?: {
-      ios?: string;
-      android?: string;
-      windows?: string;
-      macos?: string;
-      note?: string;
-    };
+    /** 只有 `note`：下载入口本身是集合（见 `SiteCollections`） */
+    download?: { note?: string };
   };
+}
+
+/** 一条下载入口：platform / kind 是封闭集合（与后端校验一致） */
+export interface DownloadItem {
+  platform: string;
+  kind: string;
+  label: string;
+  url: string;
+}
+
+export interface SiteCollections {
+  downloads: DownloadItem[];
 }
 
 export interface SiteSettingsView {
   /** 乐观锁；保存时回传，冲突返 409 */
   rev: number;
   values: SiteValues;
+  collections: SiteCollections;
   updatedAt: string | null;
 }
 
@@ -249,8 +256,13 @@ export const api = {
   site: () => call<SiteStateView>("GET", "/site"),
   sitePublish: () => call<SitePublishResult>("POST", "/site/publish", {}),
   siteSettings: () => call<{ settings: SiteSettingsView }>("GET", "/site/settings"),
-  saveSiteSettings: (input: { if_rev: number; values: SiteValues }) =>
-    call<{ ok: true; rev: number; values: SiteValues }>("PUT", "/site/settings", input),
+  /** `collections` 不传就不动（只改设置时别把下载入口清空） */
+  saveSiteSettings: (input: {
+    if_rev?: number;
+    values: SiteValues;
+    collections?: SiteCollections;
+  }) =>
+    call<{ ok: true } & SiteSettingsView>("PUT", "/site/settings", input),
   siteDomain: () => call<SiteDomainView>("GET", "/site/domain"),
   siteRollback: (version: number) =>
     call<{ ok: true; active: number }>("POST", "/site/rollback", { version }),

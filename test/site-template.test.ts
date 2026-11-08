@@ -18,64 +18,78 @@ import { buildScope } from "../src/site/settings";
 const page = (name: string): string =>
   readFileSync(resolve(process.cwd(), "site-template", name), "utf8");
 
-function render(name: string, download: Record<string, string>) {
+type Item = { platform: string; kind: string; label: string; url: string };
+
+function render(name: string, downloads: Item[], note = "") {
   const html = page(name);
-  const r = renderTemplate(
+  return renderTemplate(
     html,
-    buildScope({ site: { name: "Acme VPN", download } }, "兜底"),
+    buildScope(
+      {
+        values: { site: { name: "Acme VPN", download: { note } } },
+        collections: { downloads },
+      },
+      "兜底",
+    ),
   );
-  return r;
 }
 
-const ALL = {
-  ios: "https://apps.apple.com/app/id1",
-  android: "https://play.google.com/store/apps/details?id=x",
-  windows: "https://dl.example.com/Acme.exe",
-  macos: "https://dl.example.com/Acme.dmg",
-  note: "Windows 版只有 64 位",
-};
+const item = (
+  platform: string,
+  label: string,
+  url: string,
+  kind = "file",
+): Item => ({ platform, kind, label, url });
 
-describe("下载页：四个平台各一张卡，没有链接就整块不出现", () => {
-  it("全填 ⇒ 四张卡都在，链接原样落到 href", () => {
-    const r = render("download.html", ALL);
+const ALL: Item[] = [
+  item("ios", "前往 App Store", "https://apps.apple.com/app/id1", "store"),
+  item("android", "前往 Google Play", "https://play.google.com/store/apps/details?id=x", "store"),
+  item("windows", "下载 Windows 版", "https://dl.example.com/Acme.exe"),
+  item("macos", "下载 Mac 版", "https://dl.example.com/Acme.dmg"),
+];
+
+describe("下载页：按平台分组，一个平台可以多个渠道", () => {
+  it("四个平台各一条 ⇒ 四张卡都在，链接原样落到 href", () => {
+    const r = render("download.html", ALL, "Windows 版只有 64 位");
     expect(r.missing).toEqual([]);
-    for (const [text, url] of [
-      ["前往 App Store", ALL.ios],
-      ["前往 Google Play", ALL.android],
-      ["下载 Windows 版", ALL.windows],
-      ["下载 Mac 版", ALL.macos],
-    ]) {
-      expect(r.html).toContain(text);
-      expect(r.html).toContain(`href="${url}"`);
+    for (const d of ALL) {
+      expect(r.html).toContain(d.label);
+      expect(r.html).toContain(`href="${d.url}"`);
     }
-    expect(r.html).toContain(ALL.note);
+    expect(r.html).toContain("Windows 版只有 64 位");
   });
 
-  it("只填 iOS ⇒ 别的平台连标题都不出现", () => {
-    const r = render("download.html", { ios: ALL.ios });
+  it("同一平台两条渠道 ⇒ 那张卡里两个按钮，顺序跟录入一致", () => {
+    const r = render("download.html", [
+      item("windows", "64 位安装包", "https://dl.test/win-x64.exe"),
+      item("windows", "32 位安装包", "https://dl.test/win-x86.exe"),
+    ]);
     expect(r.missing).toEqual([]);
-    expect(r.html).toContain("前往 App Store");
-    for (const gone of ["前往 Google Play", "下载 Windows 版", "下载 Mac 版"]) {
-      expect(r.html).not.toContain(gone);
-    }
-    // 备注没填 ⇒ 那一行也不该留个空 <p>
-    expect(r.html).not.toContain(`data-if="site.download.note"`);
+    const x64 = r.html.indexOf("64 位安装包");
+    const x86 = r.html.indexOf("32 位安装包");
+    expect(x64).toBeGreaterThan(-1);
+    expect(x86).toBeGreaterThan(x64);
+    // 只有一个平台有货 ⇒ 别的平台连标题都不出现
+    expect(r.html).toContain(">Windows<");
+    expect(r.html).not.toContain("iPhone / iPad");
+    expect(r.html).not.toContain(">Android<");
+    expect(r.html).not.toContain(">Mac<");
   });
 
-  it("一个都没填 ⇒ 页面仍完整，不留半截标签", () => {
-    const r = render("download.html", {});
+  it("一个渠道都没有 ⇒ 页面仍完整，不留半截标签", () => {
+    const r = render("download.html", []);
     expect(r.missing).toEqual([]);
     expect(r.html).toContain("下载客户端");
     expect(r.html).toContain("装好之后");
-    // 渲染后不该再有指令或占位符
     expect(r.html).not.toContain("{{");
     expect(r.html).not.toContain("data-if");
+    expect(r.html).not.toContain("data-repeat");
   });
 
   it("链接里的引号被转义，不能拿来逃出 href", () => {
-    const r = render("download.html", {
-      ios: 'https://x.test/"><script>alert(1)</script>',
-    });
+    const r = render("download.html", [
+      item("ios", "x", 'https://x.test/"><script>alert(1)</script>', "store"),
+    ]);
     expect(r.html).toContain("&quot;&gt;&lt;script&gt;");
     expect(r.html).not.toContain("<script>alert(1)</script>");
   });
@@ -84,7 +98,7 @@ describe("下载页：四个平台各一张卡，没有链接就整块不出现"
 describe("其它页面：不留占位符、不留指令", () => {
   for (const name of ["index.html", "pricing.html", "login.html", "account.html"]) {
     it(name, () => {
-      const r = render(name, {});
+      const r = render(name, []);
       expect(r.missing).toEqual([]);
       expect(r.html).not.toContain("{{");
       expect(r.html).not.toContain("data-repeat");

@@ -11,6 +11,7 @@ import {
   Input,
   Popconfirm,
   Row,
+  Select,
   Space,
   Statistic,
   Table,
@@ -23,6 +24,8 @@ import {
 import {
   api,
   ApiError,
+  type DownloadItem,
+  type SiteCollections,
   type SiteDomainView,
   type SiteStateView,
   type SiteSettingsView,
@@ -125,7 +128,10 @@ export default function Site() {
 
   async function saveSettings(raw: unknown) {
     setBusy(true);
-    const values = raw as SiteValues;
+    // 表单里 settings 与集合在一个 `Form` 下（一次保存、一个 rev），
+    // 提交时再拆成两段：`values` 走设置校验，`collections` 走集合校验。
+    const form = raw as SiteValues & { collections?: SiteCollections };
+    const { collections: rawCollections, ...values } = form;
     try {
       const picked = values.site?.theme?.brand as
         | string
@@ -141,6 +147,11 @@ export default function Site() {
             ...(values.site ?? {}),
             theme: { ...(values.site?.theme ?? {}), brand },
           },
+        },
+        collections: {
+          downloads: (rawCollections?.downloads ?? []).filter(
+            (d: DownloadItem) => d?.url,
+          ),
         },
       });
       setSettings({ ...res, updatedAt: null });
@@ -335,12 +346,16 @@ export default function Site() {
               image: settings?.values?.site?.icon?.image ?? null,
             },
             download: {
-              ios: settings?.values?.site?.download?.ios ?? "",
-              android: settings?.values?.site?.download?.android ?? "",
-              windows: settings?.values?.site?.download?.windows ?? "",
-              macos: settings?.values?.site?.download?.macos ?? "",
               note: settings?.values?.site?.download?.note ?? "",
             },
+          },
+          collections: {
+            downloads: (settings?.collections?.downloads ?? []).map((d) => ({
+              platform: d.platform,
+              kind: d.kind,
+              label: d.label,
+              url: d.url,
+            })),
           },
         }}
         onFinish={saveSettings}
@@ -402,32 +417,85 @@ export default function Site() {
           下载入口
         </Divider>
         <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
-          填了哪个就显示哪个；空着的平台在下载页上整块不出现。
+          一个平台可以挂多个渠道（商店、TestFlight、官网直链、历史版本）。
+          按钮顺序就是这里的顺序；平台下一条都没有，那一块在下载页上不出现。
         </Typography.Paragraph>
-        {(
-          [
-            ["ios", "iPhone / iPad（App Store）", "https://apps.apple.com/app/id000000000"],
-            ["android", "Android（Google Play）", "https://play.google.com/store/apps/details?id=..."],
-            ["windows", "Windows 安装包", "https://dl.example.com/AcmeVPN-Setup.exe"],
-            ["macos", "Mac 安装包", "https://dl.example.com/AcmeVPN.dmg"],
-          ] as const
-        ).map(([key, label, placeholder]) => (
-          <Form.Item
-            key={key}
-            label={label}
-            name={["site", "download", key]}
-            rules={[
-              {
-                pattern: /^https?:\/\/\S+$/i,
-                message: "必须是 http:// 或 https:// 开头的完整地址",
-              },
-              { max: 300, message: "最多 300 个字符" },
-            ]}
-            extra="留空 = 不上架这个平台"
-          >
-            <Input placeholder={placeholder} />
-          </Form.Item>
-        ))}
+        <Form.List name={["collections", "downloads"]}>
+          {(fields, { add, remove }) => (
+            <>
+              {fields.map((field) => (
+                <Row key={field.key} gutter={8} align="top" style={{ marginBottom: 8 }}>
+                  <Col span={5}>
+                    <Form.Item
+                      name={[field.name, "platform"]}
+                      rules={[{ required: true, message: "选平台" }]}
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Select
+                        options={[
+                          { value: "ios", label: "iPhone / iPad" },
+                          { value: "android", label: "Android" },
+                          { value: "windows", label: "Windows" },
+                          { value: "macos", label: "Mac" },
+                        ]}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col span={4}>
+                    <Form.Item name={[field.name, "kind"]} style={{ marginBottom: 0 }}>
+                      <Select
+                        options={[
+                          { value: "store", label: "应用商店" },
+                          { value: "file", label: "直接下载" },
+                        ]}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col span={5}>
+                    <Form.Item
+                      name={[field.name, "label"]}
+                      rules={[{ max: 24, message: "最多 24 个字符" }]}
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Input placeholder="按钮文字（可空）" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item
+                      name={[field.name, "url"]}
+                      rules={[
+                        { required: true, message: "填链接" },
+                        {
+                          pattern: /^https?:\/\/\S+$/i,
+                          message: "必须以 http(s):// 开头",
+                        },
+                      ]}
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Input placeholder="https://…" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={2}>
+                    <Button danger type="text" onClick={() => remove(field.name)}>
+                      删除
+                    </Button>
+                  </Col>
+                </Row>
+              ))}
+              <Button
+                block
+                type="dashed"
+                onClick={() =>
+                  add({ platform: "windows", kind: "file", label: "", url: "" })
+                }
+                style={{ marginBottom: 16 }}
+              >
+                添加下载入口
+              </Button>
+            </>
+          )}
+        </Form.List>
+
         <Form.Item
           label="下载页补充说明"
           name={["site", "download", "note"]}

@@ -1036,6 +1036,14 @@ export const siteSettings = sqliteTable("site_settings", {
    * 为什么不是一个字段一列：字段集合由模板声明，列式会一直加列。
    */
   values: text("values").notNull().default("{}"),
+  /**
+   * **集合：也是单列 JSON**，形状 `{ downloads: DownloadItem[] }`。
+   *
+   * 与 `values` 分开的理由：设置是"一个路径一个值"，集合是"一个路径一张表"，
+   * 校验规则与后台控件都不一样（键值对 vs 增删行）。但仍在**同一行**——
+   * 保存要原子（发布时两份一起烘焙），乐观锁也只该有一个号。
+   */
+  collections: text("collections").notNull().default("{}"),
   /** 乐观锁：每次写 +1。CRM 后台与 studio 都能改，`PUT` 带 `if_rev`，不匹配返 409 */
   rev: integer("rev").notNull().default(0),
   // ── 以下 7 列是 v1 的列式字段，**已废弃**：数据搬进 `values` 后只读不再写。

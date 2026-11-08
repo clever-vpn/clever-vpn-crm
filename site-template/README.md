@@ -44,7 +44,7 @@ R2、GitHub Pages、自家服务器都行），通过 HTTP 调 CRM 的接口。
 | `pricing.html` | 套餐列表 + 购买按钮（全走 `SiteCrm`） |
 | `login.html` | 邮箱验证码登录（`SiteCrm.sendCode` / `verify`） |
 | `account.html` | 我的订阅 / 订单 / 兑换码 / 退出登录 |
-| `download.html` | 下载页（四个平台的链接来自后台「下载入口」设置，留空即不显示） |
+| `download.html` | 下载页（入口来自后台「下载入口」表格：一个平台可挂多个渠道，没填的平台整块不显示） |
 | `legal/` | 条款与隐私（**请换成你自己的文本**） |
 | `site.css` | 样式，随便改 |
 

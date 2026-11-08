@@ -43,22 +43,34 @@
         <div class="card" data-if="site.download.ios">
           <h2>iPhone / iPad</h2>
           <p class="hint">从 App Store 安装，装好后用邮箱登录。</p>
-          <a class="btn" href="{{site.download.ios}}" rel="noopener">前往 App Store</a>
+          <div class="row" style="margin-top:14px">
+            <a class="btn" data-repeat="site.download.ios" data-as="d"
+               href="{{d.url}}" rel="noopener">{{d.label}}</a>
+          </div>
         </div>
         <div class="card" data-if="site.download.android">
           <h2>Android</h2>
           <p class="hint">从 Google Play 安装，装好后用邮箱登录。</p>
-          <a class="btn" href="{{site.download.android}}" rel="noopener">前往 Google Play</a>
+          <div class="row" style="margin-top:14px">
+            <a class="btn" data-repeat="site.download.android" data-as="d"
+               href="{{d.url}}" rel="noopener">{{d.label}}</a>
+          </div>
         </div>
         <div class="card" data-if="site.download.windows">
           <h2>Windows</h2>
-          <p class="hint">下载安装包，双击安装；64 位 Windows 10 及以上。</p>
-          <a class="btn" href="{{site.download.windows}}" rel="noopener">下载 Windows 版</a>
+          <p class="hint">下载安装包后双击运行；64 位 Windows 10 及以上。</p>
+          <div class="row" style="margin-top:14px">
+            <a class="btn" data-repeat="site.download.windows" data-as="d"
+               href="{{d.url}}" rel="noopener">{{d.label}}</a>
+          </div>
         </div>
         <div class="card" data-if="site.download.macos">
           <h2>Mac</h2>
-          <p class="hint">下载 dmg，拖进「应用程序」；Apple 芯片与 Intel 都支持。</p>
-          <a class="btn" href="{{site.download.macos}}" rel="noopener">下载 Mac 版</a>
+          <p class="hint">下载 dmg 后拖进「应用程序」；Apple 芯片与 Intel 都支持。</p>
+          <div class="row" style="margin-top:14px">
+            <a class="btn" data-repeat="site.download.macos" data-as="d"
+               href="{{d.url}}" rel="noopener">{{d.label}}</a>
+          </div>
         </div>
       </div>
 
