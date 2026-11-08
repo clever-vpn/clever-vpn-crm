@@ -101,76 +101,60 @@
     </footer>
 
 <script src="config.js"></script>
-      <script src="api.js"></script>
+    <script src="/_crm/sdk.js"></script>
     <script>
-      const $ = (id) => document.getElementById(id);
-      const flash = (kind, text) => {
-        $('flash').innerHTML = text ? `<div class="${kind}">${text}</div>` : '';
-      };
-      const next = () => {
-        const n = new URLSearchParams(location.search).get('next');
+      (function () {
+        var $ = function (id) { return document.getElementById(id); };
+        function flash(kind, text) {
+          $('flash').innerHTML = text
+            ? '<div class="' + kind + '">' + SiteCrm.escape(text) + '</div>' : '';
+        }
         // 只接受站内路径，避免开放重定向
-        return n && !n.startsWith('//') ? n : 'account.html';
-      };
-
-      async function post(path, body) {
-        const res = await fetch(`${API_BASE}/api/app/v1${path}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data?.error?.message || data?.error?.code || `HTTP ${res.status}`);
-        return data;
-      }
-
-      // 分享链接形如 /login?ref=FRIEND-A1B2 ：预填，但**不隐藏**输入框，
-      // 用户可以看见并改掉（iOS 拿不到 deferred deep link，只能靠这条路）
-      const refFromUrl = new URLSearchParams(location.search).get('ref');
-      if (refFromUrl) $('ref').value = refFromUrl.trim().toUpperCase();
-
-      $('send').addEventListener('click', async () => {
-        flash('', '');
-        const email = $('email').value.trim();
-        if (!email) return flash('err', '先填邮箱');
-        $('send').disabled = true;
-        try {
-          const r = await post('/auth/send-code', { email });
-          if (r.code) {
-            $('devcode').hidden = false;
-            $('devcode').textContent = `开发环境回显验证码：${r.code}`;
-            $('code').value = r.code;
-          } else {
-            $('devcode').hidden = true;
-            flash('ok', '验证码已发送，请查收邮件');
-          }
-        } catch (e) {
-          flash('err', e.message);
-        } finally {
-          $('send').disabled = false;
+        function next() {
+          var n = new URLSearchParams(location.search).get('next');
+          if (!n || n.charAt(0) === '/' || /^[a-z]+:/i.test(n)) return 'account.html';
+          return n;
         }
-      });
 
-      $('verify').addEventListener('click', async () => {
-        flash('', '');
-        const email = $('email').value.trim();
-        const code = $('code').value.trim();
-        const ref = $('ref').value.trim();
-        try {
-          // 静态站与 CRM 不同源 ⇒ 不用 Cookie，把 token 存进 localStorage，
-          // 之后 api.js 会给每个打到 CRM 的请求补 Authorization
-          const r = await post('/auth/verify', {
-            email,
-            code,
-            appId: 'website',
-            ...(ref ? { referral_code: ref } : {}),
+        // 分享链接形如 /login?ref=FRIEND-A1B2：预填但**不隐藏**，用户看得见也能改
+        var ref = new URLSearchParams(location.search).get('ref');
+        if (ref) $('ref').value = ref.trim().toUpperCase();
+
+        $('send').addEventListener('click', function () {
+          var email = $('email').value.trim();
+          if (!email) { flash('err', '先填邮箱'); return; }
+          $('send').disabled = true;
+          SiteCrm.sendCode(email).then(function (r) {
+            if (r.devCode) {
+              $('devcode').hidden = false;
+              $('devcode').textContent = '开发环境回显验证码：' + r.devCode;
+              $('code').value = r.devCode;
+            } else {
+              $('devcode').hidden = true;
+              flash('ok', '验证码已发送，请查收邮件');
+            }
+          }).catch(function (e) {
+            flash('err', e.message || '发送失败，请稍后再试');
+          }).finally(function () {
+            $('send').disabled = false;
           });
-          if (r.session_token) CrmAuth.set(r.session_token);
-          location.assign(next());
-        } catch (e) {
-          flash('err', e.message);
-        }
-      });
+        });
+
+        $('verify').addEventListener('click', function () {
+          var email = $('email').value.trim();
+          var code = $('code').value.trim();
+          var r = $('ref').value.trim();
+          if (!email || !code) { flash('err', '邮箱和验证码都要填'); return; }
+          $('verify').disabled = true;
+          SiteCrm.verify(email, code, r).then(function () {
+            location.assign(next());
+          }).catch(function (e) {
+            flash('err', e.message || '登录失败，请重试');
+          }).finally(function () {
+            $('verify').disabled = false;
+          });
+        });
+      })();
     </script>
 
   </body>

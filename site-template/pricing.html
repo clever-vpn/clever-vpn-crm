@@ -81,130 +81,86 @@
     </footer>
 
     <script src="config.js"></script>
-    <script src="api.js"></script>
+    <script src="/_crm/sdk.js"></script>
     <script>
-      /*
-       * 这个页面的纪律：**不含任何业务规则**。
-       *
-       *   · 价格  → 直接渲染 `display_price_minor`（活动价已由 CRM 算进）
-       *   · 划线  → 只有 `compare_at_price_minor` 有值才加删除线
-       *   · 能不能买 → 只读 `buyable`；为什么不能买 → 只显示 `reason`
-       *   · 按钮文案 → 只按 `action` 查表（契约 §2.4.8：前端不判断，只渲染）
-       *
-       * 反面教材（旧版做过）：`promo_price_minor < price_minor` 比较、按 action
-       * 自己 switch 出 "能不能买" 的集合、按 action 分支算应付金额。
-       */
-      const $ = (id) => document.getElementById(id);
-      const flash = (kind, text) => {
-        $('flash').innerHTML = text ? `<div class="notice ${kind}">${text}</div>` : '';
-      };
-      const esc = (s) =>
-        String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-      /** 金额一律走 Intl：不写死 ¥，货币由 CRM 的 `currency` 决定 */
-      const money = (minor, currency) => {
-        if (typeof minor !== 'number') return '—';
-        try {
-          return new Intl.NumberFormat('zh-CN', {
-            style: 'currency',
-            currency: currency || 'CNY',
-          }).format(minor / 100);
-        } catch {
-          return `${(minor / 100).toFixed(2)} ${currency || ''}`.trim();
+      // 本页只做三件事：拿套餐 / 画卡片 / 处理点击。
+      // 价格、划线价、角标、按钮文案、能不能买 —— 全部由 SDK 给，页面不判断。
+      (function () {
+        var $ = function (id) { return document.getElementById(id); };
+        var KIND = { period: '按时长', traffic: '按流量', addon: '加量包', trial: '免费试用' };
+        function flash(kind, text) {
+          $('flash').innerHTML = text
+            ? '<div class="' + kind + '">' + SiteCrm.escape(text) + '</div>' : '';
         }
-      };
 
-      // 动作 → 文案。表里没有的动作按"不可购买"渲染，绝不自创动作。
-      const ACTION_LABEL = {
-        buy: '立即购买',
-        renewal: '续订',
-        upgrade: '升级到这个套餐',
-        login_required: '登录后订阅',
-        blocked: '暂不可购买',
-      };
-
-      const KIND_LABEL = { period: '周期套餐', traffic: '流量套餐', addon: '加量包' };
-
-      /** 权益行：只做单位拼接，不做判断 */
-      function specLines(p) {
-        const out = [];
-        if (p.kind === 'period') {
-          out.push(p.monthly_quota_gb === null ? '每月不限量' : `每月 ${p.monthly_quota_gb} GB`);
-        } else if (p.kind === 'traffic') {
-          out.push(p.traffic_gb === null ? '不限量' : `共 ${p.traffic_gb} GB`);
-        } else if (p.kind === 'addon') {
-          out.push(p.traffic_gb === null ? '加量包' : `加 ${p.traffic_gb} GB`);
+        function card(p) {
+          var el = document.createElement('div');
+          el.className = 'plan' + (p.compareAt ? ' hot' : '');
+          var specs = p.specs.map(function (s) {
+            return '<li>' + SiteCrm.escape(s) + '</li>';
+          }).join('');
+          var cta = p.buyable
+            ? '<button class="btn" type="button" data-plan="' + SiteCrm.escape(p.id) + '">'
+                + SiteCrm.escape(p.cta) + '</button>'
+            : '<button class="ghost" type="button" disabled>' + SiteCrm.escape(p.cta) + '</button>';
+          el.innerHTML =
+            '<div class="row" style="justify-content:space-between;align-items:flex-start">'
+            + '<div><p class="plan-name">' + SiteCrm.escape(p.name) + '</p>'
+            + '<span class="tag">' + SiteCrm.escape(KIND[p.kind] || p.kind) + '</span></div>'
+            + (p.badge ? '<span class="badge">' + SiteCrm.escape(p.badge) + '</span>' : '')
+            + '</div>'
+            + '<div class="amount"><span class="now">' + SiteCrm.escape(p.price) + '</span>'
+            + (p.compareAt ? '<span class="was">' + SiteCrm.escape(p.compareAt) + '</span>' : '')
+            + '</div>'
+            + '<div class="per">' + (p.action === 'renewal' ? '续订价' : '实付价格') + '</div>'
+            + '<ul class="spec">' + specs + '</ul>'
+            + '<div class="plan-cta">' + cta
+            + (!p.buyable && p.reason
+                ? '<div class="blocked">' + SiteCrm.escape(p.reason) + '</div>' : '')
+            + '</div>';
+          return el;
         }
-        const days = p.validity_days ?? p.term_days;
-        if (typeof days === 'number') out.push(`${days} 天有效期`);
-        if (typeof p.speed === 'string' && p.speed) out.push(p.speed);
-        if (typeof p.licence_limit === 'number') out.push(`${p.licence_limit} 台设备`);
-        if (p.action === 'renewal' && p.next_expires_at) {
-          out.push(`续订后有效期至 ${String(p.next_expires_at).slice(0, 10)}`);
+
+        function buy(btn) {
+          var planId = btn.getAttribute('data-plan');
+          var label = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '正在准备支付…';
+          SiteCrm.checkout({ planId: planId }).then(function (r) {
+            flash('ok', '已打开支付页（单号 ' + r.orderCode + '）。付完后回到本站，「我的」里就会显示最新状态。');
+          }).catch(function (e) {
+            if (e.code === 'http_401' || e.code === 'unauthorized') {
+              location.assign('login.html?next=pricing.html');
+              return;
+            }
+            flash('err', e.message || '下单失败，请稍后再试');
+          }).finally(function () {
+            btn.disabled = false;
+            btn.textContent = label;
+          });
         }
-        return out;
-      }
 
-      function card(p) {
-        const canBuy = p.buyable !== false;
-        const label = ACTION_LABEL[p.action] ?? ACTION_LABEL.blocked;
-        const href = p.action === 'login_required'
-          ? 'login.html?next=pricing.html'
-          : `checkout.html?plan=${encodeURIComponent(p.plan_id)}`;
-        // 兼容兜底（契约 A.1.1）：老服务端不给 `display_price_minor` 时退回标价
-        const price = typeof p.display_price_minor === 'number'
-          ? p.display_price_minor
-          : p.price_minor;
-        const was = typeof p.compare_at_price_minor === 'number'
-          ? `<span class="was">${esc(money(p.compare_at_price_minor, p.currency))}</span>`
-          : '';
-
-        const el = document.createElement('div');
-        el.className = 'plan' + (p.compare_at_price_minor ? ' hot' : '');
-        el.innerHTML = `
-          <div class="row" style="justify-content:space-between;align-items:flex-start">
-            <div>
-              <p class="plan-name">${esc(p.name)}</p>
-              <span class="tag">${esc(KIND_LABEL[p.kind] ?? p.kind)}</span>
-            </div>
-            ${p.promo_badge ? `<span class="badge">${esc(p.promo_badge)}</span>` : ''}
-          </div>
-          <div class="amount">
-            <span class="now">${esc(money(price, p.currency))}</span>
-            ${was}
-          </div>
-          <div class="per">${p.action === 'renewal' ? '续订价' : '实付价格'}</div>
-          <ul class="spec">${specLines(p).map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
-          <div class="plan-cta">
-            ${canBuy
-              ? `<a class="btn" href="${href}">${esc(label)}</a>`
-              : `<button class="ghost" type="button" disabled>${esc(label)}</button>`}
-            ${!canBuy && p.reason ? `<div class="blocked">${esc(p.reason)}</div>` : ''}
-          </div>
-        `;
-        return el;
-      }
-
-      (async () => {
-        try {
-          const res = await fetch(`${window.CRM_API_BASE}/api/app/v1/plans`);
-          const plans = await res.json();
-          if (!res.ok) throw new Error(plans?.error?.message || `HTTP ${res.status}`);
-          const box = $('plans');
+        SiteCrm.plans().then(function (plans) {
+          var box = $('plans');
           box.innerHTML = '';
           if (!plans.length) {
             box.innerHTML = '<div class="card empty">现在没有在售套餐，请稍后再来。</div>';
             return;
           }
-          box.classList.toggle('cols-3', plans.length % 3 === 0 && plans.length > 2);
-          // 只有一个套餐时居中显示，别占半屏留一片空白
+          box.classList.toggle('cols-3', plans.length > 2);
           box.classList.toggle('solo', plans.length === 1);
-          for (const p of plans) box.appendChild(card(p));
-        } catch (e) {
+          plans.forEach(function (p) { box.appendChild(card(p)); });
+        }).catch(function (e) {
           $('plans').innerHTML = '';
-          flash('err', `加载套餐失败：${esc(e.message)}`);
-        }
+          flash('err', '加载套餐失败：' + (e.message || '请稍后重试'));
+        });
+
+        $('plans').addEventListener('click', function (ev) {
+          var btn = ev.target.closest('button[data-plan]');
+          if (btn) buy(btn);
+        });
       })();
     </script>
+
   </body>
 </html>

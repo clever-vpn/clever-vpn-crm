@@ -39,12 +39,10 @@ R2、GitHub Pages、自家服务器都行），通过 HTTP 调 CRM 的接口。
 
 | 文件 | 作用 |
 |---|---|
-| `config.js` | **唯一需要你改的文件**：CRM 地址 |
-| `api.js` | 给 `fetch` 自动补 `Authorization: Bearer`；登录态读写 `localStorage` |
+| `config.js` | **唯一需要你改的文件**：CRM 地址（发布时会被 CRM 改写） |
 | `index.html` | 首页 |
-| `pricing.html` | 套餐列表（`GET /plans`，免登录） |
-| `login.html` | 邮箱验证码登录，成功后把 `session_token` 存进 `localStorage` |
-| `checkout.html` | 选支付方式下单，跳到网关 |
+| `pricing.html` | 套餐列表 + 购买按钮（全走 `SiteCrm`） |
+| `login.html` | 邮箱验证码登录（`SiteCrm.sendCode` / `verify`） |
 | `account.html` | 我的订阅 / 订单 / 兑换码 / 退出登录 |
 | `download.html` | 下载页 |
 | `legal/` | 条款与隐私（**请换成你自己的文本**） |
@@ -52,8 +50,12 @@ R2、GitHub Pages、自家服务器都行），通过 HTTP 调 CRM 的接口。
 
 ## 改的时候注意
 
-- **接口地址一律走 `API_BASE`**，不要写死相对路径 —— 相对路径会打到静态站自己身上。
-- **登录后不要指望刷新还在**：`api.js` 用 `localStorage`，已经处理好了持久化。
+- **不要自己 `fetch` CRM**：登录、下单、订阅、订单都走 `SiteCrm.*`（平台提供
+  `/_crm/sdk.js`）。凭证只存在 SDK 里，页面拿不到，也不用管 `Authorization` 头。
+- **价格与可售性不要自己算**：`SiteCrm.plans()` 返回的 `price` / `compareAt` /
+  `badge` / `cta` / `buyable` 已经是渲染好的字符串与布尔，直接贴到 DOM 上。
+- **不要自己做支付跳转**：`SiteCrm.checkout({ planId })` 会拿报价、下单、把支付页
+  交给外部浏览器（App 里是 WebView，必须出 App）。
 - **`.html` 后缀是刻意的**：静态托管通常没有"无扩展名重写"，链接里都写成
   `pricing.html`，这样丢到任何 host 上都能跑。想用 `/pricing` 这种干净路径，就在
   你的托管上加重写规则，并把链接改回去。
