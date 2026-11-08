@@ -140,9 +140,25 @@ const tokenValue = (scope: Scope, path: string, missing: string[]): string => {
   return escapeHtml(asText(v));
 };
 
-/** 在给定作用域里替换所有 `{{path}}` */
+/**
+ * 在给定作用域里替换所有 `{{path}}`。
+ *
+ * **HTML 注释里不替换、也不判缺失**：注释是写给人（和 AI）看的说明，不是产物内容。
+ * 否则模板里一句「取值写成 `{{path}}`」的注释就会让发布失败——真实踩过。
+ */
+const COMMENT_RE = /(<!--[\s\S]*?-->)/;
+
 function subst(text: string, scope: Scope, missing: string[]): string {
-  return text.replace(TOKEN_RE, (_all, path: string) => tokenValue(scope, path, missing));
+  return text
+    .split(COMMENT_RE)
+    .map((part, i) =>
+      i % 2 === 1
+        ? part
+        : part.replace(TOKEN_RE, (_all, path: string) =>
+            tokenValue(scope, path, missing),
+          ),
+    )
+    .join("");
 }
 
 /**
@@ -215,7 +231,9 @@ function renderInto(html: string, scope: Scope, missing: string[]): string {
 export function renderTemplate(src: string, scope: Scope): RenderResult {
   const missing: string[] = [];
   const html = renderInto(src, scope, missing);
-  // 兜底：指令之外还残留花括号（畸形写法），也算未定义路径
-  for (const m of html.matchAll(TOKEN_RE)) missing.push(m[1] ?? "");
+  // 兜底：指令之外还残留花括号（畸形写法），也算未定义路径。
+  // 注释里的不算——那只是说明文字。
+  const scan = html.replace(/<!--[\s\S]*?-->/g, "");
+  for (const m of scan.matchAll(TOKEN_RE)) missing.push(m[1] ?? "");
   return { html, missing: [...new Set(missing)] };
 }
