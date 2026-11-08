@@ -127,4 +127,30 @@ describe("plans[].payment_methods 只反映实例级可用性", () => {
     const plans = (await res.json()) as (PlanView & Record<string, unknown>)[];
     expect(plans.every((p) => !("sales_channels" in p))).toBe(true);
   });
+  it("渲染字段齐全：前端不需要再判断价格能不能买", async () => {
+    const plans = (await (await call("/api/app/v1/plans")).json()) as (PlanView & {
+      price_minor: number;
+      promo_price_minor: number | null;
+      display_price_minor: number;
+      compare_at_price_minor: number | null;
+      buyable: boolean;
+      action: string;
+    })[];
+    expect(plans.length).toBeGreaterThan(0);
+    for (const p of plans) {
+      // 直接渲染这个价（老 CRM 才有 `?? price_minor` 的兜底）
+      expect(p.display_price_minor).toBe(p.promo_price_minor ?? p.price_minor);
+      // 只有活动价**真的更低**才给划线价，否则 100→100 是假折扣
+      expect(p.compare_at_price_minor).toBe(
+        p.promo_price_minor !== null && p.promo_price_minor < p.price_minor
+          ? p.price_minor
+          : null,
+      );
+      expect(typeof p.buyable).toBe("boolean");
+      // 只有 blocked 才是真不可买
+      expect(p.buyable).toBe(p.action !== "blocked");
+    }
+    // 游客只是"还差登录"，不能因此把按钮置灰（那会掐掉主转化路径）
+    expect(plans.every((p) => p.buyable)).toBe(true);
+  });
 });
