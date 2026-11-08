@@ -980,6 +980,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
       codeId: promo.codeId,
       entry,
       origin: new URL(request.url).origin,
+      // 站点 SDK 传 `/_crm/return`；不传则回退到本站根（旧行为）
+      returnUrl: typeof body.return_url === "string" ? body.return_url : undefined,
       clientIp: clientIp(request),
     });
     if (!result.ok) return err(result.status, result.code, result.message);

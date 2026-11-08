@@ -78,6 +78,11 @@ export interface CreateChargeInput {
   entry?: string | null;
   /** 本站 origin（拼 pay_url 与 notify_url 用） */
   origin: string;
+  /**
+   * 用户付完回哪个页面（调用方给，站点 SDK 传自己的 `/_crm/return`）。
+   * 没给就回本站根 —— 那是 CRM 自己的域名，不是站点，只作为兜底。
+   */
+  returnUrl?: string;
   clientIp?: string;
   now?: Date;
   /**
@@ -115,6 +120,14 @@ function routeForTest(
   if (!parseMethods(gateway.methods).includes(method)) return null;
   const mapping = mappingOf(gateway);
   return mapping ? { gateway, mapping } : null;
+}
+
+/** 把 `order=<code>` 拼到调用方给的地址上（它可能是 `/x` 也可能是 `/x?a=1`） */
+function withOrderCode(base: string | undefined, orderCode: string, origin: string): string {
+  const raw = (base ?? "").trim();
+  const safe = /^https?:\/\/[^\s"'<>]+$/i.test(raw) && raw.length <= 300 ? raw : "";
+  if (!safe) return `${origin}/?order=${orderCode}`;
+  return `${safe}${safe.includes("?") ? "&" : "?"}order=${orderCode}`;
 }
 
 export async function createCharge(env: Env, input: CreateChargeInput): Promise<CreateChargeResult> {
@@ -196,7 +209,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
       subject: input.plan.name,
       method: input.method,
       notifyUrl: `${origin}/api/pay/notify/${route.gateway.id}`,
-      returnUrl: `${origin}/?order=${orderCode}`,
+      returnUrl: withOrderCode(input.returnUrl, orderCode, origin),
       clientIp: input.clientIp,
       endpoint: route.gateway.endpoint ?? "",
       now,

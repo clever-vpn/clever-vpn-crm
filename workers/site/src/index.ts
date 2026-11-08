@@ -14,6 +14,8 @@
  * single / multi 两种部署跑的是**同一份代码**：它只读 KV，不区分模式。
  */
 
+import { RETURN_HTML, SDK_JS } from "./sdk";
+
 export interface SiteEnv {
   HOSTS: KVNamespace;
   SITES: R2Bucket;
@@ -113,8 +115,19 @@ function platformFile(path: string, map: HostMap, env: SiteEnv): Response | null
       headers: { "content-type": MIME.js!, "cache-control": "public, max-age=300" },
     });
   }
+  if (path === "/_crm/sdk.js") {
+    return new Response(SDK_JS, {
+      headers: { "content-type": MIME.js!, "cache-control": "public, max-age=300" },
+    });
+  }
+  if (path === "/_crm/return") {
+    return new Response(RETURN_HTML, {
+      headers: { "content-type": MIME.html!, "cache-control": "no-store" },
+    });
+  }
+  // 老页面还在引它：留一版空壳，避免 404（下一版删除）
   if (path === "/_crm/api.js") {
-    return new Response(API_JS, {
+    return new Response(SHIM_JS, {
       headers: { "content-type": MIME.js!, "cache-control": "public, max-age=300" },
     });
   }
@@ -122,31 +135,14 @@ function platformFile(path: string, map: HostMap, env: SiteEnv): Response | null
 }
 
 /**
- * 平台脚本：只做两件事 —— 给打到 CRM 的请求补 Authorization、读写登录态。
- * 规格见 `contracts/site-crm.md` §6（不许 console.error、不覆盖已有 header）。
+ * 兼容壳：`/_crm/api.js` 只保留"什么都没做"的空实现。
+ *
+ * 旧版本会 patch `window.fetch` 补 Authorization、并暴露 `window.CRM.token`——
+ * 那等于把长期凭证交给页面脚本。现在凭证只存在 `/_crm/sdk.js` 的闭包里。
  */
-const API_JS = `(function () {
-  var BASE = window.CRM_API_BASE || "";
-  if (!BASE && window.console) { console.warn("[crm] CRM_API_BASE 未配置"); }
-  function token() { try { return localStorage.getItem("crm_token") || ""; } catch (e) { return ""; } }
-  var rawFetch = window.fetch;
-  window.fetch = function (input, init) {
-    var url = typeof input === "string" ? input : (input && input.url) || "";
-    if (BASE && url.indexOf(BASE) === 0) {
-      var opts = init || {};
-      var headers = new Headers(opts.headers || (input && input.headers) || {});
-      var t = token();
-      if (t && !headers.has("authorization")) headers.set("Authorization", "Bearer " + t);
-      opts.headers = headers;
-      return rawFetch(input, opts);
-    }
-    return rawFetch(input, init);
-  };
-  window.CRM = {
-    token: token,
-    setToken: function (t) { try { localStorage.setItem("crm_token", t); } catch (e) {} },
-    clearToken: function () { try { localStorage.removeItem("crm_token"); } catch (e) {} }
-  };
+const SHIM_JS = `(function () {
+  if (!window.CRM_API_BASE && window.console) { console.warn("[crm] CRM_API_BASE 未配置"); }
+  window.CRM = window.CRM || {};
 })();
 `;
 
