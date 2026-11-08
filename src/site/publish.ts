@@ -16,6 +16,7 @@
  * （指针是 CRM 自己的东西，site-serve 只读它）。
  */
 import { renderTemplate } from "./render";
+import { RETURN_HTML, SDK_JS } from "./sdk";
 import { buildScope, readSiteSettings } from "./settings";
 
 import type { Env } from "../env";
@@ -228,6 +229,8 @@ export async function publishSite(
   // 1) 先写产物（失败就什么都没有，线上仍是上一版）
   const target = publicPrefix(tenantId, version);
   let bytes = 0;
+  // 产物文件数 = 模板文件 + 平台文件（记账与返回都用它）
+  const files = objects.length + 2;
   for (const o of objects) {
     const rel = o.key.slice(prefix.length);
     const obj = await sites.get(o.key);
@@ -266,6 +269,26 @@ export async function publishSite(
     bytes += o.size;
   }
 
+  // 1b) **平台文件**：SDK 与支付回跳页，每次发布都写进产物。
+  //
+  //  为什么不放站点 Worker 里：站点出口有两份实现（自部署 `workers/site`、
+  //  托管 `site-serve`）。同一段 SDK 抄两遍必然漂移，而它恰恰是"凭证只有一处"
+  //  的那一处。写进产物后两边都只是读 R2，谁也不用知道 SDK 长什么样。
+  //  代价：改 SDK 要重新发布才生效（一次点击，可接受）。
+  //
+  //  `/_crm/` 是平台保留前缀（L0 硬项 H4 禁止模板占用），所以这里先 lint 再注入。
+  const platform: Array<[string, string, string]> = [
+    ["_crm/sdk.js", SDK_JS, "text/javascript; charset=utf-8"],
+    ["_crm/return.html", RETURN_HTML, "text/html; charset=utf-8"],
+  ];
+  for (const [rel, body, type] of platform) {
+    await sites.put(`${target}${rel}`, body, {
+      httpMetadata: { contentType: type, cacheControl: "public, max-age=300" },
+      customMetadata: { platform: "1" },
+    });
+    bytes += body.length;
+  }
+
   // 2) 记账。seq 唯一索引会挡住并发发布撞号
   try {
     await env.DB.prepare(
@@ -276,7 +299,7 @@ export async function publishSite(
         version,
         template,
         templateVersion,
-        objects.length,
+        files,
         bytes,
         input.actor ?? null,
         new Date().toISOString(),
@@ -292,7 +315,7 @@ export async function publishSite(
   return {
     ok: true,
     version,
-    files: objects.length,
+    files,
     bytes,
     template,
     templateVersion,

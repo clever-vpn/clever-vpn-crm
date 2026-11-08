@@ -10,7 +10,7 @@ import vm from "node:vm";
 
 import { describe, expect, it } from "vitest";
 
-import { RETURN_HTML, SDK_JS, SDK_VERSION } from "../workers/site/src/sdk";
+import { RETURN_HTML, SDK_JS, SDK_VERSION } from "../src/site/sdk";
 
 /** 契约 §4.3 的方法表；增删都要先改 `docs/contracts/site-crm.md` */
 const METHODS = [

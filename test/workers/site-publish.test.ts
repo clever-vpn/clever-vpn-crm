@@ -84,7 +84,19 @@ describe("发布", () => {
     await seedTemplate();
 
     const result = await publishSite(env, TENANT, { actor: "admin@test", apiBase: BASE });
-    expect(result).toMatchObject({ ok: true, version: 1, files: 2 });
+    // 2 个模板文件 + 2 个平台文件（SDK、支付回跳页）
+    expect(result).toMatchObject({ ok: true, version: 1, files: 4 });
+
+    // 平台文件随产物发布：两个站点出口（自部署 / 托管）都只是读 R2，
+    // SDK 只有这一份，不会因为出口实现不同而漂移。
+    const sdk = await SITES.get(
+      `sites/${TENANT}/versions/1/public/_crm/sdk.js`,
+    );
+    expect(await sdk?.text()).toContain("window.SiteCrm = SiteCrm");
+    const back = await SITES.get(
+      `sites/${TENANT}/versions/1/public/_crm/return.html`,
+    );
+    expect(await back?.text()).toContain("支付已提交");
 
     const html = await SITES.get(
       `sites/${TENANT}/versions/1/public/index.html`,
