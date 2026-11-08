@@ -990,3 +990,30 @@ export type ReferralRow = typeof referrals.$inferSelect;
 export type RedemptionRow = typeof redemptions.$inferSelect;
 export type PromotionTargetRow = typeof promotionTargets.$inferSelect;
 export type PromotionCodeRow = typeof promotionCodes.$inferSelect;
+
+/**
+ * 站点发布记录（每次发布一行）。**版本号以这张表为准**，KV 里的指针只是"现在服务
+ * 哪一版"。
+ *
+ * 为什么不用 `site_state` 单行改指针：回滚需要知道"历史上有过哪些 n"，
+ * 否则有人手滑指向一个从未发布过的版本，站点会 404 而无从排查。
+ */
+export const siteVersions = sqliteTable(
+  "site_versions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** 正整数，从 1 递增；唯一 —— 并发发布撞号时靠它挡住 */
+    seq: integer("seq").notNull(),
+    /** 模板名与版本：`basic` / `v1`，便于日后知道这版是怎么渲染出来的 */
+    template: text("template").notNull(),
+    template_version: text("template_version").notNull(),
+    files: integer("files").notNull(),
+    bytes: integer("bytes").notNull(),
+    /** 触发者（管理员邮箱）；自动发布时可空 */
+    created_by: text("created_by"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => ({
+    uqSeq: uniqueIndex("uq_site_versions_seq").on(t.seq),
+  }),
+);

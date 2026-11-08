@@ -19,6 +19,9 @@ export default defineConfig({
       // 和 wrangler 用同一份配置：main / compatibility / bindings 全部一致
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
+        // 站点发布要用：HOSTS（指针 site:<id>:active）+ SITES（产物）。
+        // SITES 已在 wrangler.jsonc 里声明；HOSTS 单租户运行时不需要，测试里补上。
+        kvNamespaces: ["HOSTS"],
         bindings: {
           // ⚠️ 读的是**生产链** `migrations/`（不是 `migrations-dev/`）：
           // 这样测试建表用的就是 CI 真正会 apply 的那套 DDL。

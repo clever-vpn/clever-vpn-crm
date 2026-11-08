@@ -23,7 +23,7 @@
  *   HOSTS_KV_ID       站内 KV（与 site-serve 共用同一个命名空间）
  * 可选：
  *   CRM_CONTRACT_VERSION（默认与 wrangler.jsonc 同步维护）、
- *   SITE_URL、EMAIL_FROM（默认 noreply@clever-vpn.org）
+ *   SITE_URL、EMAIL_FROM（默认 noreply@clever-vpn.org）、SITES_BUCKET（默认 clever-sites）
  *
  * ⚠️ **邮件必须在分片里可用**：后台的「邮箱验证码登录」和「忘记密码」都靠它
  * （契约 `site-hosting` §4.8.3）。以前这份配置没带 `send_email`，分片上的
@@ -59,6 +59,9 @@ if (!hostsKvId) {
 const kvBindings = [
   { type: "kv_namespace", name: "HOSTS", namespace_id: hostsKvId },
 ];
+/** 站点产物桶（与 site-serve 同一个）：所有分片共用一个，按 sites/<tenant>/ 隔离 */
+const sitesBucket = process.env.SITES_BUCKET ?? "clever-sites";
+const r2Bindings = [{ type: "r2_bucket", name: "SITES", bucket_name: sitesBucket }];
 const d1Bindings = manifest.bindings.map((b) => ({
   type: "d1",
   name: b.binding,
@@ -92,6 +95,7 @@ const config = `// ⚠️ 自动生成，不要提交（.gitignore 已排除）�
   "observability": { "enabled": true },
   "send_email": [{ "name": "EMAIL" }],
   "kv_namespaces": [{ "binding": "HOSTS", "id": ${JSON.stringify(hostsKvId)} }],
+  "r2_buckets": [{ "binding": "SITES", "bucket_name": ${JSON.stringify(sitesBucket)} }],
   "d1_databases": ${JSON.stringify(
     manifest.bindings.map((b) => ({
       binding: b.binding,
