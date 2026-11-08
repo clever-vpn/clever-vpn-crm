@@ -21,6 +21,7 @@ import {
   LogoutOutlined,
   InboxOutlined,
   MenuOutlined,
+  GlobalOutlined,
   SettingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
@@ -33,6 +34,7 @@ import Orders from "./Orders";
 import Plans from "./Plans";
 import Promotions from "./Promotions";
 import Settings from "./Settings";
+import Site from "./Site";
 import Stores from "./Stores";
 
 interface NavLeaf {
@@ -59,6 +61,7 @@ const NAV: NavItem[] = [
   { key: "/admin/customers", href: "/admin/customers", label: "客户", icon: <TeamOutlined /> },
   { key: "/admin/orders", href: "/admin/orders", label: "订单", icon: <FileTextOutlined /> },
   { key: "/admin/plans", href: "/admin/plans", label: "套餐", icon: <AppstoreOutlined /> },
+  { key: "/admin/site", href: "/admin/site", label: "网站", icon: <GlobalOutlined /> },
   {
     key: "/admin/payments",
     label: "支付",
@@ -168,6 +171,8 @@ export default function Shell({
       <Orders />
     ) : path === "/admin/plans" ? (
       <Plans />
+    ) : path === "/admin/site" ? (
+      <Site />
     ) : path === "/admin/payments/gateways" ? (
       <Gateways />
     ) : path === "/admin/payments/stores" ? (

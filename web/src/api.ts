@@ -5,6 +5,8 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message?: string,
+    /** 原始响应体：L0 闸门之类的失败会带 `issues[]`，页面要逐条展示 */
+    readonly body?: Record<string, unknown>,
   ) {
     super(message ?? code);
   }
@@ -26,6 +28,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       res.status,
       typeof data.error === "string" ? data.error : "request_failed",
       typeof data.message === "string" ? data.message : undefined,
+      data,
     );
   }
   return data as T;
@@ -148,6 +151,32 @@ export interface Quote {
   expires_at: string | null;
 }
 
+/** 站点发布状态：`active` 是**线上正在服务**的版本号，null = 从未发布 */
+export interface SiteVersion {
+  seq: number;
+  template: string;
+  template_version: string;
+  files: number;
+  bytes: number;
+  created_at: string;
+}
+
+export interface SiteStateView {
+  active: number | null;
+  versions: SiteVersion[];
+  /** 模板是否已在 R2；false 时发布必然失败，页面要提前提示 */
+  templateReady: boolean;
+}
+
+export interface SitePublishResult {
+  ok: true;
+  version: number;
+  files: number;
+  bytes: number;
+  template: string;
+  templateVersion: string;
+}
+
 export const api = {
   bootstrap: () => call<Bootstrap>("GET", "/bootstrap"),
   setup: (token: string, email: string, password: string, turnstileToken?: string) =>
@@ -175,6 +204,11 @@ export const api = {
   loginEmailVerify: (email: string, code: string) =>
     call<{ ok?: true; totp_required?: boolean }>("POST", "/login/email/verify", { email, code }),
   logout: () => call<{ ok: true }>("POST", "/logout"),
+  /** 站点：状态 / 发布 / 回滚（产物在 R2，指针在 KV，见 contracts/site-delivery.md §6） */
+  site: () => call<SiteStateView>("GET", "/site"),
+  sitePublish: () => call<SitePublishResult>("POST", "/site/publish", {}),
+  siteRollback: (version: number) =>
+    call<{ ok: true; active: number }>("POST", "/site/rollback", { version }),
   me: () => call<Me>("GET", "/me"),
   changePassword: (current: string, next: string) =>
     call<{ ok: true }>("POST", "/password", { current, next }),
