@@ -14,6 +14,7 @@ import { env } from "./apply-migrations";
 import { activeKey, lintManifest, publishSite, siteState } from "../../src/site/publish";
 
 const TENANT = "42";
+const BASE = "https://acme.clever-panel.win";
 
 /** 这两个绑定在测试里一定存在（`vitest.workers.config.ts` 注入），断言一次省得满屏 `!` */
 const SITES: R2Bucket = env.SITES!;
@@ -81,7 +82,7 @@ describe("发布", () => {
   it("模板进、产物出、指针指到 1", async () => {
     await seedTemplate();
 
-    const result = await publishSite(env, TENANT, { actor: "admin@test" });
+    const result = await publishSite(env, TENANT, { actor: "admin@test", apiBase: BASE });
     expect(result).toMatchObject({ ok: true, version: 1, files: 2 });
 
     const html = await SITES.get(
@@ -99,8 +100,8 @@ describe("发布", () => {
 
   it("再发一版 ⇒ n=2，且第 1 版原样保留（回滚的前提）", async () => {
     await seedTemplate();
-    await publishSite(env, TENANT, {});
-    await publishSite(env, TENANT, {});
+    await publishSite(env, TENANT, { apiBase: BASE });
+    await publishSite(env, TENANT, { apiBase: BASE });
 
     expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 2 });
     expect(
@@ -113,12 +114,12 @@ describe("发布", () => {
 
   it("模板不在 R2 ⇒ 明确报错，指针不动", async () => {
     await seedTemplate();
-    await publishSite(env, TENANT, {});
+    await publishSite(env, TENANT, { apiBase: BASE });
     // 清掉模板，模拟"没上传模板就点发布"
     const listed = await SITES.list({ prefix: "g/templates/basic/" });
     for (const o of listed.objects) await SITES.delete(o.key);
 
-    const again = await publishSite(env, TENANT, {});
+    const again = await publishSite(env, TENANT, { apiBase: BASE });
     expect(again).toMatchObject({ ok: false, code: "template_missing" });
     // 关键：线上仍是 1，不是"半成品 2"
     expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
@@ -127,7 +128,7 @@ describe("发布", () => {
   it("L0 失败 ⇒ 不写产物、不记账、不切指针", async () => {
     await seedTemplate({ "style.css": "h1{color:red}" }); // 没有 index.html
 
-    const result = await publishSite(env, TENANT, {});
+    const result = await publishSite(env, TENANT, { apiBase: BASE });
     expect(result).toMatchObject({ ok: false, code: "l0_failed" });
     expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
 
@@ -139,7 +140,7 @@ describe("发布", () => {
 
   it("没有绑定 R2 ⇒ 报 r2_not_configured，而不是静默成功", async () => {
     const bare = { ...env, SITES: undefined };
-    expect(await publishSite(bare as never, TENANT, {})).toMatchObject({
+    expect(await publishSite(bare as never, TENANT, { apiBase: BASE })).toMatchObject({
       ok: false,
       code: "r2_not_configured",
     });
@@ -151,10 +152,34 @@ describe("状态", () => {
     await seedTemplate();
     expect((await siteState(env, TENANT)).active).toBeNull();
 
-    await publishSite(env, TENANT, {});
+    await publishSite(env, TENANT, { apiBase: BASE });
     const state = await siteState(env, TENANT);
     expect(state.active).toBe(1);
     expect(state.versions[0]).toMatchObject({ seq: 1, template: "basic" });
     expect(state.templateReady).toBe(true);
+  });
+});
+
+describe("config.js：发布时注入 CRM 地址", () => {
+  it("产物里的 config.js 是注入后的，不是模板占位", async () => {
+    await seedTemplate({
+      "index.html": "<!doctype html><h1>Hello</h1>",
+      "config.js": 'window.CRM_API_BASE = "https://crm.example.com";',
+    });
+
+    await publishSite(env, TENANT, { apiBase: BASE });
+
+    const js = await SITES.get(`sites/${TENANT}/versions/1/public/config.js`);
+    const body = (await js?.text()) ?? "";
+    expect(body).toContain(BASE);
+    // 占位值必须消失：它是"站点发上去了但 API 全挂"的典型原因
+    expect(body).not.toContain("crm.example.com");
+  });
+
+  it("没给 apiBase ⇒ 直接拒绝，不写产物", async () => {
+    await seedTemplate();
+    const result = await publishSite(env, TENANT, {});
+    expect(result).toMatchObject({ ok: false, code: "api_base_missing" });
+    expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
   });
 });
