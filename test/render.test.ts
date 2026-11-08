@@ -103,6 +103,15 @@ describe("data-if", () => {
   });
 });
 
+describe("HTML 注释", () => {
+  it("注释里的花括号原样保留，不算缺失（模板里的用法说明）", () => {
+    const src = '<!-- 取值写成 {{path}} --><p>{{site.name}}</p>';
+    const r = renderTemplate(src, scope);
+    expect(r.html).toBe("<!-- 取值写成 {{path}} --><p>Acme</p>");
+    expect(r.missing).toEqual([]);
+  });
+});
+
 describe("纪律：逐字节不变", () => {
   it("没有指令与占位符的文件原样返回", () => {
     const src = '<!doctype html>\n<html><!-- c --><body class="x">hi</body></html>\n';
