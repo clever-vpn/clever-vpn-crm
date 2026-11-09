@@ -380,6 +380,20 @@ export async function handleAdminGateways(
       return fail(409, "driver_locked", "已发布/已停用的网关不能改驱动（新建一条更安全）");
     }
 
+    // 已发布的测试网关不能把白名单清空：清空后它对**任何人**都不可见（含登录用户），
+    // 但后台仍显示"已发布" —— 这是最难查的一类故障，直接在保存时拦住。
+    if (
+      normalized.driver === "mock" &&
+      current.status === "live" &&
+      normalized.allowed_emails.length === 0
+    ) {
+      return fail(
+        400,
+        "mock_whitelist_required",
+        "测试网关必须保留至少一个白名单邮箱（清空后它等于不存在）",
+      );
+    }
+
     const resolved = resolveMapping(normalized.driver, normalized.mapping);
     if (!resolved.ok) return fail(400, "invalid_mapping", resolved.error);
 
