@@ -78,6 +78,10 @@ const vars = {
   SITE_URL: process.env.SITE_URL ?? "",
   // 发信人：域名须已在本账号完成 Email Sending 验证（与 cf-api 用同一个）
   EMAIL_FROM: process.env.EMAIL_FROM ?? "noreply@clever-vpn.org",
+  // 测试支付网关的总开关。**默认开**：它是租户验证支付流程的产品能力，
+  // 而"不对访客开放"由网关自身的白名单保证（`driver='mock'` 白名单为空 =
+  // 对任何人都不存在）。自部署由租户自己决定。
+  ALLOW_MOCK_PAYMENTS: process.env.ALLOW_MOCK_PAYMENTS ?? "true",
 };
 
 /** wrangler 配置：代码 + 资源 + 绑定（首次部署与升级都用它） */
