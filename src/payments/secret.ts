@@ -5,13 +5,16 @@
  * 打包整库）。密钥明文入库等于**每次备份都在泄露商户密钥**。
  *
  * 方案：AES-GCM（认证加密，改一个字节就解不开）+ 主密钥来自 Worker secret
- * `PAYMENT_SECRET_KEY`。密文自带版本前缀，将来换算法/轮换密钥可以双读：
+ * `APP_SECRET`（派生细节见 `src/secrets.ts`：加密用途带独立标签，不与签名共用
+ * 同一段字节）。密文自带版本前缀，将来换算法/轮换密钥可以双读：
  *
  *     v1:<base64(iv || ciphertext||tag)>
  *
  * 不做的事（有意）：不存 `iv` 之外的任何元数据、不做密钥派生参数存储
  * —— 主密钥由运维通过 `wrangler secret put` 管理，不需要我们保管。
  */
+
+import { appSecretConfigured, encryptionKeyOf } from "../secrets";
 
 import type { Env } from "../env";
 
@@ -20,15 +23,7 @@ const IV_BYTES = 12;
 
 /** 主密钥是否就绪（没配 = 不能保存/使用真实网关密钥） */
 export function secretKeyConfigured(env: Env): boolean {
-  return String(env.PAYMENT_SECRET_KEY ?? "").trim() !== "";
-}
-
-async function aesKey(env: Env): Promise<CryptoKey | null> {
-  const raw = String(env.PAYMENT_SECRET_KEY ?? "").trim();
-  if (!raw) return null;
-  // 允许运维填任意长度口令：先 SHA-256 归一到 32 字节，避免"必须是 32 位"的坑
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
-  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  return appSecretConfigured(env);
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -49,7 +44,7 @@ function fromBase64(text: string): Uint8Array {
  * @returns `null` = 没配主密钥（调用方应拒绝保存明文，而不是退化存明文）
  */
 export async function encryptSecret(env: Env, plaintext: string): Promise<string | null> {
-  const key = await aesKey(env);
+  const key = await encryptionKeyOf(env);
   if (!key) return null;
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const ct = await crypto.subtle.encrypt(
@@ -75,7 +70,7 @@ export async function decryptSecret(env: Env, stored: string | null): Promise<st
   const version = stored.slice(0, sep);
   if (version !== VERSION) return null;
 
-  const key = await aesKey(env);
+  const key = await encryptionKeyOf(env);
   if (!key) return null;
 
   let bytes: Uint8Array;

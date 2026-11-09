@@ -15,7 +15,7 @@ function env(over: Partial<Env> = {}): Env {
   return { DB: {} as never, ASSETS: {} as never, ...over };
 }
 
-const KEY = env({ PAYMENT_SECRET_KEY: "unit-test-master-key" });
+const KEY = env({ APP_SECRET: "unit-test-master-key" });
 
 describe("网关密钥加密", () => {
   it("没配主密钥时拒绝加密（不退化成存明文）", async () => {
@@ -39,7 +39,7 @@ describe("网关密钥加密", () => {
 
   it("换主密钥解不开", async () => {
     const enc = await encryptSecret(KEY, "value");
-    expect(await decryptSecret(env({ PAYMENT_SECRET_KEY: "another-key" }), enc)).toBeNull();
+    expect(await decryptSecret(env({ APP_SECRET: "another-key" }), enc)).toBeNull();
   });
 
   it("密文被改一个字节就解不开（GCM 认证）", async () => {

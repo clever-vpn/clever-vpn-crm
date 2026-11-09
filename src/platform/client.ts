@@ -65,7 +65,7 @@ export async function platformAuth(env: Env): Promise<{ base: string; token: str
   if (!creds.token) {
     throw new PlatformError(
       creds.problem === "undecryptable"
-        ? "cf-api token 解不开（PAYMENT_SECRET_KEY 换过，或密文损坏）—— 后台「设置 → cf-api 对接」重新填一把"
+        ? "cf-api token 解不开（主密钥 APP_SECRET 换过，或密文损坏）—— 后台「设置 → cf-api 对接」重新填一把"
         : "未配置 cf-api 凭据（后台「设置 → cf-api 对接」里填）",
       0,
     );

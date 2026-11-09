@@ -37,7 +37,7 @@ function call(path: string, init: { method?: string; body?: unknown } = {}) {
 
 beforeAll(async () => {
   // 本文件需要"配了主密钥"的默认态
-  (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "master-key-for-tests";
+  (env as unknown as Record<string, unknown>).APP_SECRET = "master-key-for-tests";
   (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
 
   const now = new Date().toISOString();
@@ -229,8 +229,8 @@ describe("网关管理", () => {
   });
 
   it("没配主密钥时拒绝保存密钥（不退化成存明文）", async () => {
-    const saved = (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY;
-    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "";
+    const saved = (env as unknown as Record<string, unknown>).APP_SECRET;
+    (env as unknown as Record<string, unknown>).APP_SECRET = "";
     const res = await call("/api/admin/gateways", {
       method: "POST",
       body: {
@@ -242,7 +242,7 @@ describe("网关管理", () => {
         methods: ["alipay"],
       },
     });
-    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = saved;
+    (env as unknown as Record<string, unknown>).APP_SECRET = saved;
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe("secret_key_missing");
   });

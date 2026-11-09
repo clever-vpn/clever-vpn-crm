@@ -46,7 +46,7 @@ const APPLE_SECRET = JSON.stringify({
 
 beforeAll(async () => {
   // CI 没有 `.dev.vars`：没有主密钥就存不了凭据。这里给一把测试用的。
-  (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "test-secret-key";
+  (env as unknown as Record<string, unknown>).APP_SECRET = "test-secret-key";
   await env.DB.prepare(
     `INSERT INTO admin_users (email, password_hash, totp_enabled, created_at, updated_at)
      VALUES (?, ?, 0, ?, ?)`,

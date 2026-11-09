@@ -43,8 +43,7 @@
     }
   ],
   // 由 wrangler secret put 提供（不要写进仓库）：
-  //   SIGNING_SECRET      一次性证明的 HMAC 密钥（退订链接 / mock 回调签名）
-  //   PAYMENT_SECRET_KEY  网关密钥与 cf-api token 的加密主密钥
+  //   APP_SECRET          唯一主密钥：HMAC 签名 + AES-GCM 加密（派生后用途隔离）
   // cf-api 租户 token 不走 secret：后台「设置 → cf-api 对接」填，加密存进 D1
   "vars": {
     "CRM_TENANT_ID": "0",

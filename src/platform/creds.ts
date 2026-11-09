@@ -3,7 +3,7 @@
  *
  * 三条约束：
  *
- *   1. **token 只以密文落库**（`v1:` 前缀，AES-GCM，主密钥 `PAYMENT_SECRET_KEY`）。
+ *   1. **token 只以密文落库**（`v1:` 前缀，AES-GCM，主密钥 `APP_SECRET`）。
  *      `d1 export` 是常规运维动作，明文入库等于每次备份都在泄露租户 token。
  *   2. **容忍明文**：读到不带 `v1:` 前缀的值，当成明文用，并**就地加密回写**。
  *      托管开通流程是在平台侧把 token 直接写进租户 D1 的（那时拿不到主密钥），
@@ -166,7 +166,7 @@ export async function savePlatformCreds(
         return {
           ok: false,
           code: "no_cipher_key",
-          message: "未配置 PAYMENT_SECRET_KEY，无法加密保存 token",
+          message: "未配置主密钥 APP_SECRET，无法加密保存 token",
         };
       }
       sets.push("token_enc = ?");

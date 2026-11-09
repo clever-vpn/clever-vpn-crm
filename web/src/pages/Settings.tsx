@@ -294,7 +294,7 @@ function PlatformCard() {
         <p className="hint">
           在 cf-api 后台「API 访问」页新建一把，粘贴到这里。明文只在创建时显示一次。
           {view && !view.cipher_ready && (
-            <strong> 未配置 PAYMENT_SECRET_KEY，无法加密保存 token。</strong>
+            <strong> 未配置主密钥 APP_SECRET，无法加密保存 token。</strong>
           )}
         </p>
       </div>

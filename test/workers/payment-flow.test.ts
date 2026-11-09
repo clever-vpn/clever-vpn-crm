@@ -356,7 +356,7 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
   };
 
   beforeAll(async () => {
-    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "master-key-for-tests";
+    (env as unknown as Record<string, unknown>).APP_SECRET = "master-key-for-tests";
     // 主密钥换了 ⇒ 之前用旧主密钥加密的 cf-api token 会解不开；凭据重写一遍
     await seedPlatformCreds(env.DB, cf);
     const cipher = await encryptSecret(env, EPAY_KEY);
@@ -376,8 +376,8 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
   });
 
   it("没有主密钥时明确拒绝，不拿空密钥去签名", async () => {
-    const saved = (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY;
-    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "";
+    const saved = (env as unknown as Record<string, unknown>).APP_SECRET;
+    (env as unknown as Record<string, unknown>).APP_SECRET = "";
     const r = await createCharge(env, {
       customerId,
       customerEmail: EPAY_PAYER,
@@ -385,7 +385,7 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
       method: "alipay",
       origin: BASE,
     });
-    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = saved;
+    (env as unknown as Record<string, unknown>).APP_SECRET = saved;
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("gateway_not_ready");
   });

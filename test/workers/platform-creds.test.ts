@@ -21,7 +21,7 @@ const KEY = "master-key-for-creds-test";
 const TOKEN = "cv_api_abcdefghijklmnop";
 
 beforeAll(async () => {
-  (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = KEY;
+  (env as unknown as Record<string, unknown>).APP_SECRET = KEY;
   await env.DB.prepare(`DELETE FROM cf_api`).run();
 });
 
@@ -71,14 +71,14 @@ describe("cf-api 凭据", () => {
   });
 
   it("主密钥换过 ⇒ problem=undecryptable（不假装没配）", async () => {
-    (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "another-key";
+    (env as unknown as Record<string, unknown>).APP_SECRET = "another-key";
     try {
       const creds = await platformCreds(env);
       expect(creds.token).toBe("");
       expect(creds.problem).toBe("undecryptable");
       await expect(platformAuth(env)).rejects.toThrow(/解不开/);
     } finally {
-      (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = KEY;
+      (env as unknown as Record<string, unknown>).APP_SECRET = KEY;
     }
   });
 

@@ -84,7 +84,7 @@ This repository is an **open-source, self-hostable tenant CRM** on Cloudflare Wo
 - **No hosted-only code paths** (`if (hosted) …`). Differences between self-hosted and hosted must be
   expressed purely through bindings/vars (`CRM_TENANT_ID`, `CF_API_BASE`) plus the per-tenant
   `cf_api` D1 row (base URL + encrypted token) — never a deployment-level token secret.
-- Secrets only via `wrangler secret put` (`SIGNING_SECRET`, `PAYMENT_SECRET_KEY`). The cf-api token
+- Secrets only via `wrangler secret put` (`APP_SECRET` — one master key, two derived purposes). The cf-api token
   lives in the tenant's own D1 (`cf_api.token_enc`, AES-GCM) and is never logged or echoed.
 - Payments stay out of scope: adapters call the tenant's own payment provider; the CRM records the
   resulting state. Never store card data.

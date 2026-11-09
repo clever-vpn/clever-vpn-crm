@@ -267,7 +267,7 @@ export async function handleAdminGateways(
     const plain = typeof body.secret === "string" ? body.secret.trim() : "";
     if (plain) {
       const enc = await encryptSecret(env, plain);
-      if (!enc) return fail(400, "secret_key_missing", "未配置 PAYMENT_SECRET_KEY，无法保存网关密钥");
+      if (!enc) return fail(400, "secret_key_missing", "未配置主密钥 APP_SECRET，无法保存网关密钥");
       secretEnc = enc;
     }
 
@@ -401,7 +401,7 @@ export async function handleAdminGateways(
     if (body.clear_secret === true) secretEnc = null;
     if (typeof body.secret === "string" && body.secret.trim()) {
       const enc = await encryptSecret(env, body.secret.trim());
-      if (!enc) return fail(400, "secret_key_missing", "未配置 PAYMENT_SECRET_KEY，无法保存网关密钥");
+      if (!enc) return fail(400, "secret_key_missing", "未配置主密钥 APP_SECRET，无法保存网关密钥");
       secretEnc = enc;
     }
 

@@ -71,7 +71,7 @@
   ],
 
   // secret 照旧 `wrangler secret put`（每 shard 一份，内容相同）：
-  //   SIGNING_SECRET / PAYMENT_SECRET_KEY
+  //   APP_SECRET（唯一主密钥：签名 + 加密）
   // cf-api token **每租户不同** ⇒ 存各自租户的 D1（`cf_api` 单行），不用 secret
   "vars": {
     "MODE": "multi",
