@@ -27,16 +27,19 @@ export interface Env {
    */
   CF_API_BASE?: string;
   /**
-   * **一次性证明的 HMAC 密钥**（`wrangler secret put SIGNING_SECRET`）。
+   * **唯一的主密钥**（`wrangler secret put APP_SECRET`），一把顶两个用途：
    *
-   * 用来"我们能证明是自己签发/自己收到的"，与登录态**无关**：
-   *   - 发出：邮件里的退订链接 `?c=<id>&t=<hmac>`
-   *   - 收进：`mock` 支付渠道的回调签名
-   * 登录态是 `app_sessions` 里的随机 token + 查表，不用任何密钥。
+   *   1. HMAC 一次性证明：邮件退订链接 `?c=<id>&t=<hmac>`、`mock` 支付回调签名
+   *      （与登录态无关；登录态是 `app_sessions` 里的随机 token + 查表）
+   *   2. AES-GCM 加密落库：网关商户密钥、商店凭据、cf-api token
    *
-   * 轮换它只会让**已发出的**退订链接失效（重发一封即可），不会踢任何用户下线。
+   * 两个用途用的是**派生后不同**的字节（`src/secrets.ts` 的标签派生），
+   * 不是同一个 key 复用。旧的两个名字（`SIGNING_SECRET` / `PAYMENT_SECRET_KEY`）
+   * 已删除，不做兼容。
+   *
+   * ⚠️ **定了就别换**：换掉 = 已发出的退订链接失效 + 已存的密钥/token 全部解不开。
    */
-  SIGNING_SECRET?: string;
+  APP_SECRET?: string;
   /** 首次初始化管理员用的一次性口令（wrangler secret put SETUP_TOKEN） */
   SETUP_TOKEN?: string;
   /** 密码哈希迭代次数；Workers 免费版 CPU 只有 10ms，必要时下调 */
@@ -76,15 +79,6 @@ export interface Env {
    * **未配置 = 不做人机校验**：本地开发和不想开自托管的租户都不受影响。
    */
   TURNSTILE_SECRET?: string;
-
-  /**
-   * 支付网关密钥的**主密钥**（`wrangler secret put PAYMENT_SECRET_KEY`）。
-   *
-   * 用于 AES-GCM 加解密 `payment_gateways.secret_enc`。**没配就不能保存/使用
-   * 真实网关密钥**（mock 除外，它用 `SIGNING_SECRET` 派生）。
-   * 换掉它会导致已有密文全部解不开 —— 因为密文只存了 `v1:` 前缀，没有其他依赖。
-   */
-  PAYMENT_SECRET_KEY?: string;
 
   /**
    * **测试网关（`driver = 'mock'`）的总开关**，默认关闭（`docs/payments.md` §5.3）。

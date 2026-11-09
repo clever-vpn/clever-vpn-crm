@@ -34,8 +34,7 @@
 | 类型 | 名称 | 说明 |
 |---|---|---|
 | Secret | `CLOUDFLARE_API_TOKEN` | Workers Scripts:Edit + D1:Edit |
-| Secret | `PAYMENT_SECRET_KEY` | 网关密钥与 cf-api token 的加密主密钥（缺它两者都存不进库） |
-| Secret | `SIGNING_SECRET` | 随便一串长随机值。**一次性证明**的 HMAC 密钥（退订链接 / mock 回调签名），与登录态无关 |
+| Secret | `APP_SECRET` | 随便一串 ≥32 长随机值，**唯一主密钥**：HMAC 一次性证明（退订链接 / mock 回调）+ AES-GCM 加密落库（网关密钥 / 商店凭据 / cf-api token）。换掉 = 已存的都要重填 |
 | Variable | `CRM_TENANT_ID` | 你在 cf-api 的租户 ID（**必填**，为空则跳过部署） |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
 | Variable | `D1_NAME` / `WORKER_NAME` / `CF_API_BASE` | 可选，有默认值 |

@@ -112,7 +112,7 @@ export const customers = sqliteTable(
  * 所以单独一张表，每平台最多一行（同一个开发者账号）。
  *
  * 共享的只有"查单 → `settlePaidOrder()`"这段代码，以及同一套密钥加密
- * （`secret_enc` + `PAYMENT_SECRET_KEY`）。
+ * （`secret_enc` + 主密钥 `APP_SECRET`）。
  */
 export const storeChannels = sqliteTable(
   "store_channels",
@@ -940,7 +940,7 @@ export const paymentGateways = sqliteTable(
     /** 商户号 / app_id / client_id */
     merchant_id: text("merchant_id"),
     /**
-     * 加密后的密钥（AES-GCM，主密钥在 Worker secret `PAYMENT_SECRET_KEY`）。
+     * 加密后的密钥（AES-GCM，主密钥在 Worker secret `APP_SECRET`）。
      * 明文密钥**不入库、不进日志、不进任何 API 响应**。
      */
     secret_enc: text("secret_enc"),
@@ -1076,7 +1076,7 @@ export const siteSettings = sqliteTable("site_settings", {
  * 部署级 secret 在模型上就是错的（每个租户的 token 不同）。自部署也一样用它，
  * 这样"换个 token"是后台点两下，不是重跑一次 `wrangler secret put`。
  *
- * `token_enc` 一定是密文（`v1:<base64>`，AES-GCM，主密钥 `PAYMENT_SECRET_KEY`）。
+ * `token_enc` 一定是密文（`v1:<base64>`，AES-GCM，主密钥 `APP_SECRET`）。
  * 读取时若发现是**明文**（SaaS 开通时直接写进来、或手工 seed），自动加密后回写
  * —— 见 `src/platform/creds.ts`。选这个方案而不是"拒绝读明文"，是因为
  * "把 token 写进租户 D1" 那条路本来就没法在写入侧拿到主密钥。

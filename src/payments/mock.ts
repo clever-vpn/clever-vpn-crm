@@ -49,7 +49,7 @@ export const MOCK_MAPPING: GatewayMapping = {
 /**
  * mock 的签名密钥。
  *
- * 派生自 `SIGNING_SECRET`（生产必有），这样**伪造回调需要拿到服务端密钥**，
+ * 派生自 `APP_SECRET`（生产必有），这样**伪造回调需要拿到服务端密钥**，
  * 不是一个写在仓库里的常量。本地没配时退化成一个明显的开发值。
  */
 export function mockSecret(env: Env): string {

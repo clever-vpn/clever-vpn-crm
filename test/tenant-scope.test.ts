@@ -62,11 +62,11 @@ describe("scopeToTenant · multi（SaaS 分片）", () => {
   it("其余绑定（secret/vars）仍然看得见：只盖 DB，不重造 env", async () => {
     const e = {
       ...env,
-      SIGNING_SECRET: "shh",
+      APP_SECRET: "shh",
       HOSTS: kvOf({ "host:acme.app.example.com": { tenant_id: "t_acme", slot: 7 } }),
     };
     const scoped = await scopeToTenant(req("https://acme.app.example.com/"), e);
-    expect((scoped.env as Record<string, unknown>).SIGNING_SECRET).toBe("shh");
+    expect((scoped.env as Record<string, unknown>).APP_SECRET).toBe("shh");
     expect(scoped.env.DB).toBe(DB_B);
     // 原 env 不被污染
     expect((e as Record<string, unknown>).DB).toBeUndefined();

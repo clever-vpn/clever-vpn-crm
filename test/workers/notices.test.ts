@@ -156,7 +156,7 @@ beforeAll(async () => {
   (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
   // 退订链接要绝对地址 ⇒ 必须有 SITE_URL；密钥用于签名
   (env as unknown as Record<string, unknown>).SITE_URL = "https://vpn.test";
-  (env as unknown as Record<string, unknown>).SIGNING_SECRET = "notice-test-secret";
+  (env as unknown as Record<string, unknown>).APP_SECRET = "notice-test-secret";
   document: {
     // 非 production 时 sendMail 只打日志，这里接住它做断言（表行状态也是断言对象）
   }

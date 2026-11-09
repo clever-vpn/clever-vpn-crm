@@ -200,8 +200,8 @@ export default function Gateways() {
         <Alert
           type="warning"
           showIcon
-          message="未配置 PAYMENT_SECRET_KEY"
-          description="没有主密钥就无法保存网关密钥，真实网关无法发布。用 wrangler secret put PAYMENT_SECRET_KEY 配置。"
+          message="未配置主密钥 APP_SECRET"
+          description="没有主密钥就无法保存网关密钥，真实网关无法发布。用 wrangler secret put APP_SECRET 配置。"
         />
       )}
 

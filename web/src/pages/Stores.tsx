@@ -111,8 +111,8 @@ export default function Stores() {
         <Alert
           type="warning"
           showIcon
-          message="未配置 PAYMENT_SECRET_KEY"
-          description="没有主密钥就无法加密保存凭据。请先 wrangler secret put PAYMENT_SECRET_KEY。"
+          message="未配置主密钥 APP_SECRET"
+          description="没有主密钥就无法加密保存凭据。请先 wrangler secret put APP_SECRET。"
         />
       )}
 

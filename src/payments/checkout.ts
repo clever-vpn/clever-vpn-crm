@@ -43,7 +43,7 @@ export function newOrderCode(now: Date = new Date()): string {
 /**
  * 取网关密钥（明文，只在内存里）。
  *
- * - `mock`：派生自 `SIGNING_SECRET`；
+ * - `mock`：派生自主密钥 `APP_SECRET`；
  * - 其它：解密 `secret_enc`。解不开（没配主密钥 / 换过主密钥 / 密文被改）→ `null`，
  *   调用方必须明确报错，**不能**拿空密钥去签名（那样会静默签错）。
  */
@@ -196,7 +196,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
         ok: false,
         status: 501,
         code: "gateway_not_ready",
-        message: "网关密钥不可用（未配置 PAYMENT_SECRET_KEY 或密文无法解密）",
+        message: "网关密钥不可用（未配置主密钥 APP_SECRET 或密文无法解密）",
       };
     }
     const doFetch = input.fetch ?? fetch;

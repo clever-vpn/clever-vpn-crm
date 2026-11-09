@@ -132,7 +132,7 @@ draft ──测试支付真收到钱──▶ live ──▶ disabled
    否则显示名与真实能力会打架；
 2. 密钥只接受明文 `secret` 字段，进来即加密入库，**任何响应都只回 `has_secret`**；
    `PATCH` 留空 = 不改，要清空用 `clear_secret`；
-3. 没配 `PAYMENT_SECRET_KEY` 时**拒绝保存密钥**（`secret_key_missing`），不退化成存明文。
+3. 没配主密钥 `APP_SECRET` 时**拒绝保存密钥**（`secret_key_missing`），不退化成存明文。
 
 映射输入分两种口径：`epay_v1` 的 `mapping` 是**覆盖项**（与内置映射深合并，租户只写差异），
 `generic_json_v1` 的 `mapping` 是**完整配置**（必须整体通过校验）。
@@ -430,7 +430,7 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 v1:<base64(iv(12B) || AES-GCM 密文+tag)>
 ```
 
-- 主密钥来自 Worker secret **`PAYMENT_SECRET_KEY`**（任意长度口令，内部 SHA-256
+- 主密钥来自 Worker secret **`APP_SECRET`**（任意长度口令，内部按用途标签派生，见 `src/secrets.ts`
   归一到 32 字节，不用记“必须 32 位”）；
 - **没配主密钥就不允许用真实网关**：下单/回调会明确返回 `gateway_not_ready`，
   而不是退化存明文；
@@ -461,7 +461,7 @@ v1:<base64(iv(12B) || AES-GCM 密文+tag)>
    `POST /api/app/v1/orders`、`/pay/mock/:code` 演示页、`POST /api/pay/notify/:gatewayId`
    （所有网关共用的回调入口）、订单 `pending → active` + 订阅发放
 7. 闸门集中在 `src/payments/gateways.ts`（status / methods / 白名单 / 环境开关）
-8. **密钥加密**：`src/payments/secret.ts`（AES-GCM + `PAYMENT_SECRET_KEY`，`v1:` 前缀）
+8. **密钥加密**：`src/payments/secret.ts`（AES-GCM + 主密钥 `APP_SECRET`，`v1:` 前缀）
    —— 真实网关的 epay 路径已用加密密钥跑通（下单签名、回调验签、查单复核）
 9. **后台「支付」页**：`src/admin/gateways.ts` + `web/src/pages/Gateways.tsx`
    （列表 / 新建草稿 / 编辑 / 发布 / 停用；密钥只写不读；映射可覆盖）

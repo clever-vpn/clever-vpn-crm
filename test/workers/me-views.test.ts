@@ -108,7 +108,7 @@ let orderCode = "";
 
 beforeAll(async () => {
   (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
-  (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "master-key-for-tests";
+  (env as unknown as Record<string, unknown>).APP_SECRET = "master-key-for-tests";
   const cfApi: FakeCfApi = installFakeCfApi();
   await seedPlatformCreds(env.DB, cfApi);
   const now = new Date().toISOString();

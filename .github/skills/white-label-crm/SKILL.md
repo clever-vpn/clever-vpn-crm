@@ -39,7 +39,7 @@ Secrets（加密，写进去就看不到）：
 | 名称 | 内容 |
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | 权限：**Workers Scripts:Edit** + **D1:Edit**（+ Account Settings:Read） |
-| `SIGNING_SECRET` | ≥32 字符随机串（一次性证明的 HMAC 密钥：退订链接 / mock 回调）；换掉不会踢人下线 |
+| `APP_SECRET` | ≥32 字符随机串，**唯一主密钥**：HMAC 签名（退订链接 / mock 回调）+ AES-GCM 加密落库（网关密钥 / cf-api token）；换掉 = 已存的都要重填 |
 | `SETUP_TOKEN` | 管理后台初始化口令（`openssl rand -hex 24`）；不配就无法创建管理员 |
 
 Variables（明文）：
@@ -63,7 +63,7 @@ Actions → **deploy** → **Run workflow**。工作流会自动：
 2. 找 D1（不存在就 `d1 create`，幂等）；
 3. 渲染 `wrangler.ci.jsonc`（D1 id + 租户参数注入，仓库里不含密钥）；
 4. `wrangler deploy`；
-5. 写入 Worker secrets（`SIGNING_SECRET` / `PAYMENT_SECRET_KEY`）；
+5. 写入 Worker secret（`APP_SECRET`）；
 6. 在 run 的 **Summary** 里打印 Worker URL 与验证命令。
 
 因为"先部署后写 secrets"，**首次部署建议再跑一次**（或等 secrets 生效后访问一次业

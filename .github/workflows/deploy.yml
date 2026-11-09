@@ -5,8 +5,9 @@
 #
 # 需要的配置（Settings → Secrets and variables → Actions）：
 #   Secrets:   CLOUDFLARE_API_TOKEN（Workers Scripts:Edit + D1:Edit）
-#              SIGNING_SECRET（随机长串：退订链接 / webhook 回调的一次性签名）
-#              PAYMENT_SECRET_KEY（网关密钥与 cf-api token 的加密主密钥）
+#              APP_SECRET（随机长串 ≥32：一个主密钥顶两个用途 ——
+#                HMAC 一次性签名（退订链接 / webhook 回调）
+#                AES-GCM 加密落库（网关密钥 / 商店凭据 / cf-api token））
 #
 # 注意：cf-api 的租户 token **不是** secret —— 部署后在后台「设置 → cf-api 对接」
 # 里填，加密存进本租户 D1（托管分片一个 Worker 服务多个租户，部署级 secret 在
@@ -110,20 +111,19 @@ jobs:
 
       - name: 写入 Worker secrets
         env:
-          SIGNING_SECRET: ${{ secrets.SIGNING_SECRET }}
-          PAYMENT_SECRET_KEY: ${{ secrets.PAYMENT_SECRET_KEY }}
+          # 新名优先；fork 里还留着旧名的直接复用（值本来就是随机长串，合并不降安全）
+          APP_SECRET: ${{ secrets.APP_SECRET || secrets.SIGNING_SECRET || secrets.PAYMENT_SECRET_KEY }}
           SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${SIGNING_SECRET:-}" ]; then
-            echo "::error::缺少 secret SIGNING_SECRET"; exit 1
+          if [ -z "${APP_SECRET:-}" ]; then
+            echo "::error::缺少 secret APP_SECRET（旧名 SIGNING_SECRET / PAYMENT_SECRET_KEY 也可）"; exit 1
           fi
-          if [ -z "${PAYMENT_SECRET_KEY:-}" ]; then
-            echo "::warning::未配置 PAYMENT_SECRET_KEY：网关密钥与 cf-api token 无法加密保存"
-          else
-            printf '%s' "$PAYMENT_SECRET_KEY" | npx wrangler secret put PAYMENT_SECRET_KEY --config wrangler.ci.jsonc
-          fi
-          printf '%s' "$SIGNING_SECRET" | npx wrangler secret put SIGNING_SECRET --config wrangler.ci.jsonc
+          printf '%s' "$APP_SECRET" | npx wrangler secret put APP_SECRET --config wrangler.ci.jsonc
+          for old in SIGNING_SECRET PAYMENT_SECRET_KEY; do
+            npx wrangler secret delete "$old" --config wrangler.ci.jsonc >/dev/null 2>&1 \
+              && echo "✔ 已删除旧 secret $old" || true
+          done
           if [ -n "${SETUP_TOKEN:-}" ]; then
             printf '%s' "$SETUP_TOKEN" | npx wrangler secret put SETUP_TOKEN --config wrangler.ci.jsonc
           else

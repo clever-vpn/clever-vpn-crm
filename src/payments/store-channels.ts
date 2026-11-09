@@ -5,7 +5,7 @@
  * CRM 只能"查单"，不能发起支付、不能退款、不接收签名回调。所以它单独一张表，
  * 每平台最多一行，也不参与 `pickGateway()` 的路由。
  *
- * 共享的只有两件事：**同一套密钥加密**（`secret_enc` + `PAYMENT_SECRET_KEY`）
+ * 共享的只有两件事：**同一套密钥加密**（`secret_enc` + 主密钥 `APP_SECRET`）
  * 与"查单 → settlePaidOrder()"那段代码。
  */
 import { encryptSecret, secretKeyConfigured } from "./secret";
@@ -175,7 +175,7 @@ export async function upsertStoreChannel(
     secretEnc = null;
   } else if (typeof input.secret === "string" && input.secret.trim()) {
     if (!secretKeyConfigured(env)) {
-      return { ok: false, code: "secret_key_missing", message: "未配置 PAYMENT_SECRET_KEY，无法保存凭据" };
+      return { ok: false, code: "secret_key_missing", message: "未配置主密钥 APP_SECRET，无法保存凭据" };
     }
     const bad = validateStoreSecret(platform, input.secret.trim());
     if (bad) return { ok: false, code: "invalid_secret", message: bad };
