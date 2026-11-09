@@ -30,7 +30,10 @@ const METHODS = [
 ] as const;
 
 /** 最小浏览器环境：SDK 只用这几个全局 */
-function load(over?: { token?: string; fetch?: (url: string) => Promise<unknown> }) {
+function load(over?: {
+  token?: string;
+  fetch?: (url: string, init?: unknown) => Promise<unknown>;
+}) {
   const store = new Map<string, string>();
   if (over?.token) store.set("crm_token", over.token);
   const win: Record<string, unknown> = {
@@ -42,6 +45,9 @@ function load(over?: { token?: string; fetch?: (url: string) => Promise<unknown>
       removeItem: (k: string) => void store.delete(k),
     },
     fetch: over?.fetch ?? (() => Promise.reject(new Error("测试里不该真的发请求"))),
+    // 下单要拼 return_url、并把支付页交给外部浏览器：这两个全局必须给
+    location: { origin: "https://site.test", href: "https://site.test/pricing.html", assign: () => {} },
+    open: () => ({}),
   };
   win.window = win;
   vm.runInNewContext(SDK_JS, win);
@@ -138,6 +144,81 @@ describe("SiteCrm SDK", () => {
       unknown
     >[];
     expect(plans[0]!.methods).toEqual(["支付宝", "微信支付"]);
+    // 选择器要用 id 回传 `payment_method`，所以两个都要给
+    expect(plans[0]!.method_options).toEqual([
+      { id: "alipay", label: "支付宝" },
+      { id: "wechat", label: "微信支付" },
+    ]);
+  });
+
+  it("用户选了微信，下单的 payment_method 就是 wechat（不是永远第一种）", async () => {
+    const posts: Record<string, unknown>[] = [];
+    const plan = {
+      plan_id: "p_1",
+      name: "月付",
+      kind: "period",
+      price_minor: 1500,
+      currency: "CNY",
+      action: "buy",
+      buyable: true,
+      payment_methods: [
+        { id: "alipay", label: "支付宝", icon_url: null },
+        { id: "wechat", label: "微信支付", icon_url: null },
+      ],
+    };
+    const { sdk } = load({
+      token: "t0ken",
+      fetch: (url, init) => {
+        if (url.endsWith("/plans")) {
+          return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify([plan])) });
+        }
+        if (url.endsWith("/quote")) {
+          return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify({ action: "buy" })) });
+        }
+        posts.push(JSON.parse(String((init as { body?: string } | undefined)?.body ?? "{}")));
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({ code: "ORD1", pay_url: "https://pay.test/1" }),
+            ),
+        });
+      },
+    });
+    await (sdk.checkout as (o: { planId: string; method?: string }) => Promise<unknown>)({
+      planId: "p_1",
+      method: "wechat",
+    });
+    expect(posts[0]!.payment_method).toBe("wechat");
+  });
+
+  it("选了这一档不支持的方式：拒绝，而不是悄悄换成第一种", async () => {
+    const plan = {
+      plan_id: "p_1",
+      name: "月付",
+      kind: "period",
+      price_minor: 1500,
+      currency: "CNY",
+      action: "buy",
+      buyable: true,
+      payment_methods: [{ id: "alipay", label: "支付宝", icon_url: null }],
+    };
+    const { sdk } = load({
+      token: "t0ken",
+      fetch: (url) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(url.endsWith("/plans") ? [plan] : {})),
+        }),
+    });
+    await expect(
+      (sdk.checkout as (o: { planId: string; method?: string }) => Promise<unknown>)({
+        planId: "p_1",
+        method: "wechat",
+      }),
+    ).rejects.toMatchObject({ code: "payment_method_unavailable" });
   });
 
   it("没有可用支付方式时 methods 是空数组（模板就不显示那行）", async () => {
