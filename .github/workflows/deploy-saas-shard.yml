@@ -32,6 +32,16 @@ on:
         required: false
         default: "manual"
         type: string
+      replenish_pool:
+        description: "先补池再造片（空池时用它：关闭 Panel 会删掉位号行）"
+        required: false
+        default: false
+        type: boolean
+      pool_count:
+        description: "补池目标（空闲位号个数；仅 replenish_pool=true 时生效）"
+        required: false
+        default: "2"
+        type: string
   schedule:
     # 每天 04:17 UTC 检查一次是否要加新片（2000 租户/片，低频）
     - cron: "17 4 * * *"
@@ -123,6 +133,7 @@ jobs:
       HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
       CRM_CODE_VERSION: ${{ github.sha }}
       SITE_URL: ${{ vars.SITE_URL }}
+      POOL_COUNT: ${{ inputs.pool_count || '2' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -149,6 +160,31 @@ jobs:
           access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
           secrets: |
             ${{ vars.BW_SECRET_ID_APP_SECRET }} > APP_SECRET
+
+      # ---- 2.0 补池（可选）----
+      # 关闭一个 Panel 会把 `slots` 行**删掉**（库已删，留着会被发给下一个租户），
+      # 池子于是变空；而 cf-api 那边没有任何自动补池 —— 空池时开通报 409
+      # `no_pooled_slot`，前端只会显示"平台正在准备资源，请稍后重试"。
+      #
+      # 必须跑在 pause **之前**：`pool.ensure` 在暂停期间直接 409（闸门就是
+      # "部署期间不改绑定"）。新库由本作业后面的"逐库迁移 + 重新部署"绑上。
+      - name: Replenish pool（可选）
+        if: inputs.replenish_pool
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+          echo "补池版本=${version} count=${POOL_COUNT}"
+          # 用 jq 组 JSON：在 shell 双引号里手写转义是自找麻烦
+          jq -n --arg v "$version" --argjson n "$POOL_COUNT" '{version:$v, count:$n}' > /tmp/pool-req.json
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/pool-req.json \
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/pool" | tee /tmp/pool.json
+          echo
+          jq -c '{created, pooled, target, bindings_changed}' /tmp/pool.json
 
       # ---- 2.1 暂停开通（挡开通与补池，不挡服务）----
       - name: Pause provisioning
