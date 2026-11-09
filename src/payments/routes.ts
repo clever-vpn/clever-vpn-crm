@@ -16,7 +16,7 @@ import type { GatewayRow } from "./gateways";
 
 const NOTIFY_RE = /^\/api\/pay\/notify\/(\d+)$/;
 const PAGE_RE = /^\/pay\/mock\/([A-Za-z0-9]+)$/;
-const PAID_RE = /^\/pay\/mock\/([A-Za-z0-9]+)\/paid$/;
+const ACTION_RE = /^\/pay\/mock\/([A-Za-z0-9]+)\/(paid|failed|cancel)$/;
 
 interface OrderForPage {
   id: number;
@@ -50,6 +50,21 @@ h1{font-size:18px;margin:0 0 12px}p{color:#57606a}</style></head>
   );
 }
 
+/**
+ * 「模拟用户取消」：**什么都不发**。
+ *
+ * 真实场景里用户直接关掉收银台，网关不会回调；我们要测的正是"什么也没发生时"
+ * 站点/App 的表现（轮询超时、按钮仍可重试、订单到期后消失）。所以这里不碰订单。
+ */
+async function simulateCancel(env: Env, code: string): Promise<Response> {
+  const order = await loadOrder(env, code);
+  if (!order) return noticePage("订单不存在", "请回到 App 重新发起。", 404);
+  return noticePage(
+    "已模拟用户取消",
+    "没有发送任何回调：订单保持待支付，到期后自动过期。可以回站点看未付款时的样子。",
+  );
+}
+
 async function loadOrder(env: Env, code: string): Promise<OrderForPage | null> {
   return env.DB.prepare(
     `SELECT id, code, plan_snapshot, amount_minor, currency, payment_method, gateway_id, status, expires_at
@@ -79,10 +94,13 @@ export async function handlePayRoutes(request: Request, env: Env): Promise<Respo
     return handlePayNotify(env, request, notify[1] ?? "");
   }
 
-  const paid = PAID_RE.exec(path);
-  if (paid) {
+  const action = ACTION_RE.exec(path);
+  if (action) {
     if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
-    return simulatePaid(env, request, paid[1] ?? "");
+    const code = action[1] ?? "";
+    const verb = action[2];
+    if (verb === "cancel") return simulateCancel(env, code);
+    return simulateNotify(env, request, code, verb === "failed" ? "FAILED" : "SUCCESS");
   }
 
   const page = PAGE_RE.exec(path);
@@ -133,10 +151,19 @@ function safePlanName(snapshot: string): string {
 }
 
 /**
- * 「模拟支付成功」：**由服务端构造一个带正确签名的回调 Request**，
+ * 「模拟支付成功 / 失败」：**由服务端构造一个带正确签名的回调 Request**，
  * 喂给真实的 notify 处理函数 —— 不真发 HTTP 自调用。
+ *
+ * `status` 就是回调里的状态字段：真实网关的失败回调也长这样（验签通过、
+ * `paid_when` 不匹配），CRM 收到后应当只应答、不改订单。所以"失败"这条路
+ * 验的不是假分支，而是真实代码。
  */
-async function simulatePaid(env: Env, request: Request, code: string): Promise<Response> {
+async function simulateNotify(
+  env: Env,
+  request: Request,
+  code: string,
+  status: "SUCCESS" | "FAILED",
+): Promise<Response> {
   const order = await loadOrder(env, code);
   if (!order || !order.gateway_id) return noticePage("订单不存在", "请回到 App 重新发起。", 404);
 
@@ -157,6 +184,7 @@ async function simulatePaid(env: Env, request: Request, code: string): Promise<R
       orderNo: order.code,
       amountMinor: order.amount_minor,
       currency: order.currency,
+      status,
       now: new Date(),
     },
     secret,
@@ -168,6 +196,12 @@ async function simulatePaid(env: Env, request: Request, code: string): Promise<R
 
   if (res.status >= 400) {
     return noticePage("模拟回调失败", `网关处理器返回 ${res.status}：${await res.text()}`, 502);
+  }
+  if (status === "FAILED") {
+    return noticePage(
+      "已模拟支付失败",
+      "回调是验签通过的非成功态：订单仍是待支付，站点/App 应当显示未完成，不会发货。",
+    );
   }
   return noticePage("已模拟支付成功", "可以回到 App 查看，订阅应已生效。");
 }

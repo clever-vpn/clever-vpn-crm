@@ -129,11 +129,25 @@ const METHOD_LABEL: Record<string, string> = { alipay: "支付宝", wechat: "微
 export function renderMockPayPage(input: MockPageInput): string {
   const label = METHOD_LABEL[input.method] ?? input.method;
   const amount = (input.amountMinor / 100).toFixed(2);
+  const code = encodeURIComponent(input.orderCode);
+  // 三个按钮 = 支付链路的三个分支。租户改模板/改 App 时，最常写错的就是
+  // "失败"和"取消"之后界面长什么样，没有真网关能配合他重放这些分支。
+  //   paid   → 走真实回调（验签 + 发货）
+  //   failed → 发一个**验签通过但非成功**的回调（真实网关的失败回调长这样）
+  //   cancel → 什么都不发（用户直接关掉收银台，网关不会回调）
   const action = input.expired
     ? `<p class="done">该订单已过期，请回到 App 重新发起支付。</p>`
-    : `<form method="post" action="/pay/mock/${encodeURIComponent(input.orderCode)}/paid">
+    : `<form method="post" action="/pay/mock/${code}/paid">
          <button class="pay" type="submit">模拟支付成功</button>
-       </form>`;
+       </form>
+       <div class="alt">
+         <form method="post" action="/pay/mock/${code}/failed">
+           <button class="ghost" type="submit">模拟支付失败</button>
+         </form>
+         <form method="post" action="/pay/mock/${code}/cancel">
+           <button class="ghost" type="submit">模拟用户取消</button>
+         </form>
+       </div>`;
 
   return `<!doctype html>
 <html lang="zh-CN"><head>
@@ -156,6 +170,10 @@ export function renderMockPayPage(input: MockPageInput): string {
   .hint { text-align:center; color:#8b949e; font-size:12px; margin:0 0 20px; }
   .pay { width:100%; padding:14px; border:0; border-radius:10px; background:#1677ff; color:#fff;
          font-size:16px; font-weight:600; }
+  .alt { display:flex; gap:10px; margin-top:10px; }
+  .alt form { flex:1; }
+  .ghost { width:100%; padding:11px; border:1px solid #d0d7de; border-radius:10px;
+           background:#fff; color:#57606a; font-size:14px; font-weight:600; }
   .done { color:#8b949e; text-align:center; }
   .meta { margin-top:20px; border-top:1px solid #eee; padding-top:12px; font-size:12px; color:#8b949e; }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
