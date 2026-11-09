@@ -34,8 +34,7 @@ export interface Env {
    *   2. AES-GCM 加密落库：网关商户密钥、商店凭据、cf-api token
    *
    * 两个用途用的是**派生后不同**的字节（`src/secrets.ts` 的标签派生），
-   * 不是同一个 key 复用。旧的两个名字（`SIGNING_SECRET` / `PAYMENT_SECRET_KEY`）
-   * 已删除，不做兼容。
+   * 不是同一个 key 复用。
    *
    * ⚠️ **定了就别换**：换掉 = 已发出的退订链接失效 + 已存的密钥/token 全部解不开。
    */

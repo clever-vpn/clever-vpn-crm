@@ -142,23 +142,13 @@ jobs:
       # APP_SECRET —— **唯一的主密钥**：HMAC（退订链接 / mock 回调）+ AES-GCM
       # （网关密钥 / 商店凭据 / cf-api token）。两个用途用派生后不同的字节。
       # ⚠️ 定了就不能再换：换掉 = 已发出的退订链接失效 + 已存的密钥全部解不开。
-      #
-      # 名字迁移：优先 BW_SECRET_ID_APP_SECRET；没有就复用旧的
-      # BW_SECRET_ID_SIGNING_SECRET 条目（值本来就是随机长串，当主密钥完全够），
-      # 并在日志里提示改名。旧 PAYMENT_SECRET_KEY 从未在分片上配过（无密文），
-      # 所以合并不会让任何数据解不开。
       - name: Load APP_SECRET from Bitwarden (SM)
-        if: vars.BW_SECRET_ID_APP_SECRET != '' || vars.BW_SECRET_ID_SIGNING_SECRET != ''
-        id: bw_app_secret
+        if: vars.BW_SECRET_ID_APP_SECRET != ''
         uses: bitwarden/sm-action@v3.0.0
         with:
           access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
           secrets: |
-            ${{ vars.BW_SECRET_ID_APP_SECRET != '' && vars.BW_SECRET_ID_APP_SECRET || vars.BW_SECRET_ID_SIGNING_SECRET }} > APP_SECRET
-
-      - name: 提示 secret 改名（不阻塞部署）
-        if: vars.BW_SECRET_ID_APP_SECRET == '' && vars.BW_SECRET_ID_SIGNING_SECRET != ''
-        run: echo "::warning::APP_SECRET 复用了 BW_SECRET_ID_SIGNING_SECRET 的值；建议在 Bitwarden 新建同名条目并改设变量 BW_SECRET_ID_APP_SECRET"
+            ${{ vars.BW_SECRET_ID_APP_SECRET }} > APP_SECRET
 
       # ---- 2.1 暂停开通（挡开通与补池，不挡服务）----
       - name: Pause provisioning
@@ -211,15 +201,15 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${APP_SECRET:-}" ]]; then
-            echo "::warning::APP_SECRET 未配置（BW_SECRET_ID_APP_SECRET / BW_SECRET_ID_SIGNING_SECRET 都没设）—— 签名与加密都不可用"
+            echo "::warning::APP_SECRET 未配置（变量 BW_SECRET_ID_APP_SECRET 未设置）—— 签名与加密都不可用"
             exit 0
           fi
           printf '%s' "$APP_SECRET" | npx wrangler secret put APP_SECRET --config wrangler.shard.jsonc
           echo "✔ APP_SECRET 已写入（值不打印）"
-          # 旧名清理（存在才删，失败不阻塞）
-          for old in SIGNING_SECRET PAYMENT_SECRET_KEY; do
-            npx wrangler secret delete "$old" --config wrangler.shard.jsonc >/dev/null 2>&1 \
-              && echo "✔ 已删除旧 secret $old" || true
+          # 历史残留清理（旧的两把已并入 APP_SECRET；不存在也无所谓）
+          for legacy in SIGNING_SECRET PAYMENT_SECRET_KEY; do
+            npx wrangler secret delete "$legacy" --config wrangler.shard.jsonc >/dev/null 2>&1 \
+              && echo "✔ 已清理历史 secret $legacy" || true
           done
 
       # ---- 2.4 以 registry 为准再刷一次绑定 ----
