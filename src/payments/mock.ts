@@ -14,7 +14,7 @@
 
 import { signParams, type SignSpec } from "./sign";
 
-import { signingKeyOf } from "../signing";
+import { signingKeyOf } from "../secrets";
 
 import type { Env } from "../env";
 import type { GatewayMapping } from "./mapping";

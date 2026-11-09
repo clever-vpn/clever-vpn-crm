@@ -111,18 +111,18 @@ jobs:
 
       - name: 写入 Worker secrets
         env:
-          # 新名优先；fork 里还留着旧名的直接复用（值本来就是随机长串，合并不降安全）
-          APP_SECRET: ${{ secrets.APP_SECRET || secrets.SIGNING_SECRET || secrets.PAYMENT_SECRET_KEY }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
           SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${APP_SECRET:-}" ]; then
-            echo "::error::缺少 secret APP_SECRET（旧名 SIGNING_SECRET / PAYMENT_SECRET_KEY 也可）"; exit 1
+            echo "::error::缺少 secret APP_SECRET（见 docs/self-host.md §2）"; exit 1
           fi
           printf '%s' "$APP_SECRET" | npx wrangler secret put APP_SECRET --config wrangler.ci.jsonc
-          for old in SIGNING_SECRET PAYMENT_SECRET_KEY; do
-            npx wrangler secret delete "$old" --config wrangler.ci.jsonc >/dev/null 2>&1 \
-              && echo "✔ 已删除旧 secret $old" || true
+          # 历史残留清理（旧的两把已并入 APP_SECRET；不存在也无所谓）
+          for legacy in SIGNING_SECRET PAYMENT_SECRET_KEY; do
+            npx wrangler secret delete "$legacy" --config wrangler.ci.jsonc >/dev/null 2>&1 \
+              && echo "✔ 已清理历史 secret $legacy" || true
           done
           if [ -n "${SETUP_TOKEN:-}" ]; then
             printf '%s' "$SETUP_TOKEN" | npx wrangler secret put SETUP_TOKEN --config wrangler.ci.jsonc
