@@ -65,6 +65,8 @@ jobs:
         id: decide
         env:
           SHARD_INPUT: ${{ inputs.shard }}
+          # 补池要读 latest release 的 tag：`gh` 没有 token 会 401（实测）
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ -z "${SERVICE_TOKEN:-}" ]]; then
