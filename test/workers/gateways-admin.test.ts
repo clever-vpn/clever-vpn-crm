@@ -174,6 +174,49 @@ describe("网关管理", () => {
     expect(ok.status).toBe(200);
   });
 
+  it("已发布的测试网关不能把白名单清空（清空后等于不存在）", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "mock",
+        name: "测试网关-清空白名单",
+        methods: ["alipay"],
+        allowed_emails: ["tester@example.com"],
+      },
+    });
+    const { gateway } = (await created.json()) as { gateway: { id: number } };
+    const pub = await call(`/api/admin/gateways/${gateway.id}/publish`, {
+      method: "POST",
+    });
+    expect(pub.status).toBe(200);
+
+    const cleared = await call(`/api/admin/gateways/${gateway.id}`, {
+      method: "PATCH",
+      body: { allowed_emails: [] },
+    });
+    expect(cleared.status).toBe(400);
+    expect(((await cleared.json()) as { error: string }).error).toBe(
+      "mock_whitelist_required",
+    );
+
+    // draft 阶段允许清空（还没发布，清空不影响任何人）
+    const draft = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "mock",
+        name: "测试网关-草稿清空",
+        methods: ["alipay"],
+        allowed_emails: ["tester@example.com"],
+      },
+    });
+    const draftId = ((await draft.json()) as { gateway: { id: number } }).gateway.id;
+    const draftCleared = await call(`/api/admin/gateways/${draftId}`, {
+      method: "PATCH",
+      body: { allowed_emails: [] },
+    });
+    expect(draftCleared.status).toBe(200);
+  });
+
   it("环境开关关闭时不能创建测试网关", async () => {
     (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "false";
     const res = await call("/api/admin/gateways", {

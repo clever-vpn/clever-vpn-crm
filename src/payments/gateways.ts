@@ -143,17 +143,31 @@ export async function listGateways(env: Env): Promise<GatewayRow[]> {
 }
 
 /**
- * **对外可见**的支付方式：`live` + 白名单为空 + 有可路由实现。
+ * 某个访客**实际能用**的支付方式（定价页的 `payment_methods` 就靠它）。
  *
- * 白名单非空的网关是"私有/测试网关"（mock 必须非空才能 live），
- * 它的存在不能让一个按钮出现在用户的定价页上 —— 否则"这个按钮对我可见"就成了一份
- * 不可复现的判定（换台设备就不一样）。验收走后台的测试单，见 `docs/payments.md`。
+ * 规则只有一条，但要看清楚它的三个后果：
+ *
+ *   `live` + 有可路由实现 + 对这个人是可见的（`gatewayVisibleTo`）
+ *
+ * 1. **白名单为空 = 公开网关**：谁都可见，游客也算（这是绝大多数情况）。
+ * 2. **白名单非空 = 私有网关**：只对名单内的**已登录**用户可见；游客一律不可见
+ *    （游客没有邮箱，不可能命中名单）。
+ * 3. **`driver='mock'` 额外要求名单非空**：空名单的测试网关等于不存在 —— 连登录
+ *    用户也看不到。这条在 `gatewayVisibleTo` 里，这里不重复判。
+ *
+ * 为什么现在按访客算：测试网关是**给租户验证支付流程**用的产品功能，只有名单里的
+ * 人能测到，就不可能靠"实例级可见"表达。代价是这个接口不能跨用户缓存 —— 而
+ * `/plans` 本来就已经按访客变（`action` / `buyable` / 到期日都因人而异）。
  */
-export async function publicMethods(env: Env): Promise<Set<string>> {
+export async function methodsForViewer(
+  env: Env,
+  email: string | null,
+): Promise<Set<string>> {
   const out = new Set<string>();
+  const who = (email ?? "").trim().toLowerCase();
   for (const g of await listLiveGateways(env)) {
-    if (parseAllowedEmails(g.allowed_emails).length > 0) continue;
     if (!mappingOf(g)) continue;
+    if (!gatewayVisibleTo(g, who, env)) continue;
     for (const m of parseMethods(g.methods)) out.add(m);
   }
   return out;

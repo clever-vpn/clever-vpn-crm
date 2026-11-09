@@ -31,7 +31,7 @@ import { emailCodeAvailable } from "../mail";
 import { listLiveGateways, visibleMethods } from "../payments/gateways";
 import { createCharge } from "../payments/checkout";
 import { rowToPlan, planForClient, paymentMethodsOf } from "../plans/model";
-import { publicMethods } from "../payments/gateways";
+import { methodsForViewer } from "../payments/gateways";
 import { placeIapOrder } from "../payments/iap-order";
 import { handleWebhooks } from "./webhooks";
 import { quotePurchase } from "../plans/quote";
@@ -555,9 +555,10 @@ async function route(request: Request, env: Env, path: string, method: string): 
     // 最优情形”，条件写进角标前缀。活动价就是实付：自动券必然上墙、不限量，
     // 所以列表不再给第二个“应付”字段（`payable_minor` 已删除）。
     const promos = await planPromos(env, { plans, customerId: viewer?.id ?? null, now });
-    // 支付按钮 = 本档支持 ∩ 实例可用（live + 白名单为空 + 有可路由实现）。
-    // **与谁在看无关**：游客和登录用户拿到的是同一份（契约 §2.4.1 ①）。
-    const availableMethods = await publicMethods(env);
+    // 支付按钮 = 本档支持 ∩ **这个访客能用**（live + 有可路由实现 + 可见）。
+    // 公开网关对游客和登录用户是同一份；私有（测试）网关只对名单内的登录用户出现
+    // —— 这才让租户能在自己的站点/App 上走完一遍支付流程（契约 §2.4.5）。
+    const availableMethods = await methodsForViewer(env, viewer?.email ?? null);
 
     const items = plans.map((plan) => {
       const base = {

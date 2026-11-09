@@ -1,10 +1,12 @@
 /**
- * `/plans[].payment_methods` —— 支付按钮是**实例级**商品属性
+ * `/plans[].payment_methods` —— 支付按钮按**这个访客**算
  *
- * 三条要钉住的：
- *   1. 只有 live + **白名单为空** + 有可路由实现的网关，才会让方式出现在定价页；
- *   2. 交集在服务端算（本档支持 ∩ 实例可用），客户端不参与；
- *   3. 游客与登录用户拿到**同一份**按钮 —— 与"谁在看"无关（契约 §2.4.1 ①）。
+ * 四条要钉住的（契约 §2.4.5）：
+ *   1. 公开网关（白名单为空）对谁都可见，游客也算；
+ *   2. 私有网关（白名单非空）**只对名单内的登录用户**可见；
+ *   3. **`driver='mock'` 白名单为空 ⇒ 对任何人都不存在**（含登录用户）——
+ *      这条是"测试网关不能被访客碰到"的底线，即使有人绕过后台发布检查写进了库；
+ *   4. `draft` 永远不算；交集仍在服务端算，客户端不参与。
  */
 import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +16,8 @@ import { env } from "./apply-migrations";
 
 const BASE = "https://crm.test";
 const TOKEN = "session-plan-payment-methods";
+/** 白名单里的那个测试账号 */
+const TESTER_TOKEN = "session-plan-payment-methods-tester";
 
 const worker = rawExports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
@@ -37,13 +41,16 @@ async function seedGateway(opts: {
   methods: string[];
   allowedEmails: string[] | null;
   status?: "live" | "draft";
+  /** 真网关用 `epay_v1`；只有要验"测试网关"时才用 `mock` */
+  driver?: "mock" | "epay_v1";
 }): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO payment_gateways (driver, name, endpoint, merchant_id, secret_enc, methods,
        mapping, priority, status, currency, allowed_emails, created_at, updated_at)
-     VALUES ('mock', ?, NULL, ?, NULL, ?, NULL, 100, ?, 'CNY', ?, ?, ?)`,
+     VALUES (?, ?, NULL, ?, NULL, ?, NULL, 100, ?, 'CNY', ?, ?, ?)`,
   )
     .bind(
+      opts.driver ?? "mock",
       opts.name,
       `M-${opts.name}`,
       JSON.stringify(opts.methods),
@@ -70,56 +77,86 @@ async function seedPlan(id: string, channels: unknown): Promise<void> {
 beforeAll(async () => {
   (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
 
-  await seedGateway({ name: "公开-支付宝", methods: ["alipay"], allowedEmails: null });
-  // 私有/测试网关：只有这几个人能用，**不该**让微信支付出现在定价页
+  // 公开网关：谁都能用
+  await seedGateway({
+    name: "公开-支付宝",
+    methods: ["alipay"],
+    allowedEmails: null,
+    driver: "epay_v1",
+  });
+  // 私有/测试网关：只有 tester 能用
   await seedGateway({
     name: "私有-微信",
     methods: ["wechat"],
     allowedEmails: ["tester@test.com"],
   });
+  // 兜底：即使被强行写成 live，空名单的 mock 也必须对所有人不可见
+  await seedGateway({ name: "空名单-mock", methods: ["testpay"], allowedEmails: null });
   // draft 不算
-  await seedGateway({ name: "草稿-银行卡", methods: ["card"], allowedEmails: null, status: "draft" });
+  await seedGateway({
+    name: "草稿-银行卡",
+    methods: ["card"],
+    allowedEmails: null,
+    status: "draft",
+    driver: "epay_v1",
+  });
 
-  await seedPlan("web_all", [{ channel: "web_checkout", methods: ["alipay", "wechat", "card"] }]);
+  await seedPlan("web_all", [
+    { channel: "web_checkout", methods: ["alipay", "wechat", "testpay", "card"] },
+  ]);
   await seedPlan("store_only", [{ channel: "apple_iap" }]);
 
-  const res = await env.DB.prepare(
-    `INSERT INTO customers (uuid, email, status, created_at)
-     VALUES (lower(hex(randomblob(16))), ?, 'active', ?)`,
-  )
-    .bind("buyer@test.com", now())
-    .run();
-  const customerId = Number(res.meta.last_row_id ?? 0);
-  await env.DB.prepare(
-    `INSERT INTO app_sessions (id, customer_id, created_at, last_used_at) VALUES (?, ?, ?, ?)`,
-  )
-    .bind(await sha256Hex(TOKEN), customerId, now(), now())
-    .run();
+  const accounts: Array<[string, string]> = [
+    ["buyer@test.com", TOKEN],
+    ["tester@test.com", TESTER_TOKEN],
+  ];
+  for (const [email, token] of accounts) {
+    const res = await env.DB.prepare(
+      `INSERT INTO customers (uuid, email, status, created_at)
+       VALUES (lower(hex(randomblob(16))), ?, 'active', ?)`,
+    )
+      .bind(email, now())
+      .run();
+    const customerId = Number(res.meta.last_row_id ?? 0);
+    await env.DB.prepare(
+      `INSERT INTO app_sessions (id, customer_id, created_at, last_used_at) VALUES (?, ?, ?, ?)`,
+    )
+      .bind(await sha256Hex(token), customerId, now(), now())
+      .run();
+  }
 });
 
-describe("plans[].payment_methods 只反映实例级可用性", () => {
-  it("白名单非空的网关不算「可用」，draft 也不算", async () => {
-    const res = await call("/api/app/v1/plans");
+describe("plans[].payment_methods 按访客算", () => {
+  const ids = async (token?: string) => {
+    const res = await call("/api/app/v1/plans", { token });
     expect(res.status).toBe(200);
     const plans = (await res.json()) as PlanView[];
     const web = plans.find((p) => p.plan_id === "web_all");
-    expect(web?.payment_methods).toEqual([
-      { id: "alipay", label: "支付宝", icon_url: null },
-    ]);
+    return (web?.payment_methods ?? []).map((m) => m.id);
+  };
+
+  it("游客只看到公开网关", async () => {
+    expect(await ids()).toEqual(["alipay"]);
+  });
+
+  it("名单外的登录用户也只看到公开网关", async () => {
+    expect(await ids(TOKEN)).toEqual(["alipay"]);
+  });
+
+  it("名单内的登录用户能看到测试网关", async () => {
+    expect(await ids(TESTER_TOKEN)).toEqual(["alipay", "wechat"]);
+  });
+
+  it("白名单为空的测试网关对任何人都不存在（含登录用户）", async () => {
+    for (const token of [undefined, TOKEN, TESTER_TOKEN]) {
+      expect(await ids(token)).not.toContain("testpay");
+    }
   });
 
   it("没有网页渠道的档位给 null（这一档不走网页）", async () => {
     const res = await call("/api/app/v1/plans");
     const plans = (await res.json()) as PlanView[];
     expect(plans.find((p) => p.plan_id === "store_only")?.payment_methods).toBeNull();
-  });
-
-  it("游客与登录用户拿到同一份按钮", async () => {
-    const anon = (await (await call("/api/app/v1/plans")).json()) as PlanView[];
-    const authed = (await (await call("/api/app/v1/plans", { token: TOKEN })).json()) as PlanView[];
-    const pick = (list: PlanView[]) =>
-      list.map((p) => [p.plan_id, p.payment_methods] as const);
-    expect(pick(anon)).toEqual(pick(authed));
   });
 
   it("不再下发内部的 sales_channels", async () => {
