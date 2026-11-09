@@ -2,7 +2,8 @@
  * Clever VPN CRM — Worker 入口
  *
  * 只做两件事，同一个 Worker + 同一个 D1：
- *   /admin/*         → 管理后台 SPA（assets）
+ *   /*               → 管理后台 SPA（assets）。CRM 是独立域名，**入口就是 `/`**，
+ *                      不该让人记 `/admin`（`/admin/*` 只留 302 兼容书签）。
  *   /api/admin/*     → 管理后台 API（Cookie 会话）
  *   /api/app/v1/*    → App / 静态站共用的接口（Bearer 或 Cookie）
  *
@@ -13,6 +14,7 @@
  */
 
 import { ensureSchema } from "./db";
+import { isSpaDeepLink, panelRoute } from "./panel-route";
 import type { Env } from "./env";
 import { handleAppApi } from "./app/router";
 import { handleAdminApi } from "./admin/router";
@@ -43,8 +45,9 @@ async function markHourlyRun(env: Env, now: Date): Promise<void> {
 
 export type { Env };
 
-/** 管理后台是 SPA：文件不存在时回落到 /admin/index.html */
+/** 管理后台是 SPA：构建产物落在 `admin/` 前缀下，**入口是 `/`** */
 const ADMIN_INDEX = "/admin/index.html";
+
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -128,27 +131,37 @@ export default {
       );
     }
 
-    if (url.pathname === "/" || url.pathname === "/index.html") {
-      // 官网独立部署：配了 SITE_URL 就跳过去；没配就给一句可读的提示。
-      const site = (env.SITE_URL ?? "").trim();
-      if (site) return Response.redirect(site, 302);
-      return new Response(
-        `<!doctype html><meta charset="utf-8"><title>CRM 已部署</title>
-<div style="font:16px/1.7 system-ui;max-width:560px;margin:15vh auto;padding:0 20px">
-  <h1 style="font-size:20px">CRM 已部署</h1>
-  <p>管理后台：<a href="/admin/">/admin/</a></p>
-  <p style="color:#666">官网是独立部署的静态站。部署好后在 <code>wrangler.jsonc</code>
-  里配置 <code>SITE_URL</code>，这里就会自动跳转；样例见仓库的
-  <code>site-template/</code>。</p>
-</div>`,
-        { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
+    /**
+     * 面板入口 = `/`：CRM 部署在自己的域名/面板域名上，没有理由让人记一层
+     * `/admin`。构建产物仍落在 `admin/` 前缀下（`ADMIN_INDEX`），这只影响
+     * 静态文件地址，不影响入口。
+     *
+     * 例外：自托管把官网配到别处（`SITE_URL`）时根路径归官网跳转，面板继续
+     * 留在 `/admin/` —— 否则两边的入口会互相抢 `/`。
+     */
+    const route = panelRoute(url.pathname, env.SITE_URL);
+    if (route.kind === "site") return Response.redirect(route.to, 302);
+    if (route.kind === "redirect") {
+      // 302 而不是 301：这条规则以后还可能再变，不该被浏览器永久记住。
+      return Response.redirect(
+        new URL(route.to + url.search, url).toString(),
+        302,
+      );
+    }
+    if (route.kind === "spa") {
+      return env.ASSETS.fetch(
+        new Request(new URL(ADMIN_INDEX, url).toString(), request),
       );
     }
 
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404) return asset;
-    if (url.pathname.startsWith("/admin")) {
-      return env.ASSETS.fetch(new Request(new URL(ADMIN_INDEX, url).toString(), request));
+    // SPA 深链接（`/plans`、`/settings`…）：非文件请求一律给 index.html，前端按
+    // pathname 选页。`/api/*` 与 `/pay/*` 在上面已经分流，到不了这里。
+    if (isSpaDeepLink(url.pathname)) {
+      return env.ASSETS.fetch(
+        new Request(new URL(ADMIN_INDEX, url).toString(), request),
+      );
     }
     return asset;
   },

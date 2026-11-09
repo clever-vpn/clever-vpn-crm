@@ -256,6 +256,13 @@ details.faq p { color: var(--dim); font-size: 14px; margin: 10px 0 0; }
 }
 .plan .plan-cta { margin-top: auto; }
 .plan .plan-cta .btn, .plan .plan-cta button { width: 100%; }
+/* 支持的支付方式：放在按钮上方，点了才知道能怎么付等于骗人 */
+.plan .pay-with {
+  color: var(--dim);
+  font-size: 12px;
+  text-align: center;
+  margin-bottom: 8px;
+}
 .plan .blocked { color: var(--err); font-size: 13px; margin-top: 8px; }
 
 /* ── 表单 ── */

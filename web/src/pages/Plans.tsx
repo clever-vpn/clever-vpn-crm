@@ -8,7 +8,7 @@
  * 已卖出的订阅用的是自己的快照（`platform_subscriptions`），不会被修改。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError, type PlanDraft, type PlanView } from "../api";
 
@@ -102,6 +102,18 @@ export default function Plans() {
     );
     setDraft(null);
   }
+
+  /**
+   * 点「编辑」后表单在页面下方：不滚过去，用户会以为按钮没反应（"套餐不能编辑"
+   * 的第一现场就是这么来的）。滚到表单并把它顶到视口上方。
+   */
+  const formRef = useRef<HTMLDivElement>(null);
+  const editing = draft !== null;
+
+  // 打开表单就滚过去（只在"开/关"时触发，不跟每次按键）
+  useEffect(() => {
+    if (editing) formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [editing]);
 
   function edit(plan: PlanView) {
     setDraft({
@@ -226,13 +238,16 @@ export default function Plans() {
       </div>
 
       {draft && (
+        <div ref={formRef}>
         <PlanForm
           draft={draft}
+          existing={plans.some((p) => p.plan_id === draft.id)}
           busy={busy}
           onChange={setDraft}
           onCancel={() => setDraft(null)}
           onSave={save}
         />
+        </div>
       )}
     </div>
   );
@@ -240,12 +255,15 @@ export default function Plans() {
 
 function PlanForm({
   draft,
+  existing,
   busy,
   onChange,
   onCancel,
   onSave,
 }: {
   draft: PlanDraft;
+  /** true = 改已有套餐（走 PATCH，只影响之后的新购买）；false = 新建草稿 */
+  existing: boolean;
   busy: boolean;
   onChange: (next: PlanDraft) => void;
   onCancel: () => void;
@@ -267,11 +285,14 @@ function PlanForm({
     }
   }
 
-  const isDraftEditable = true;
-
   return (
     <div className="card">
-      <h3>套餐内容</h3>
+      <h3>{existing ? "编辑套餐" : "新建套餐"}</h3>
+      <p className="hint" style={{ marginTop: -6 }}>
+        {existing
+          ? "保存后立刻生效：只影响之后的新购买，已售订阅按成交时的快照执行。"
+          : "新套餐先存成草稿，发布后 App 与网页才能看到。"}
+      </p>
 
       <div className="grid">
         <label>
@@ -472,8 +493,8 @@ function PlanForm({
 
       <div className="row between">
         <div className="row">
-          <button disabled={busy || !isDraftEditable} onClick={() => void onSave()}>
-            {busy ? "保存中…" : "保存草稿"}
+          <button disabled={busy} onClick={() => void onSave()}>
+            {busy ? "保存中…" : existing ? "保存修改" : "保存草稿"}
           </button>
           <button className="ghost" onClick={onCancel}>
             取消

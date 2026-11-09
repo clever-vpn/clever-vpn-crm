@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 
 import { api, ApiError, type PromotionView } from "../api";
+import { PANEL_BASE } from "./panelBase";
 
 interface Tool {
   name: string;
@@ -24,7 +25,7 @@ const TOOLS: Tool[] = [
     effect: "改订单金额",
     what: "让这一单少付钱。应付变小，未来残值也跟着变小。",
     bullets: ["自动生效（打开就看见，不用码）", "凭码使用（投放给渠道 / 群 / 博主）", "人群：新人 / 老客 / 快到期 / 点名"],
-    href: "/admin/marketing/coupons",
+    href: "/marketing/coupons",
     ready: true,
   },
   {
@@ -32,7 +33,7 @@ const TOOLS: Tool[] = [
     effect: "改订阅权益",
     what: "钱不变，白送天数或流量。折扣与赠送分开记账，残值不受影响。",
     bullets: ["送天数 / 送流量（两个维度各改各的）", "注册即送（首单开通后自动发）", "到期前自动送（挽回）/ 手动发给指定客户"],
-    href: "/admin/marketing/gifts",
+    href: "/marketing/gifts",
     ready: true,
   },
   {
@@ -40,7 +41,7 @@ const TOOLS: Tool[] = [
     effect: "建立归因",
     what: "唯一能回答「谁拉来的」的东西。被邀请人拿首单权益，邀请人拿权益。",
     bullets: ["邀请码选填，永不强制", "双向奖励：天数 / 流量", "不做佣金提现"],
-    href: "/admin/marketing/referrals",
+    href: "/marketing/referrals",
     ready: true,
   },
 ];
@@ -101,7 +102,7 @@ export default function Marketing() {
                 ))}
               </ul>
               <div className="actions" style={{ marginTop: 10 }}>
-                <a href={t.href}>{t.ready ? "去管理" : "看计划"}</a>
+                <a href={PANEL_BASE + t.href}>{t.ready ? "去管理" : "看计划"}</a>
               </div>
             </div>
           ))}
@@ -133,7 +134,7 @@ export default function Marketing() {
         </div>
         <p className="hint" style={{ marginTop: 10 }}>
           核销数是「已支付订单上的使用次数」——下单不算、退款会标记作废。更细的按活动效果报表还在
-          <a href="/admin/marketing/report"> 营销报表</a>（未上线）。
+          <a href={PANEL_BASE + "/marketing/report"}> 营销报表</a>（未上线）。
         </p>
       </div>
     </div>

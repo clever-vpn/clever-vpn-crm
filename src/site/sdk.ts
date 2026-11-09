@@ -20,7 +20,12 @@ const CTA: Record<string, string> = {
   blocked: "暂不可购买",
 };
 
-export const SDK_VERSION = "1.0.0";
+/**
+ * 只增不改：1.1.0 给 `plans()` 的每一项加了 `methods`（这档在网页上能用哪些
+ * 支付方式），并在未登录时把 `checkout()` 的错误码从 `no_payment_method` 改成
+ * `unauthorized`。两者都不删字段、不改签名。
+ */
+export const SDK_VERSION = "1.1.0";
 
 /**
  * 内嵌到 `/_crm/sdk.js`；不依赖构建步骤，字符串原样送出。
@@ -123,7 +128,13 @@ export const SDK_JS = `(function () {
       cta: CTA[p.action] || "立即购买",
       action: p.action,
       buyable: p.buyable !== false,
-      reason: p.reason || null
+      reason: p.reason || null,
+      // 这一档在网页上能用哪些支付方式（支付宝 / 微信…）。必须显式露出来：
+      // 用户点购买之前就要知道能用什么付，点完才发现只有一种方式，等于骗人。
+      // 未登录 / 私有网关不在名单里时后端给 null，前端就不显示这一段。
+      methods: (p.payment_methods || []).map(function (m) {
+        return m.label || m.id;
+      })
     };
   }
 
@@ -193,6 +204,11 @@ export const SDK_JS = `(function () {
       var planId = (opts && opts.planId) || "";
       var promo = (opts && opts.promo) || "";
       if (!planId) { return Promise.reject(crmError("invalid_request", "缺少套餐")); }
+      // 未登录就没有会话：直接说"请先登录"，别让用户看到「这一档买不了」——
+      // 那是**白名单/网关**的问题，不是没登录的问题（同一句话会把人带向错误结论）。
+      if (!token()) {
+        return Promise.reject(crmError("unauthorized", "请先登录后再购买"));
+      }
       return api("GET", "/plans").then(function (list) {
         var plan = null;
         for (var i = 0; i < (list || []).length; i++) {
@@ -201,8 +217,9 @@ export const SDK_JS = `(function () {
         if (!plan) { throw crmError("not_found", "套餐不存在或已下架"); }
         var methods = plan.payment_methods || [];
         if (!methods.length) {
-          // 两种原因都会走到这里：这一档只走 App 内购；或后台还没配任何支付网关。
-          // 对访客不该暴露内部细节，但要给出可行动的下一步。
+          // 两种原因都会走到这里：这一档只走 App 内购；或当前账号不在私有网关
+          // 名单里 / 后台还没配网关。对访客不该暴露内部细节，但要给出可行动
+          // 的下一步。
           throw crmError(
             "no_payment_method",
             "这一档暂时无法在网页上购买，请下载 App 或联系客服"

@@ -7,13 +7,14 @@ Last updated: 2026-10-23
 
 ```
 浏览器 ──https──▶ Caddy (:443)
-                    ├── crm.clever-vpn.org/admin*     → localhost:5181  (Vite dev，HMR)
-                    ├── crm.clever-vpn.org/<其余>      → 127.0.0.1:8788  (wrangler dev，CRM Worker)
+                    ├── crm.clever-vpn.org/{api,pay,_crm}/*、/__version、/health
+                    │                                  → 127.0.0.1:8788  (wrangler dev，CRM Worker)
+                    ├── crm.clever-vpn.org/<其余>      → localhost:5181  (Vite dev，HMR；面板入口就是 /)
                     └── app-web.clever-vpn.org        → 127.0.0.1:5180  (node scripts/dev-app-web.mjs)
 ```
 
 **管理后台为什么指向 dev server**：后台是 SPA，改一行代码不该走「`build:web` → 重启 wrangler」。
-Caddy 在**同一个域名**下按路径分流：`/admin*` 交给 Vite（HMR），`/api/*` 等仍打到真 Worker
+Caddy 在**同一个域名**下按路径分流：`/api/*`、`/pay/*`、`/_crm/*` 打到真 Worker，其余（`/`、`/plans`、`/settings`）交给 Vite（HMR）
 ——所以会话 Cookie、`x-crm-request` CSRF、错误信封全都是真环境，而且同源、不需要 CORS。
 
 ## 1. 一次性准备
@@ -65,7 +66,7 @@ npm run dev:app-web
 - **改 `web/` 里的界面代码 → 浏览器直接热更新**，不用重新构建、不用重启 wrangler。
 - 改了 `src/`（Worker 逻辑）→ wrangler 自己会重载，刷新页面即可。
 - 想看**编译后的产物**（验证「build 之后也没问题」）：`npm run build:web` 后直接开
-  <http://127.0.0.1:8788/admin/> —— 绕过 Caddy，走 Worker 的 assets。
+  <http://127.0.0.1:8788/> —— 绕过 Caddy，走 Worker 的 assets。
 
 - **不要用 `npx wrangler`**：会提示安装 `wrangler@4.152.0` 并卡在 `Ok to proceed?`。
 - 别把 wrangler 输出接给 `head`（SIGPIPE 会把服务打死）；要留日志就 `> /tmp/crm-dev.log 2>&1 &`。
@@ -74,9 +75,9 @@ npm run dev:app-web
 
 | 地址 | 用途 |
 |---|---|
-| <https://crm.clever-vpn.org/admin/> | 管理后台（**Vite dev server**；首次进用 `SETUP_TOKEN` 初始化管理员） |
-| <http://127.0.0.1:8788/admin/> | 管理后台**编译产物**（对比用，走 Worker assets） |
-| <https://crm.clever-vpn.org/admin/plans> | 套餐设计器 |
+| <https://crm.clever-vpn.org/> | 管理后台（**Vite dev server**；首次进用 `SETUP_TOKEN` 初始化管理员） |
+| <http://127.0.0.1:8788/> | 管理后台**编译产物**（对比用，走 Worker assets） |
+| <https://crm.clever-vpn.org/plans> | 套餐设计器 |
 | <https://app-web.clever-vpn.org/> | App 模拟端：登录 → 套餐（`action` 渲染）→ 报价 → 下单 → 支付 → 轮询 → 看权益/激活码 |
 
 ### 假 cf-api（否则付款后拿不到码）

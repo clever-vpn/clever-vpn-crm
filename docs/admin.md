@@ -1,6 +1,6 @@
 # 管理后台
 
-> Last updated: 2026-10-23 — 契约/接口变更请同步本文件与 `docs/contract.md`。
+> Last updated: 2026-11-09 — 契约/接口变更请同步本文件与 `docs/contract.md`。
 
 定位：**单个管理员账号**的租户运营控制台。不是 SaaS 后台，不做多租户、不做角色模型。
 
@@ -10,8 +10,9 @@
 
 | 路径 | 内容 | 鉴权 |
 |---|---|---|
-| `/` | 只做跳转：配了 `SITE_URL` 就 302 过去，否则显示一行部署提示 | 公开 |
-| `/admin/*` | 管理后台 SPA（React + Vite，产物 `web/dist/admin`） | Cookie 会话 |
+| `/` | **管理后台入口**（React + Vite SPA，产物落在 `web/dist/admin/`）；配了 `SITE_URL` 的自托管则 302 到官网，后台改挂 `/admin/` | Cookie 会话 |
+| `/admin`, `/admin/*` | 302 到上面的规范路径（`/admin/plans` → `/plans`）。**真文件**（`/admin/assets/*`）不受影响 | 公开 |
+| `/plans`, `/settings` … | SPA 深链接，回落 `admin/index.html`，前端按 pathname 选页 | Cookie 会话 |
 | `/api/admin/*` | 管理后台 API | Cookie 会话（`/bootstrap`、`/setup`、`/login*` 公开） |
 | `/api/app/v1/*` | App 与静态站共用的接口（契约在 `clever-vpn-docs`） | Bearer 或 Cookie |
 
