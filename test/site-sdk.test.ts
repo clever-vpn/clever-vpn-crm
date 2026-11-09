@@ -30,7 +30,7 @@ const METHODS = [
 ] as const;
 
 /** 最小浏览器环境：SDK 只用这几个全局 */
-function load(over?: { token?: string }) {
+function load(over?: { token?: string; fetch?: (url: string) => Promise<unknown> }) {
   const store = new Map<string, string>();
   if (over?.token) store.set("crm_token", over.token);
   const win: Record<string, unknown> = {
@@ -41,7 +41,7 @@ function load(over?: { token?: string }) {
       setItem: (k: string, v: string) => void store.set(k, v),
       removeItem: (k: string) => void store.delete(k),
     },
-    fetch: () => Promise.reject(new Error("测试里不该真的发请求")),
+    fetch: over?.fetch ?? (() => Promise.reject(new Error("测试里不该真的发请求"))),
   };
   win.window = win;
   vm.runInNewContext(SDK_JS, win);
@@ -65,6 +65,24 @@ describe("SiteCrm SDK", () => {
   it("版本号与常量一致", () => {
     const { sdk } = load();
     expect(sdk.version).toBe(SDK_VERSION);
+  });
+
+  it("请求地址带 /api/app/v1 前缀（少了它打到的是 404，浏览器报 CORS error）", async () => {
+    const seen: string[] = [];
+    const { sdk } = load({
+      fetch: (url) => {
+        seen.push(url);
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve("[]"),
+        });
+      },
+    });
+    await (sdk.plans as () => Promise<unknown>)();
+    expect(seen[0]).toBe("https://crm.test/api/app/v1/plans");
+    // 末尾多余的斜杠不能拼出 `//api`
+    expect(seen[0]).not.toContain("//api/app");
   });
 
   it("没有登录态时 me() 直接返回 null，不打请求", async () => {

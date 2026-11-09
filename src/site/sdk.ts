@@ -22,9 +22,18 @@ const CTA: Record<string, string> = {
 
 export const SDK_VERSION = "1.0.0";
 
-/** 内嵌到 `/_crm/sdk.js`；不依赖构建步骤，字符串原样送出 */
+/**
+ * 内嵌到 `/_crm/sdk.js`；不依赖构建步骤，字符串原样送出。
+ *
+ * ⚠️ 这段是 **TypeScript 模板字符串**：正文里（含注释）出现反引号会当场把字符串
+ * 截断，报的却是一堆 "Expected ;"，看起来完全不像根因。已经踩过三次。
+ */
 export const SDK_JS = `(function () {
-  var BASE = String(window.CRM_API_BASE || "").replace(/\\/$/, "");
+  // config.js 只给 origin（如 https://acme.clever-panel.win），
+  // 而 App/站点共用的接口全在 /api/app/v1/* 下 —— 少了这段前缀会打到站点的
+  // 404（跨源 404 没有 CORS 头，浏览器报的是 CORS error，极易误判成网络问题）。
+  var BASE = String(window.CRM_API_BASE || "").replace(/\\/+$/, "");
+  var API = BASE + "/api/app/v1";
   if (!BASE && window.console) { console.warn("[crm] CRM_API_BASE 未配置"); }
   var TOKEN_KEY = "crm_token";
   var CTA = ${JSON.stringify(CTA)};
@@ -54,7 +63,7 @@ export const SDK_JS = `(function () {
     var t = token();
     if (t) { headers["authorization"] = "Bearer " + t; }
     if (body !== undefined) { headers["content-type"] = "application/json"; }
-    return fetch(BASE + path, {
+    return fetch(API + path, {
       method: method,
       headers: headers,
       body: body === undefined ? undefined : JSON.stringify(body)
@@ -150,7 +159,7 @@ export const SDK_JS = `(function () {
       });
     },
     verify: function (email, code, ref) {
-      var body = { email: email, code: code, appId: "website" };
+      var body = { email: email, code: code };
       if (ref) { body.referral_code = ref; }
       return api("POST", "/auth/verify", body).then(function (d) {
         var t = d && (d.session_token || d.token);
