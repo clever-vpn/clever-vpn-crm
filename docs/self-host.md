@@ -39,7 +39,6 @@ Secrets（加密，不可读回）：
 | 名称 | 内容 |
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API Token，权限：**Workers Scripts:Edit** + **D1:Edit**（+ Account Settings:Read） |
-| `CF_API_TOKEN` | cf-api 租户 API Token（`cv_api_…`） |
 | `SIGNING_SECRET` | 随便一串 ≥32 字符的随机值。签名**一次性证明**（退订链接 / mock 回调）；换掉只会让已发出的退订链接失效，**不会踢人下线** |
 | `PAYMENT_SECRET_KEY` | 支付网关密钥的主密钥（AES-GCM）；换掉 = 已存的网关密钥全部失效，需要重新填写 |
 | `SETUP_TOKEN` | 管理后台首次初始化口令（`openssl rand -hex 24`）；不配则不能初始化管理员 |
@@ -104,7 +103,7 @@ Actions → **deploy** → **Run workflow**（`main` 分支）。
 2. `wrangler d1 list` 找 `D1_NAME`，**不存在就 `wrangler d1 create`**（幂等）；
 3. `node scripts/render-config.mjs` 把 D1 id 与租户参数渲染进 `wrangler.ci.jsonc`；
 4. `wrangler deploy --config wrangler.ci.jsonc`；
-5. `wrangler secret put CF_API_TOKEN / SIGNING_SECRET / PAYMENT_SECRET_KEY`；
+5. `wrangler secret put SIGNING_SECRET / PAYMENT_SECRET_KEY`；
 6. 在 run 的 Summary 里打印 Worker URL 与验证命令。
 
 因为第 4 步先于第 5 步，**首次部署后要再跑一次**（或等 secrets 生效后调用一次业务
@@ -155,9 +154,10 @@ curl -s https://<worker>.workers.dev/__version   # code/contract/tenant
 | `Authentication error` / `Authentication failed` | `CLOUDFLARE_API_TOKEN` 缺 **D1:Edit** 或 **Workers Scripts:Edit** |
 | `A worker with this name already exists` | `WORKER_NAME` 被别的项目占用；换一个名字 |
 | 部署成功但 `/__version` 里 `tenant` 是 `0` | Variables 没配或工作流用了旧 run；重新 Run workflow |
-| 业务接口 401 / 502 | Worker secrets 没写入（首次部署需再跑一次，或检查 `CF_API_TOKEN`） |
+| 业务接口 401 / 502 | Worker secrets 没写入（首次部署需再跑一次） |
+| 付款成功但订单一直「待落账」 | 后台**设置 → cf-api 对接**里没填 token，或 token 已删；填好后点「重试卡住的订单」 |
 | `D1_ERROR: no such table` | 首次请求还没触发迁移；访问一次 `/health` 之外的路径，或检查 D1 是否绑到了正确的 `database_id` |
-| 调用 cf-api 返回 401 | `CF_API_TOKEN` 不是租户 token，或已失效 |
+| 调用 cf-api 返回 401 | 后台里填的 token 不是租户 token，或已在 cf-api 侧删除 |
 | 调用 cf-api 返回 403 | 访问了未开 `apiAccess` 的模块；当前只有 `customers` 可用 |
 | 激活码兑换失败 | 码就是 `customers.code`（16 位）；客户被冻结/过期会被 App 报 `CustomerFrozen`。语义见 `docs/contract.md` 指向的权威契约 |
 
@@ -170,7 +170,6 @@ npm ci
 npx wrangler d1 create clever-vpn-crm     # 已存在会报错，忽略
 D1_DATABASE_ID=<uuid> CRM_TENANT_ID=<id> node scripts/render-config.mjs
 npx wrangler deploy --config wrangler.ci.jsonc
-printf '%s' "$CF_API_TOKEN"   | npx wrangler secret put CF_API_TOKEN   --config wrangler.ci.jsonc
 printf '%s' "$SIGNING_SECRET"     | npx wrangler secret put SIGNING_SECRET     --config wrangler.ci.jsonc
 printf '%s' "$PAYMENT_SECRET_KEY" | npx wrangler secret put PAYMENT_SECRET_KEY --config wrangler.ci.jsonc
 ```

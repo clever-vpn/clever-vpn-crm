@@ -15,7 +15,7 @@ import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
-import { installFakeCfApi } from "./fake-cf-api";
+import { installFakeCfApi, seedPlatformCreds } from "./fake-cf-api";
 
 import type { FakeCfApi } from "./fake-cf-api";
 
@@ -51,8 +51,7 @@ function admin(path: string, init: { method?: string; body?: unknown } = {}) {
 beforeAll(async () => {
   const fake = installFakeCfApi();
   cf = fake;
-  (env as unknown as Record<string, unknown>).CF_API_BASE = fake.base;
-  (env as unknown as Record<string, unknown>).CF_API_TOKEN = fake.token;
+  await seedPlatformCreds(env.DB, fake);
 
   await env.DB.prepare(
     `INSERT INTO admin_users (email, password_hash, totp_enabled, created_at, updated_at)

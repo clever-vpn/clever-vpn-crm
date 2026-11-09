@@ -71,7 +71,8 @@
   ],
 
   // secret 照旧 `wrangler secret put`（每 shard 一份，内容相同）：
-  //   CF_API_TOKEN / SIGNING_SECRET
+  //   SIGNING_SECRET / PAYMENT_SECRET_KEY
+  // cf-api token **每租户不同** ⇒ 存各自租户的 D1（`cf_api` 单行），不用 secret
   "vars": {
     "MODE": "multi",
     "CF_API_BASE": "https://api.clever-vpn.org",

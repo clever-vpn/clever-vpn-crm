@@ -1064,3 +1064,33 @@ export const siteSettings = sqliteTable("site_settings", {
   footer_note: text("footer_note"),
   updated_at: text("updated_at").notNull().default(""),
 });
+
+// ─────────────────────────────────────────────────────────────
+// 平台对接（cf-api 凭据）
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * cf-api 对接凭据 —— **单行**（`id = 1`）。
+ *
+ * 为什么要进库而不是 Worker secret：托管分片一个 Worker 服务多个租户，
+ * 部署级 secret 在模型上就是错的（每个租户的 token 不同）。自部署也一样用它，
+ * 这样"换个 token"是后台点两下，不是重跑一次 `wrangler secret put`。
+ *
+ * `token_enc` 一定是密文（`v1:<base64>`，AES-GCM，主密钥 `PAYMENT_SECRET_KEY`）。
+ * 读取时若发现是**明文**（SaaS 开通时直接写进来、或手工 seed），自动加密后回写
+ * —— 见 `src/platform/creds.ts`。选这个方案而不是"拒绝读明文"，是因为
+ * "把 token 写进租户 D1" 那条路本来就没法在写入侧拿到主密钥。
+ */
+export const cfApi = sqliteTable("cf_api", {
+  /** 恒为 1：这是配置，不是列表 */
+  id: integer("id").primaryKey(),
+  /** 平台基址；空 = 用 `env.CF_API_BASE`，再空 = `https://api.clever-vpn.org` */
+  base_url: text("base_url").notNull().default(""),
+  /** 租户 API Token 的密文（`v1:...`） */
+  token_enc: text("token_enc").notNull().default(""),
+  /** 最近一次联通成功的时间（ISO-8601） */
+  verified_at: text("verified_at"),
+  /** 最近一次失败原因；成功后清空 */
+  last_error: text("last_error"),
+  _updated_at: text("_updated_at").notNull().default(""),
+});

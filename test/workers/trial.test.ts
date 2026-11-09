@@ -15,7 +15,7 @@ import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
-import { installFakeCfApi } from "./fake-cf-api";
+import { installFakeCfApi, seedPlatformCreds } from "./fake-cf-api";
 
 import type { FakeCfApi } from "./fake-cf-api";
 
@@ -109,8 +109,7 @@ async function createPlan(body: Record<string, unknown>): Promise<void> {
 beforeAll(async () => {
   const cfApi = installFakeCfApi();
   cf = cfApi;
-  (env as unknown as Record<string, unknown>).CF_API_BASE = cfApi.base;
-  (env as unknown as Record<string, unknown>).CF_API_TOKEN = cfApi.token;
+  await seedPlatformCreds(env.DB, cfApi);
 
   const now = new Date().toISOString();
   await env.DB.prepare(

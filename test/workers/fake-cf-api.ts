@@ -127,3 +127,39 @@ export function installFakeCfApi(base = "https://api.cf.test"): FakeCfApi {
     },
   };
 }
+
+/**
+ * 把假平台的凭据写进租户 D1（`cf_api` 单行）。
+ *
+ * 凭据**不在 Worker secret 里**：托管分片一个 Worker 服务多个租户，部署级
+ * secret 在模型上就是错的。测试因此也必须走"写库"这条路。
+ * 传明文即可 —— 读取时会自动加密回写（`src/platform/creds.ts`）。
+ */
+export async function seedPlatformCreds(
+  db: D1Database,
+  cf: { base: string; token: string },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO cf_api (id, base_url, token_enc, _updated_at)
+       VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         base_url = excluded.base_url,
+         token_enc = excluded.token_enc,
+         _updated_at = excluded._updated_at`,
+    )
+    .bind(cf.base, cf.token, new Date().toISOString())
+    .run();
+}
+
+/** 清空凭据（模拟"没配好"）—— 订单应停在 `provisioning` */
+export async function clearPlatformCreds(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO cf_api (id, base_url, token_enc, _updated_at)
+       VALUES (1, '', '', ?)
+       ON CONFLICT(id) DO UPDATE SET base_url = '', token_enc = '', _updated_at = excluded._updated_at`,
+    )
+    .bind(new Date().toISOString())
+    .run();
+}

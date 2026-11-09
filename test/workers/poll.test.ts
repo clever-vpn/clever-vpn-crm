@@ -20,7 +20,7 @@ import { encryptSecret } from "../../src/payments/secret";
 import { POLL_BACKOFF, nextPollAt, pollPendingOrders } from "../../src/payments/poll";
 import { ORDER_TTL_MINUTES } from "../../src/payments/checkout";
 import { env } from "./apply-migrations";
-import { installFakeCfApi } from "./fake-cf-api";
+import { installFakeCfApi, seedPlatformCreds } from "./fake-cf-api";
 
 const now = () => new Date().toISOString();
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
@@ -118,8 +118,7 @@ beforeAll(async () => {
   // CI 没有那个文件，必须显式给一份，否则 `gatewaySecret` 返回 null、查单直接报错
   (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "master-key-for-tests";
   const cfApi = installFakeCfApi();
-  (env as unknown as Record<string, unknown>).CF_API_BASE = cfApi.base;
-  (env as unknown as Record<string, unknown>).CF_API_TOKEN = cfApi.token;
+  await seedPlatformCreds(env.DB, cfApi);
 
   const secret = await encryptSecret(env, "poll-secret");
   const withQuery = await env.DB.prepare(

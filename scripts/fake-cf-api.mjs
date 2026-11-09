@@ -16,7 +16,7 @@
  *   node scripts/fake-cf-api.mjs            # 监听 127.0.0.1:8899
  *   然后在 .dev.vars 里加：
  *     CF_API_BASE=http://127.0.0.1:8899
- *     CF_API_TOKEN=cv_api_local
+ *     并在后台「设置 → cf-api 对接」填 cv_api_local（token 存在 D1，不在 env）
  */
 import { createServer } from "node:http";
 
@@ -133,5 +133,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`[fake-cf] listening on http://127.0.0.1:${PORT}  token=${TOKEN}`);
-  console.log("[fake-cf] 在 .dev.vars 里配置 CF_API_BASE / CF_API_TOKEN 后重启 wrangler dev");
+  console.log(
+    "[fake-cf] 在 .dev.vars 里配置 CF_API_BASE，并在后台「设置 → cf-api 对接」填 token 后重启 wrangler dev",
+  );
 });

@@ -225,6 +225,17 @@ export interface SiteDomainView {
   reason: string;
 }
 
+/** cf-api 对接状态（**不含明文 token**） */
+export interface PlatformCredsView {
+  base_url: string;
+  effective_base: string;
+  has_token: boolean;
+  token_storage: "encrypted" | "plaintext" | "none";
+  verified_at: string | null;
+  last_error: string | null;
+  cipher_ready: boolean;
+}
+
 export const api = {
   bootstrap: () => call<Bootstrap>("GET", "/bootstrap"),
   setup: (token: string, email: string, password: string, turnstileToken?: string) =>
@@ -286,6 +297,14 @@ export const api = {
     call<{ ok: true }>("POST", "/password/reset", { email, code, next }),
   /** 发一封测试邮件：验证「配了」≠「能发」 */
   testMail: () => call<{ ok: true; dev: boolean }>("POST", "/mail/test"),
+  // ── cf-api 对接（基址 / token / 连通性 / 重试落账）──
+  platform: () => call<PlatformCredsView>("GET", "/platform"),
+  /** `token` 不传 = 不改；传 `null` = 清空；换 token 才需要填 */
+  savePlatform: (input: { base_url?: string; token?: string | null }) =>
+    call<{ ok: true } & PlatformCredsView>("PUT", "/platform", input),
+  testPlatform: () => call<{ ok: true; status: number }>("POST", "/platform/test"),
+  retryProvisioning: () =>
+    call<{ ok: true; retried: number; failed: number }>("POST", "/platform/provision"),
   /** 运行期设置（目前只有发信配额） */
   settings: () => call<AdminSettings>("GET", "/settings"),
   saveMailSettings: (input: { daily_quota?: number; soft_ratio?: number }) =>

@@ -11,7 +11,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { GIGA } from "../../src/platform/client";
 import { runSettlement } from "../../src/subscriptions/store";
 import { env } from "./apply-migrations";
-import { installFakeCfApi } from "./fake-cf-api";
+import { clearPlatformCreds, installFakeCfApi, seedPlatformCreds } from "./fake-cf-api";
 
 import type { FakeCfApi } from "./fake-cf-api";
 
@@ -89,10 +89,9 @@ function seedPlatformCustomer(trafficGb: number) {
   });
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   cf = installFakeCfApi();
-  (env as unknown as Record<string, unknown>).CF_API_BASE = cf.base;
-  (env as unknown as Record<string, unknown>).CF_API_TOKEN = cf.token;
+  await seedPlatformCreds(env.DB, cf);
 });
 
 beforeEach(() => {
@@ -142,8 +141,7 @@ describe("runSettlement：额度重置并回写平台", () => {
     await seedSubscription({ lastSettledAt: twoMonthsAgo(new Date()), platformId: PLATFORM_ID });
     seedPlatformCustomer(5);
 
-    const backup = (env as unknown as Record<string, unknown>).CF_API_TOKEN;
-    (env as unknown as Record<string, unknown>).CF_API_TOKEN = "";
+    await clearPlatformCreds(env.DB);
     try {
       const report = await runSettlement(env);
       expect(report.settled).toBe(0);
@@ -151,7 +149,7 @@ describe("runSettlement：额度重置并回写平台", () => {
       // 平台侧保持原值，没有被改成 110GB
       expect(cf.customers.get(PLATFORM_ID)?.traffic_balance).toBe(5 * GIGA);
     } finally {
-      (env as unknown as Record<string, unknown>).CF_API_TOKEN = backup;
+      await seedPlatformCreds(env.DB, cf);
     }
   });
 });

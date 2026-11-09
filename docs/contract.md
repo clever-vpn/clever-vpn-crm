@@ -27,7 +27,7 @@ Last updated: 2026-10-25
 | 套餐 | **`kind` 三选一**（`period` / `traffic` / `addon`），见 [plans.md](plans.md)；**销售策略全在 CRM**，App 只渲染 |
 | 币种 | **单币种**，初始化时设定（默认 `CNY`），之后不可改；金额一律用最小单位整数（分） |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
-| 租户 Token | `CF_API_TOKEN`（`cv_api_…`，只放 `wrangler secret`，禁止落库/落日志） |
+| 租户 Token | 存本租户 D1 的 `cf_api` 单行（`token_enc`，AES-GCM 密文）；后台「设置 → cf-api 对接」维护。**不是** Worker secret，禁止落日志 |
 | 可用的平台资源 | **`customers`（读写）+ `lines`（只读，字段白名单，不暴露 `upstream`）** |
 | 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
 | 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |

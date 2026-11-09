@@ -11,7 +11,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
-import { installFakeCfApi } from "./fake-cf-api";
+import { installFakeCfApi, seedPlatformCreds } from "./fake-cf-api";
 
 import { GIGA } from "../../src/platform/client";
 import {
@@ -83,10 +83,9 @@ async function seedSubscription(opts: {
   return customerId;
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   cf = installFakeCfApi();
-  (env as unknown as Record<string, unknown>).CF_API_BASE = cf.base;
-  (env as unknown as Record<string, unknown>).CF_API_TOKEN = cf.token;
+  await seedPlatformCreds(env.DB, cf);
 });
 
 beforeEach(() => {

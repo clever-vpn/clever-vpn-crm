@@ -17,7 +17,7 @@ import { EPAY_V1_MAPPING } from "../../src/payments/builtin/epay";
 import { encryptSecret } from "../../src/payments/secret";
 import { signParams } from "../../src/payments/sign";
 import { env } from "./apply-migrations";
-import { installFakeCfApi } from "./fake-cf-api";
+import { clearPlatformCreds, installFakeCfApi, seedPlatformCreds } from "./fake-cf-api";
 
 import type { FakeCfApi } from "./fake-cf-api";
 
@@ -74,8 +74,7 @@ beforeAll(async () => {
   // 所以这里装一个假平台，让付款后真的能拿到 code。
   const cfApi = installFakeCfApi();
   cf = cfApi;
-  (env as unknown as Record<string, unknown>).CF_API_BASE = cfApi.base;
-  (env as unknown as Record<string, unknown>).CF_API_TOKEN = cfApi.token;
+  await seedPlatformCreds(env.DB, cfApi);
 
   await env.DB.batch([
     env.DB.prepare(
@@ -358,6 +357,8 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
 
   beforeAll(async () => {
     (env as unknown as Record<string, unknown>).PAYMENT_SECRET_KEY = "master-key-for-tests";
+    // 主密钥换了 ⇒ 之前用旧主密钥加密的 cf-api token 会解不开；凭据重写一遍
+    await seedPlatformCreds(env.DB, cf);
     const cipher = await encryptSecret(env, EPAY_KEY);
     expect(cipher).toMatch(/^v1:/);
 
@@ -702,12 +703,11 @@ describe("落账：付款后真的拿到码", () => {
     const orderId = anyOrder!.id;
     await env.DB.prepare(`UPDATE orders SET status = 'provisioning' WHERE id = ?`).bind(orderId).run();
 
-    const backup = (env as unknown as Record<string, unknown>).CF_API_TOKEN;
-    (env as unknown as Record<string, unknown>).CF_API_TOKEN = "";
+    await clearPlatformCreds(env.DB);
     try {
-      await expect(provisionOrder(env, orderId)).rejects.toThrow(/CF_API_TOKEN/);
+      await expect(provisionOrder(env, orderId)).rejects.toThrow(/cf-api 凭据/);
     } finally {
-      (env as unknown as Record<string, unknown>).CF_API_TOKEN = backup;
+      await seedPlatformCreds(env.DB, cf);
     }
 
     const after = await env.DB.prepare(`SELECT status FROM orders WHERE id = ?`)
