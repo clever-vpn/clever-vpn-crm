@@ -81,3 +81,82 @@ export async function setCustomerHold(
 
   return { ok: true, hold: target.hold as "none" | "frozen", platform_synced: platformSynced };
 }
+
+export interface RevokeResult {
+  ok: true;
+  /** 平台侧是否真的停服了；`false` 表示要人工补一刀（见下） */
+  platform_synced: boolean;
+  /** 已经是撤销状态（重复的退款通知 / 重放），本次没有改动 */
+  already: boolean;
+}
+
+/**
+ * **撤销权益（退款 / 吊销）：不可逆，且必须让平台侧停服。**
+ *
+ * 与 `setCustomerHold` 的三点不同：
+ *
+ * 1. 目标态是 `revoked`，不是 `frozen` —— `setCustomerHold` 只在**解冻**方向拒
+ *    绝 revoked，冻结方向会把它覆盖成 frozen，所以退款**不能**走那个口子。
+ * 2. **顺序相反**：冻结是"平台没生效就当没冻"（可自愈），退款是钱已经退出去了，
+ *    所以先推平台、无论成败都落本地账，把 `platform_synced` 如实标出来。
+ * 3. 停服手段是 `frozen=1`：cf-api 不支持按激活码吊销（`crm-api.md` §4.2），
+ *    只改到期日的话客户端还能用到那天结束。
+ *
+ * 平台推失败不抛错：退款是既成事实，调用方不该因为网络抖动就认为"没退"。
+ */
+export async function revokeEntitlement(
+  env: Env,
+  input: { customerId: number; reason: string; now?: Date },
+): Promise<RevokeResult | { ok: false; code: string; message: string }> {
+  const reason = input.reason.trim();
+  if (!reason) {
+    return { ok: false, code: "invalid", message: "必须写原因（会记进变更台账）" };
+  }
+
+  const sub = await customerSubscription(env, input.customerId);
+  if (!sub) {
+    return { ok: false, code: "no_subscription", message: "这个客户还没有订阅" };
+  }
+  if (sub.hold === "revoked") {
+    return { ok: true, platform_synced: true, already: true };
+  }
+
+  const now = input.now ?? new Date();
+
+  // ① 先推平台停服
+  let platformSynced = false;
+  if (sub.platform_customer_id) {
+    try {
+      await updateCustomer(env, sub.platform_customer_id, { frozen: 1 });
+      platformSynced = true;
+    } catch {
+      // 网络/平台故障：照样落本地账，让后台能看见"该补一刀"
+      platformSynced = false;
+    }
+  }
+
+  // ② 再落本地（即使平台失败也要改：CRM 的权益已经终止了）
+  const target: Subscription = {
+    ...sub,
+    hold: "revoked",
+    hold_reason: reason,
+    hold_at: now.toISOString(),
+  };
+  await env.DB.prepare(
+    `UPDATE platform_subscriptions SET hold = 'revoked', hold_reason = ?, hold_at = ?,
+       updated_at = ? WHERE id = ?`,
+  )
+    .bind(reason, now.toISOString(), now.toISOString(), sub.id)
+    .run();
+
+  await logChange(env, {
+    customer_id: input.customerId,
+    subscription_id: sub.id,
+    action: "hold",
+    before: sub,
+    after: target,
+    detail: { reason, platform_synced: platformSynced },
+  });
+
+  return { ok: true, platform_synced: platformSynced, already: false };
+}
