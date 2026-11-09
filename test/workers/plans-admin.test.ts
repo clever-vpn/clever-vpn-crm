@@ -113,6 +113,35 @@ describe("套餐写路径", () => {
     expect(plan.traffic_gb).toBe(10);
   });
 
+  /**
+   * 面板的套餐编辑器要靠 `sales_channels` 渲染「售卖渠道 / 网页上支持什么支付
+   * 方式」。这个字段曾经漏在 `view()` 外面（只有网站/App 的 `planForClient`），
+   * 前端拿到 `undefined`，一点「编辑」就 `undefined[0]` 抛 TypeError —— 现象是
+   * **整个套餐不可编辑**。接口层把它钉住，别只靠前端兜底。
+   */
+  it("列表与 PATCH 的响应都带 sales_channels（套餐编辑器依赖）", async () => {
+    await createPlan("t_channel");
+
+    const list = await call("/api/admin/plans");
+    const { plans } = await jsonOf<{ plans: Record<string, unknown>[] }>(list);
+    const found = plans.find((p) => p.plan_id === "t_channel");
+    expect(Array.isArray(found?.sales_channels)).toBe(true);
+    expect((found!.sales_channels as { channel: string }[])[0]!.channel).toBe("web_checkout");
+
+    // 改「网页上支持支付宝 + 微信」，回包里必须能读回同一个值
+    const res = await call("/api/admin/plans/t_channel", {
+      method: "PATCH",
+      body: {
+        sales_channels: [{ channel: "web_checkout", methods: ["alipay", "wechat"] }],
+      },
+    });
+    expect(res.status).toBe(200);
+    const { plan } = await jsonOf<{ plan: Record<string, unknown> }>(res);
+    expect(plan.sales_channels).toEqual([
+      { channel: "web_checkout", methods: ["alipay", "wechat"] },
+    ]);
+  });
+
   it("PATCH 不能绕过状态机：id 与 status 都改不动", async () => {
     await createPlan("t_guard");
     await publish("t_guard");

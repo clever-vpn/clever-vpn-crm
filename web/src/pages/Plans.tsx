@@ -12,6 +12,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError, type PlanDraft, type PlanView } from "../api";
 
+/** 网页收银台能勾的支付方式（与 `payment_methods` 的 id 一一对应） */
+const WEB_METHODS = [
+  { value: "alipay", label: "支付宝" },
+  { value: "wechat", label: "微信支付" },
+] as const;
+
 const KINDS = [
   { value: "period", label: "周期套餐", hint: "按月/年卖：有到期日，含每月额度" },
   { value: "traffic", label: "流量套餐", hint: "一次性买断：按 GB，可用完为止" },
@@ -130,7 +136,11 @@ export default function Plans() {
       line_ids: plan.line_ids,
       up_mbps: plan.speed?.up_mbps ?? null,
       down_mbps: plan.speed?.down_mbps ?? null,
-      sales_channels: plan.sales_channels,
+      // 兜底：字段缺失时给一个能用的默认值，别让编辑一打开就 `undefined[0]` 崩掉
+      sales_channels:
+        plan.sales_channels && plan.sales_channels.length > 0
+          ? plan.sales_channels
+          : [{ channel: "web_checkout", methods: ["alipay"] }],
       store_product_id: plan.store_product_id,
       visibility: plan.visibility ?? "public",
       trial: plan.trial,
@@ -285,6 +295,9 @@ function PlanForm({
     }
   }
 
+  // 当前渠道（缺字段时按网页收银台显示，不让渲染抛错）
+  const webChannel = draft.sales_channels?.[0]?.channel ?? "web_checkout";
+
   return (
     <div className="card">
       <h3>{existing ? "编辑套餐" : "新建套餐"}</h3>
@@ -415,9 +428,15 @@ function PlanForm({
         <label>
           售卖渠道
           <select
-            value={draft.sales_channels[0]?.channel ?? "web_checkout"}
+            value={webChannel}
             onChange={(e) =>
-              set("sales_channels", [{ channel: e.target.value as "web_checkout", methods: ["alipay"] }])
+              set("sales_channels", [
+                {
+                  channel: e.target.value as "web_checkout" | "apple_iap" | "google_play",
+                  // 换渠道时保留已勾的支付方式，不要悄悄重置成只有支付宝
+                  methods: draft.sales_channels?.[0]?.methods ?? ["alipay"],
+                },
+              ])
             }
           >
             <option value="web_checkout">网页收银台（支付宝/微信）</option>
@@ -426,19 +445,50 @@ function PlanForm({
           </select>
         </label>
 
-        {(draft.sales_channels[0]?.channel === "apple_iap" || draft.sales_channels[0]?.channel === "google_play") && (
+        {webChannel === "web_checkout" && (
+          <label>
+            网页上支持
+            <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+              {WEB_METHODS.map((m) => {
+                const picked = (draft.sales_channels?.[0]?.methods ?? []).includes(m.value);
+                return (
+                  <label key={m.value} style={{ fontWeight: 400 }}>
+                    <input
+                      type="checkbox"
+                      checked={picked}
+                      onChange={(e) => {
+                        const current = draft.sales_channels?.[0]?.methods ?? [];
+                        const next = e.target.checked
+                          ? [...current.filter((x) => x !== m.value), m.value]
+                          : current.filter((x) => x !== m.value);
+                        set("sales_channels", [{ channel: "web_checkout", methods: next }]);
+                      }}
+                    />{" "}
+                    {m.label}
+                  </label>
+                );
+              })}
+            </div>
+            <small className="hint">
+              用户在下单时只能看到勾上的方式；一个都不勾 = 网页上买不了这一档。
+              支付网关也必须支持，否则不会出现（见「支付网关」页）。
+            </small>
+          </label>
+        )}
+
+        {(draft.sales_channels?.[0]?.channel === "apple_iap" || draft.sales_channels?.[0]?.channel === "google_play") && (
           <label>
             商店商品 ID
             <input
               value={
-                draft.sales_channels[0]?.channel === "apple_iap"
+                draft.sales_channels?.[0]?.channel === "apple_iap"
                   ? draft.store_product_id.apple ?? ""
                   : draft.store_product_id.google ?? ""
               }
               onChange={(e) =>
                 set(
                   "store_product_id",
-                  draft.sales_channels[0]?.channel === "apple_iap"
+                  draft.sales_channels?.[0]?.channel === "apple_iap"
                     ? { apple: e.target.value }
                     : { google: e.target.value },
                 )
