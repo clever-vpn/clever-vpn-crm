@@ -25,7 +25,7 @@ const CTA: Record<string, string> = {
  * 支付方式），并在未登录时把 `checkout()` 的错误码从 `no_payment_method` 改成
  * `unauthorized`。两者都不删字段、不改签名。
  */
-export const SDK_VERSION = "1.1.0";
+export const SDK_VERSION = "1.2.0";
 
 /**
  * 内嵌到 `/_crm/sdk.js`；不依赖构建步骤，字符串原样送出。
@@ -134,6 +134,11 @@ export const SDK_JS = `(function () {
       // 未登录 / 私有网关不在名单里时后端给 null，前端就不显示这一段。
       methods: (p.payment_methods || []).map(function (m) {
         return m.label || m.id;
+      }),
+      // 同样的东西但带 id：页面要用它做「选支付方式」按钮，id 是下单时要回传的
+        // 那个值（methods 只是给人看的名字，别拿它拼请求）。
+      method_options: (p.payment_methods || []).map(function (m) {
+        return { id: m.id, label: m.label || m.id };
       })
     };
   }
@@ -203,6 +208,8 @@ export const SDK_JS = `(function () {
     checkout: function (opts) {
       var planId = (opts && opts.planId) || "";
       var promo = (opts && opts.promo) || "";
+      // 用户选的那一种（支付宝 / 微信…）。不传就给第一种 —— 老模板不用改也能跑。
+      var want = (opts && opts.method) || "";
       if (!planId) { return Promise.reject(crmError("invalid_request", "缺少套餐")); }
       // 未登录就没有会话：直接说"请先登录"，别让用户看到「这一档买不了」——
       // 那是**白名单/网关**的问题，不是没登录的问题（同一句话会把人带向错误结论）。
@@ -225,6 +232,22 @@ export const SDK_JS = `(function () {
             "这一档暂时无法在网页上购买，请下载 App 或联系客服"
           );
         }
+        // 选中的方式必须是**这一档真的能用的**：模板传来的可能是过期数据，
+        // 悄悄改成第一种等于用户点了微信却付了支付宝。
+        var chosen = methods[0].id;
+        if (want) {
+          var found = null;
+          for (var j = 0; j < methods.length; j++) {
+            if (methods[j].id === want) { found = methods[j]; }
+          }
+          if (!found) {
+            throw crmError(
+              "payment_method_unavailable",
+              "这一档不支持这种支付方式，请换一个"
+            );
+          }
+          chosen = found.id;
+        }
         var body = { plan_id: planId, promo_code: promo };
         return api("POST", "/quote", body).then(function (q) {
           if (q && q.action === "blocked") {
@@ -233,7 +256,7 @@ export const SDK_JS = `(function () {
           var expected = q && typeof q.payable_minor === "number" ? q.payable_minor : undefined;
           var order = {
             plan_id: planId,
-            payment_method: methods[0].id,
+            payment_method: chosen,
             origin: "web",
             // 付完回**站点的**保底页（不是 CRM 域名）；order=<code> 由服务端拼
             // 路径是产物里的静态文件：/_crm/return.html（发布时写入 R2）
