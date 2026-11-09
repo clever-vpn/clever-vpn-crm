@@ -9,7 +9,7 @@
  *     是否冻结**平台客户**由运营策略决定，这里不碰。
  *   - 已领的礼包不收回、已消耗的额度不退（与商店退款是两件事）。
  */
-import { logChange } from "../subscriptions/store";
+import { revokeEntitlement } from "../subscriptions/hold";
 
 import type { Env } from "../env";
 
@@ -59,21 +59,14 @@ export async function refundIapOrder(
     .bind(order.customer_id)
     .first<{ id: number; hold: string; order_id: number | null }>();
 
-  if (sub && sub.order_id === order.id && sub.hold !== "revoked") {
-    await env.DB.prepare(
-      `UPDATE platform_subscriptions SET hold = 'revoked', hold_reason = ?, hold_at = ?,
-         updated_at = ? WHERE id = ?`,
-    )
-      .bind(opts.reason, iso, iso, sub.id)
-      .run();
-    await logChange(env, {
-      customer_id: order.customer_id,
-      subscription_id: sub.id,
-      action: "hold",
-      before: null,
-      after: null,
-      paid_minor: null,
-      detail: { reason: "refund", order_id: order.id, order_code: order.code },
+  if (sub && sub.order_id === order.id) {
+    // 走统一的撤销通道：**本地 hold + 平台 frozen=1 一起做**。
+    // 曾经这里只 UPDATE 本地，结果是 CRM 显示"权益已撤销"、VPN 却能照常连到自然
+    // 到期 —— 平台侧的停服才是真正生效点。
+    await revokeEntitlement(env, {
+      customerId: order.customer_id,
+      reason: opts.reason,
+      now,
     });
   }
 
