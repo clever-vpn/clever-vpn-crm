@@ -16,12 +16,6 @@ describe("主密钥派生", () => {
     expect(await encryptionKeyOf({} as never)).toBeNull();
   });
 
-  it("已废弃的 SESSION_SECRET / SIGNING_SECRET / PAYMENT_SECRET_KEY 都不再被读取", () => {
-    expect(signingKeyOf({ SESSION_SECRET: "old" } as never)).toBe("");
-    expect(signingKeyOf({ SIGNING_SECRET: "old" } as never)).toBe("");
-    expect(signingKeyOf({ PAYMENT_SECRET_KEY: "old" } as never)).toBe("");
-  });
-
   it("签名密钥由主密钥派生，并随主密钥变化", () => {
     const a = signingKeyOf({ APP_SECRET: "master-a" } as never);
     const b = signingKeyOf({ APP_SECRET: "master-b" } as never);

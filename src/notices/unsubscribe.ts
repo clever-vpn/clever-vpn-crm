@@ -10,7 +10,7 @@
  *      邮件客户端的"退订"按钮会直接 POST（body 是 `List-Unsubscribe=One-Click`），
  *      不需要用户点开网页再确认一次。
  */
-import { signingKeyOf } from "../signing";
+import { signingKeyOf } from "../secrets";
 
 import type { Env } from "../env";
 
