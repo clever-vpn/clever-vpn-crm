@@ -316,6 +316,19 @@ export const api = {
   customers: () => call<{ customers: AdminCustomer[] }>("GET", "/customers"),
   createCustomer: (email: string) =>
     call<{ customer: { id: number; email: string } }>("POST", "/customers", { email }),
+  /** 人工退款：钱在网关侧退，这里只记账 + 按残值调权益 */
+  refundOrder: (
+    code: string,
+    input: { amount_minor: number; reason: string; gateway_ref?: string },
+  ) =>
+    call<{
+      ok: true;
+      refundedMinor: number;
+      totalRefundedMinor: number;
+      remaining: { days: number } | { gb: number } | null;
+      voided: boolean;
+      platformSynced: boolean;
+    }>("POST", `/orders/${encodeURIComponent(code)}/refund`, input),
   orders: (params: { status?: string; customer_id?: number; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.status) q.set("status", params.status);
@@ -551,6 +564,8 @@ export interface AdminOrder {
   created_at: string;
   provider_trade_no: string | null;
   pay_url: string | null;
+  /** 已退金额（分）；**累计**，可多次部分退款 */
+  refunded_minor: number;
 }
 
 /** 支付网关（服务端**从不回显密钥**，只回 `has_secret`） */

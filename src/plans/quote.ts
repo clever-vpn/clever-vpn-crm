@@ -82,6 +82,38 @@ function reject(reason: string): Quote {
   };
 }
 
+/**
+ * 把库里的订阅行映射成算残值/报价用的 `CurrentSubscription`。
+ *
+ * 放在这里而不是各调用点自己拼：`unlimited` 的判据（period 且月额度为 null）
+ * 一旦两边写得不一致，残值就会算错，而那种错是静默的。
+ */
+export function currentOfSubscription(
+  sub: {
+    plan_id: string;
+    kind: string;
+    paid_minor: number;
+    period_term_days: number | null;
+    traffic_total_gb: number | null;
+    expires_at: string | null;
+    traffic_remaining_gb: number | null;
+    period_quota_gb: number | null;
+  },
+  listPriceMinor = 0,
+): CurrentSubscription {
+  return {
+    plan_id: sub.plan_id,
+    kind: sub.kind === "traffic" ? "traffic" : "period",
+    list_price_minor: listPriceMinor,
+    paid_minor: sub.paid_minor,
+    period_term_days: sub.period_term_days,
+    traffic_total_gb: sub.traffic_total_gb,
+    expires_at: sub.expires_at,
+    traffic_remaining_gb: sub.traffic_remaining_gb,
+    unlimited: sub.period_quota_gb === null && sub.kind === "period",
+  };
+}
+
 /** 订阅是否已经结束（到期 或 流量用尽） */
 export function isSubscriptionOver(current: CurrentSubscription, now: Date): boolean {
   if (current.unlimited) return current.expires_at === null ? false : Date.parse(current.expires_at) <= now.getTime();

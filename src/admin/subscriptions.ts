@@ -22,6 +22,7 @@ import {
 import { adjustSubscription } from "../subscriptions/adjust";
 import { setCustomerHold } from "../subscriptions/hold";
 import { pollOrderOnce } from "../payments/poll";
+import { refundOrder } from "../payments/refund";
 
 import type { Env } from "../env";
 import type { PlanRow } from "../plans/model";
@@ -150,7 +151,7 @@ export async function handleAdminSubscriptions(
     const rows = await env.DB.prepare(
       `SELECT o.id, o.code, o.customer_id, c.email, o.plan_id, o.kind, o.amount_minor,
               o.currency, o.source, o.payment_method, o.status, o.paid_at, o.created_at,
-              o.provider_trade_no, o.pay_url
+              o.provider_trade_no, o.pay_url, o.refunded_minor
          FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
          ${where.length ? "WHERE " + where.join(" AND ") : ""}
          ORDER BY o.id DESC LIMIT ?`,
@@ -158,6 +159,28 @@ export async function handleAdminSubscriptions(
       .bind(...binds, limit)
       .all();
     return json({ orders: rows.results ?? [] });
+  }
+
+  // ── 人工退款（钱在网关侧操作，这里只记账 + 调整权益）──
+  const refundOne = path.match(/^\/orders\/([A-Za-z0-9_-]{4,64})\/refund$/);
+  if (method === "POST" && refundOne) {
+    const body = await readBody(request);
+    const result = await refundOrder(env, {
+      orderCode: refundOne[1]!,
+      amountMinor: Number(body.amount_minor),
+      reason: String(body.reason ?? ""),
+      gatewayRef:
+        typeof body.gateway_ref === "string" ? body.gateway_ref : undefined,
+      actor,
+    });
+    if (!result.ok) return fail(result.status, result.code, result.message);
+    await audit(env, actor, "order_refunded", refundOne[1]!, {
+      amount_minor: result.refundedMinor,
+      total_refunded_minor: result.totalRefundedMinor,
+      voided: result.voided,
+      platform_synced: result.platformSynced,
+    });
+    return json(result);
   }
 
   // ── 手动查单（客服兜底）──
