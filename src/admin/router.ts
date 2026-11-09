@@ -24,6 +24,7 @@ import { handleAdminGateways } from "./gateways";
 import { handleAdminStoreChannels } from "./store-channels";
 import { handleAdminPromotions } from "./promotions";
 import { handleAdminSettings } from "./settings";
+import { handleAdminPlatform } from "./platform";
 import { handleAdminSite } from "./site";
 import { handleAdminSubscriptions } from "./subscriptions";
 import { emailCodeAvailable, mailReady, sendMail } from "../mail";
@@ -488,6 +489,10 @@ export async function handleAdminApi(
   // ── 运行期设置（发信配额等）──
   const settingsResponse = await handleAdminSettings(request, env);
   if (settingsResponse) return settingsResponse;
+
+  // ── cf-api 对接（基址 / token / 连通性 / 重试落账）──
+  const platformResponse = await handleAdminPlatform(request, env, admin.email);
+  if (platformResponse) return platformResponse;
 
   // ── 站点：发布 / 回滚 / 状态（产物在 R2，指针在 KV，见 contracts/site-studio-crm.md §6）──
   const siteResponse = await handleAdminSite(request, env, tenantId, admin.email);

@@ -11,7 +11,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
-import { installFakeCfApi } from "./fake-cf-api";
+import { installFakeCfApi, seedPlatformCreds } from "./fake-cf-api";
 import { refundOrder } from "../../src/payments/refund";
 
 const CUSTOMER = 1;
@@ -79,11 +79,9 @@ async function seed(opts: {
     .run();
 }
 
-function withPlatform() {
+async function withPlatform() {
   const cf = installFakeCfApi();
-  const e = env as unknown as Record<string, unknown>;
-  e.CF_API_BASE = cf.base;
-  e.CF_API_TOKEN = cf.token;
+  await seedPlatformCreds(env.DB, cf);
   cf.customers.set(PLATFORM_ID, {
     id: PLATFORM_ID,
     code: "C9101",
@@ -126,7 +124,7 @@ beforeEach(async () => {
 describe("部分退款：按残值缩权益并推平台", () => {
   it("付 3000 用 30 天，退 1000 ⇒ 剩 20 天，且 expire_date 推到平台", async () => {
     await seed({});
-    const cf = withPlatform();
+    const cf = await withPlatform();
     try {
       const r = await refundOrder(env, {
         orderCode: "ORD-REFUND-1",
@@ -169,7 +167,7 @@ describe("部分退款：按残值缩权益并推平台", () => {
 
   it("流量套餐：按比例扣剩余流量", async () => {
     await seed({ kind: "traffic", paidMinor: 3000, termDays: 30 });
-    const cf = withPlatform();
+    const cf = await withPlatform();
     try {
       const r = await refundOrder(env, {
         orderCode: "ORD-REFUND-1",
@@ -192,7 +190,7 @@ describe("部分退款：按残值缩权益并推平台", () => {
 describe("全额退款：等于终止权益", () => {
   it("退满残值 ⇒ 订单 refunded、订阅 revoked、平台 frozen=1", async () => {
     await seed({});
-    const cf = withPlatform();
+    const cf = await withPlatform();
     try {
       const r = await refundOrder(env, {
         orderCode: "ORD-REFUND-1",

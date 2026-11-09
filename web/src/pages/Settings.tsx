@@ -5,6 +5,7 @@ import {
   type AdminSettings,
   type AuditEntry,
   type Me,
+  type PlatformCredsView,
   type SessionInfo,
 } from "../api";
 
@@ -23,6 +24,7 @@ export default function Settings({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <MailCard me={me} />
+      <PlatformCard />
       <PasswordCard mailReady={me.mail_ready} />
       <TotpCard me={me} onMeChanged={onMeChanged} />
       <SessionsCard />
@@ -166,6 +168,161 @@ function PasswordCard({ mailReady }: { mailReady: boolean }) {
 }
 
 /** 邮件发信状态 —— 「配了」不等于「能发」，所以给一个真的发一封的按钮 */
+/**
+ * cf-api 对接 —— 平台凭据存在本租户 D1（加密），不是 Worker secret。
+ *
+ * 一屏做三件事：看一眼连通状态、换 token、把卡住的订单重推一次。
+ * 为什么需要「重试落账」：付款成功后落账失败只是订单卡在 `provisioning`，
+ * cron 在托管分片下不一定跑；让管理员点一下就比等一小时强。
+ */
+function PlatformCard() {
+  const [view, setView] = useState<PlatformCredsView | null>(null);
+  const [base, setBase] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState<"" | "save" | "test" | "retry">("");
+  const [state, setState] = useState<{ kind: "idle" | "ok" | "error"; text: string }>({
+    kind: "idle",
+    text: "",
+  });
+
+  useEffect(() => {
+    api
+      .platform()
+      .then((v) => {
+        setView(v);
+        setBase(v.base_url);
+      })
+      .catch(() => setView(null));
+  }, []);
+
+  async function save(event?: React.FormEvent) {
+    event?.preventDefault();
+    setBusy("save");
+    setState({ kind: "idle", text: "" });
+    try {
+      const res = await api.savePlatform({ base_url: base, token: token || undefined });
+      setView(res);
+      setToken("");
+      setState({ kind: "ok", text: "已保存（token 已加密入库）" });
+    } catch (err) {
+      setState({ kind: "error", text: message(err, "保存失败") });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function test() {
+    setBusy("test");
+    setState({ kind: "idle", text: "" });
+    try {
+      await api.testPlatform();
+      setView(await api.platform());
+      setState({ kind: "ok", text: "连通正常" });
+    } catch (err) {
+      setView(await api.platform().catch(() => null));
+      setState({ kind: "error", text: message(err, "连接失败") });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function retry() {
+    setBusy("retry");
+    setState({ kind: "idle", text: "" });
+    try {
+      const res = await api.retryProvisioning();
+      setState({
+        kind: res.failed > 0 ? "error" : "ok",
+        text: res.failed
+          ? `重试 ${res.retried + res.failed} 单：成功 ${res.retried}，仍失败 ${res.failed}`
+          : `重试 ${res.retried} 单，全部成功`,
+      });
+    } catch (err) {
+      setState({ kind: "error", text: message(err, "重试失败") });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const configured = Boolean(view?.has_token);
+
+  return (
+    <form className="card" onSubmit={save}>
+      <h3>cf-api 对接</h3>
+      <p className="hint">
+        平台凭据存在本 CRM 自己的库里（AES 加密），换 token 不用重跑部署。
+        没配好时支付能成功，但订单会卡在「待落账」——用户付了钱却用不了。
+      </p>
+
+      <div className="actions" style={{ marginBottom: 12 }}>
+        <span className={`tag ${configured ? "tag-active" : "tag-draft"}`}>
+          {configured ? "已配置" : "未配置"}
+        </span>
+        <button type="button" onClick={test} disabled={!configured || busy !== ""}>
+          {busy === "test" ? "测试中…" : "测试连接"}
+        </button>
+        <button type="button" onClick={retry} disabled={!configured || busy !== ""}>
+          {busy === "retry" ? "重试中…" : "重试卡住的订单"}
+        </button>
+      </div>
+
+      <div className="field">
+        <label htmlFor="cf-api-base">平台基址</label>
+        <input
+          id="cf-api-base"
+          value={base}
+          placeholder={view?.effective_base ?? "https://api.clever-vpn.org"}
+          onChange={(e) => setBase(e.target.value)}
+        />
+        <p className="hint">
+          留空 = 用部署配置里的 {view?.effective_base ?? "https://api.clever-vpn.org"}。
+        </p>
+      </div>
+
+      <div className="field">
+        <label htmlFor="cf-api-token">
+          {configured ? "换一个新 Token（留空 = 不改）" : "租户 API Token"}
+        </label>
+        <input
+          id="cf-api-token"
+          type="password"
+          autoComplete="off"
+          value={token}
+          placeholder={configured ? "cv_api_…（已保存，不回显）" : "cv_api_…"}
+          onChange={(e) => setToken(e.target.value)}
+        />
+        <p className="hint">
+          在 cf-api 后台「API 访问」页新建一把，粘贴到这里。明文只在创建时显示一次。
+          {view && !view.cipher_ready && (
+            <strong> 未配置 PAYMENT_SECRET_KEY，无法加密保存 token。</strong>
+          )}
+        </p>
+      </div>
+
+      <div className="actions">
+        <button type="submit" className="primary" disabled={busy !== ""}>
+          {busy === "save" ? "保存中…" : "保存"}
+        </button>
+      </div>
+
+      {state.kind !== "idle" && (
+        <div className={`notice ${state.kind === "ok" ? "ok" : "error"}`}>{state.text}</div>
+      )}
+
+      {view?.verified_at && (
+        <p className="hint" style={{ marginTop: 8 }}>
+          最近一次连通成功：{view.verified_at.replace("T", " ").slice(0, 19)} UTC
+        </p>
+      )}
+      {view?.last_error && (
+        <p className="hint" style={{ marginTop: 4 }}>
+          最近一次失败：{view.last_error}
+        </p>
+      )}
+    </form>
+  );
+}
+
 function MailCard({ me }: { me: Me }) {
   const [state, setState] = useState<{ kind: "idle" | "ok" | "error"; text: string }>({
     kind: "idle",

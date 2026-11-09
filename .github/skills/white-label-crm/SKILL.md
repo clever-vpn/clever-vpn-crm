@@ -39,7 +39,6 @@ Secrets（加密，写进去就看不到）：
 | 名称 | 内容 |
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | 权限：**Workers Scripts:Edit** + **D1:Edit**（+ Account Settings:Read） |
-| `CF_API_TOKEN` | cf-api 租户 Token（`cv_api_…`） |
 | `SIGNING_SECRET` | ≥32 字符随机串（一次性证明的 HMAC 密钥：退订链接 / mock 回调）；换掉不会踢人下线 |
 | `SETUP_TOKEN` | 管理后台初始化口令（`openssl rand -hex 24`）；不配就无法创建管理员 |
 
@@ -64,7 +63,7 @@ Actions → **deploy** → **Run workflow**。工作流会自动：
 2. 找 D1（不存在就 `d1 create`，幂等）；
 3. 渲染 `wrangler.ci.jsonc`（D1 id + 租户参数注入，仓库里不含密钥）；
 4. `wrangler deploy`；
-5. 写入 Worker secrets（`CF_API_TOKEN` / `SIGNING_SECRET`）；
+5. 写入 Worker secrets（`SIGNING_SECRET` / `PAYMENT_SECRET_KEY`）；
 6. 在 run 的 **Summary** 里打印 Worker URL 与验证命令。
 
 因为"先部署后写 secrets"，**首次部署建议再跑一次**（或等 secrets 生效后访问一次业
@@ -116,7 +115,8 @@ D1 控制台还有 Time Travel（Free 7 天 / Paid 30 天）可回滚。这一�
 | `Authentication error` / `Authentication failed` | `CLOUDFLARE_API_TOKEN` 缺 **D1:Edit** 或 **Workers Scripts:Edit** |
 | `A worker with this name already exists` | `WORKER_NAME` 被占；换名 |
 | `/__version` 里 `tenant` 是 `0` | Variables 没配，或看的是旧一次 run 的地址 |
-| 业务接口 401 / 502 | Worker secrets 没写入（首次需再跑一次，或 `CF_API_TOKEN` 失效） |
+| 业务接口 401 / 502 | Worker secrets 没写入（首次需再跑一次） |
+| 付款成功但订单卡在「待落账」 | 后台「设置 → cf-api 对接」填 token（加密存 D1）→ 点「重试卡住的订单」 |
 | `D1_ERROR: no such table` | 首次请求未触发迁移；访问一次 `/health` 之外的路径；或 D1 绑错 |
 | cf-api 返回 403 | 访问了未开 `apiAccess` 的模块；当前只有 `customers` 可用 |
 

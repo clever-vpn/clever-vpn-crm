@@ -20,10 +20,12 @@ export interface Env {
 
   /** cf-api 租户 ID */
   CRM_TENANT_ID?: string;
-  /** cf-api 基址（自托管/托管一致） */
+  /**
+   * cf-api 基址的**缺省值**（自托管/托管一致）。
+   * 租户 token 不在这里：它存本租户 D1 的 `cf_api` 单行（加密），
+   * 因为托管分片一个 Worker 服务多个租户，部署级 secret 在模型上就是错的。
+   */
   CF_API_BASE?: string;
-  /** 租户 API Token（wrangler secret put CF_API_TOKEN） */
-  CF_API_TOKEN?: string;
   /**
    * **一次性证明的 HMAC 密钥**（`wrangler secret put SIGNING_SECRET`）。
    *
@@ -35,8 +37,6 @@ export interface Env {
    * 轮换它只会让**已发出的**退订链接失效（重发一封即可），不会踢任何用户下线。
    */
   SIGNING_SECRET?: string;
-  /** @deprecated 旧名，等价于 `SIGNING_SECRET`。只为不让老部署一夜失效。 */
-  SESSION_SECRET?: string;
   /** 首次初始化管理员用的一次性口令（wrangler secret put SETUP_TOKEN） */
   SETUP_TOKEN?: string;
   /** 密码哈希迭代次数；Workers 免费版 CPU 只有 10ms，必要时下调 */

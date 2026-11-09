@@ -85,6 +85,13 @@
       "when": 1794150824559,
       "tag": "0011_swift_lady_vermin",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1794202348358,
+      "tag": "0012_high_shotgun",
+      "breakpoints": true
     }
   ]
 }

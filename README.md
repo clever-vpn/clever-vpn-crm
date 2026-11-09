@@ -34,7 +34,7 @@
 | 类型 | 名称 | 说明 |
 |---|---|---|
 | Secret | `CLOUDFLARE_API_TOKEN` | Workers Scripts:Edit + D1:Edit |
-| Secret | `CF_API_TOKEN` | cf-api 租户 token（`cv_api_…`） |
+| Secret | `PAYMENT_SECRET_KEY` | 网关密钥与 cf-api token 的加密主密钥（缺它两者都存不进库） |
 | Secret | `SIGNING_SECRET` | 随便一串长随机值。**一次性证明**的 HMAC 密钥（退订链接 / mock 回调签名），与登录态无关 |
 | Variable | `CRM_TENANT_ID` | 你在 cf-api 的租户 ID（**必填**，为空则跳过部署） |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
@@ -43,6 +43,8 @@
 3. Actions → **deploy** → Run workflow。首次会自动 `wrangler d1 create`，
    并用 `scripts/render-config.mjs` 把参数渲染进 `wrangler.ci.jsonc` 再部署。
 4. 打开输出的 `https://<worker>.workers.dev/__version` 核对 `tenant` / `code`。
+5. 进后台 **设置 → cf-api 对接**，粘贴 cf-api 后台「API 访问」页新建的 token
+   （加密存进你自己的 D1；填好后点「测试连接」）。
 
 部署与**数据库迁移**都由 GitHub Actions 执行（deploy 工作流先 `wrangler d1 migrations apply`
 再部署），无需手工执行 SQL。

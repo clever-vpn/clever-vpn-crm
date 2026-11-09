@@ -11,7 +11,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
-import { installFakeCfApi } from "./fake-cf-api";
+import { installFakeCfApi, seedPlatformCreds } from "./fake-cf-api";
 import { revokeEntitlement, setCustomerHold } from "../../src/subscriptions/hold";
 
 const CUSTOMER = 1;
@@ -52,9 +52,7 @@ beforeEach(async () => {
 describe("revokeEntitlement", () => {
   it("停服推到平台：frozen=1，且本地转 revoked", async () => {
     const cf = installFakeCfApi();
-    const e = env as unknown as Record<string, unknown>;
-    e.CF_API_BASE = cf.base;
-    e.CF_API_TOKEN = cf.token;
+    await seedPlatformCreds(env.DB, cf);
     cf.customers.set(PLATFORM_ID, {
       id: PLATFORM_ID,
       code: "C9001",
@@ -94,9 +92,7 @@ describe("revokeEntitlement", () => {
 
   it("平台推失败：本地照样撤销，并标记 platform_synced=false", async () => {
     // 指向一个不存在的主机：模拟平台故障/网络抖动
-    const e = env as unknown as Record<string, unknown>;
-    e.CF_API_BASE = "https://api.cf-unreachable.test";
-    e.CF_API_TOKEN = "t";
+    await seedPlatformCreds(env.DB, { base: "https://api.cf-unreachable.test", token: "t" });
     const r = await revokeEntitlement(env, {
       customerId: CUSTOMER,
       reason: "退款：平台暂时不可用",
@@ -113,9 +109,7 @@ describe("revokeEntitlement", () => {
 
   it("重复撤销幂等；撤销后不能解冻复活", async () => {
     const cf = installFakeCfApi();
-    const e = env as unknown as Record<string, unknown>;
-    e.CF_API_BASE = cf.base;
-    e.CF_API_TOKEN = cf.token;
+    await seedPlatformCreds(env.DB, cf);
     try {
       await revokeEntitlement(env, { customerId: CUSTOMER, reason: "退款" });
       const again = await revokeEntitlement(env, { customerId: CUSTOMER, reason: "退款" });

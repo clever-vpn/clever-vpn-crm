@@ -93,7 +93,8 @@ node scripts/fake-cf-api.mjs          # 127.0.0.1:8899
 
 ```ini
 CF_API_BASE=http://127.0.0.1:8899
-CF_API_TOKEN=cv_api_local
+# token 不在 env 里：本地用后台「设置 → cf-api 对接」填 cv_api_local
+# （也可以直接 seed 一行：INSERT INTO cf_api (id, base_url, token_enc) VALUES (1, '', 'cv_api_local')）
 ```
 
 验证：付款后 `GET /api/app/v1/subscription` 变成 `active` 并带上 `code`；

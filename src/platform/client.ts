@@ -4,8 +4,11 @@
  * 只做三件事：按 `auth_id` 找客户、建客户、改控制参数。
  * **没有第四个概念**：激活码不是独立资源，建客户就带出来了（`crm-api.md` §4）。
  *
- * 认证只有一个租户 Token（`CF_API_TOKEN`），它**绝不下发**给 App 或浏览器。
+ * 认证只有一个租户 Token，它存在**本租户 D1 的 `cf_api` 单行**里（加密），
+ * **绝不下发**给 App 或浏览器 —— 见 `creds.ts`。
  */
+
+import { platformCreds } from "./creds";
 
 import type { Env } from "../env";
 
@@ -56,20 +59,27 @@ export class PlatformError extends Error {
 
 const TIMEOUT_MS = 10_000;
 
-function baseUrl(env: Env): string {
-  const base = (env.CF_API_BASE ?? "").trim().replace(/\/+$/, "");
-  if (!base) throw new PlatformError("CF_API_BASE 未配置", 0);
-  return base;
+/** 基址与 token 都在库里（`cf_api` 单行）；缺任一项都是"没配好"，不是网络错误 */
+export async function platformAuth(env: Env): Promise<{ base: string; token: string }> {
+  const creds = await platformCreds(env);
+  if (!creds.token) {
+    throw new PlatformError(
+      creds.problem === "undecryptable"
+        ? "cf-api token 解不开（PAYMENT_SECRET_KEY 换过，或密文损坏）—— 后台「设置 → cf-api 对接」重新填一把"
+        : "未配置 cf-api 凭据（后台「设置 → cf-api 对接」里填）",
+      0,
+    );
+  }
+  return { base: creds.base, token: creds.token };
 }
 
 async function call(env: Env, path: string, init: RequestInit = {}): Promise<Response> {
-  const token = (env.CF_API_TOKEN ?? "").trim();
-  if (!token) throw new PlatformError("CF_API_TOKEN 未配置", 0);
+  const { base, token } = await platformAuth(env);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    return await fetch(`${baseUrl(env)}${path}`, {
+    return await fetch(`${base}${path}`, {
       ...init,
       signal: controller.signal,
       headers: {
