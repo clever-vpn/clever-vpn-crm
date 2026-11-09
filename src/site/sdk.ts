@@ -200,7 +200,14 @@ export const SDK_JS = `(function () {
         }
         if (!plan) { throw crmError("not_found", "套餐不存在或已下架"); }
         var methods = plan.payment_methods || [];
-        if (!methods.length) { throw crmError("no_payment_method", "这一档请在 App 内购买"); }
+        if (!methods.length) {
+          // 两种原因都会走到这里：这一档只走 App 内购；或后台还没配任何支付网关。
+          // 对访客不该暴露内部细节，但要给出可行动的下一步。
+          throw crmError(
+            "no_payment_method",
+            "这一档暂时无法在网页上购买，请下载 App 或联系客服"
+          );
+        }
         var body = { plan_id: planId, promo_code: promo };
         return api("POST", "/quote", body).then(function (q) {
           if (q && q.action === "blocked") {
