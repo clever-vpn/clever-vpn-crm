@@ -53,9 +53,18 @@ const PLAN_COLUMNS = `id, name, kind, price_minor, currency, licence_limit, term
   sort_order, status, visibility, retired_at, trial, created_at, updated_at`;
 
 /** 后台视图 = App 视图 + 后台才需要的状态字段 */
+/**
+ * 面板看到的套餐。
+ *
+ * `planForClient()` 是**网站/App** 的视图（它们不需要知道"在哪儿卖"），这里必须
+ * 补上 `sales_channels` —— 套餐编辑器要用它渲染「售卖渠道 / 网页上支持什么支付
+ * 方式」。少了这个字段，前端拿到的是 `undefined`，编辑一打开就 `undefined[0]`
+ * 抛 TypeError，表现就是"点编辑没反应"。
+ */
 function view(plan: Plan): Record<string, unknown> {
   return {
     ...planForClient(plan),
+    sales_channels: plan.sales_channels,
     status: plan.status,
     visibility: plan.visibility,
     sort_order: plan.sort_order,
