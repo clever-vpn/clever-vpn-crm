@@ -32,16 +32,7 @@ on:
         required: false
         default: "manual"
         type: string
-      replenish_pool:
-        description: "先补池再造片（空池时用它：关闭 Panel 会删掉位号行）"
-        required: false
-        default: false
-        type: boolean
-      pool_count:
-        description: "补池目标（空闲位号个数；仅 replenish_pool=true 时生效）"
-        required: false
-        default: "2"
-        type: string
+
   schedule:
     # 每天 04:17 UTC 检查一次是否要加新片（2000 租户/片，低频）
     - cron: "17 4 * * *"
@@ -101,6 +92,45 @@ jobs:
             echo "reason=$(cat /tmp/reason.txt)" >> "$GITHUB_OUTPUT"
           fi
 
+          # ---- 自动补池：池子低于目标就补；新片（next_shard）先补再发 ----
+          # 关闭 Panel 会把位号**原地重置**回池（cf-api 侧），所以正常 churn 不耗池；
+          # 这里管的是"池子被吃空 / 新片刚建出来"这两种情况。
+          # **必须在任何 pause 之前**：`pool.ensure` 在暂停期间直接 409
+          # （那道闸门是"部署期间不改绑定"）。
+          version=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [[ -z "$version" ]]; then
+            echo "::warning::取不到 latest release tag，跳过本轮补池（不影响部署）"
+          fi
+          target=$(jq -r '.pool_target // 10' <<<"$resp")
+          : > /tmp/touched.txt
+          # 人工指定了片就只补那一片；否则补所有低于目标的片 + 新片
+          candidates=$(jq -r --argjson t "$target" --arg only "$SHARD_INPUT" '
+            (if $only == "" then
+               ([.shards[] | select(.pooled < $t) | .shard] + [.next_shard | select(. != null)])
+             else
+               [($only | tonumber)]
+             end) | unique | .[]' <<<"$resp")
+          for shard in ${candidates:-}; do
+            [[ -z "$version" ]] && break
+            jq -n --arg v "$version" '{version: $v}' > /tmp/pool-req.json
+            if ! out=$(curl -sS --fail-with-body -X POST \
+                 -H "Authorization: Bearer $SERVICE_TOKEN" \
+                 -H "Content-Type: application/json" \
+                 -d @/tmp/pool-req.json \
+                 "$CF_API_BASE/api/v2/platform/shards/$shard/pool"); then
+              echo "::warning::shard-$shard 补池失败（部署窗口内会被拒绝，下次再来）"
+              continue
+            fi
+            created=$(jq '.created | length' <<<"$out")
+            echo "shard-$shard 补池 version=${version} created=${created} pooled=$(jq -r .pooled <<<"$out")"
+            # 新库要靠一次部署才会被绑定 ⇒ 必须把这一片加入部署清单
+            if [[ "$created" -gt 0 ]]; then echo "$shard" >> /tmp/touched.txt; fi
+          done
+          if [[ -s /tmp/touched.txt ]]; then
+            extra=$(jq -R . /tmp/touched.txt | jq -s -c 'unique | map({shard: (. | tonumber)})')
+            list=$(jq -c --argjson extra "$extra" '. + $extra | unique_by(.shard)' <<<"$list")
+          fi
+
           echo "matrix={\"include\":$list}" >> "$GITHUB_OUTPUT"
           count=$(jq 'length' <<<"$list")
           if [[ "$count" -gt 0 ]]; then
@@ -133,7 +163,6 @@ jobs:
       HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
       CRM_CODE_VERSION: ${{ github.sha }}
       SITE_URL: ${{ vars.SITE_URL }}
-      POOL_COUNT: ${{ inputs.pool_count || '2' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -160,31 +189,6 @@ jobs:
           access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
           secrets: |
             ${{ vars.BW_SECRET_ID_APP_SECRET }} > APP_SECRET
-
-      # ---- 2.0 补池（可选）----
-      # 关闭一个 Panel 会把 `slots` 行**删掉**（库已删，留着会被发给下一个租户），
-      # 池子于是变空；而 cf-api 那边没有任何自动补池 —— 空池时开通报 409
-      # `no_pooled_slot`，前端只会显示"平台正在准备资源，请稍后重试"。
-      #
-      # 必须跑在 pause **之前**：`pool.ensure` 在暂停期间直接 409（闸门就是
-      # "部署期间不改绑定"）。新库由本作业后面的"逐库迁移 + 重新部署"绑上。
-      - name: Replenish pool（可选）
-        if: inputs.replenish_pool
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          version=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
-          echo "补池版本=${version} count=${POOL_COUNT}"
-          # 用 jq 组 JSON：在 shell 双引号里手写转义是自找麻烦
-          jq -n --arg v "$version" --argjson n "$POOL_COUNT" '{version:$v, count:$n}' > /tmp/pool-req.json
-          curl -sS --fail-with-body -X POST \
-            -H "Authorization: Bearer $SERVICE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d @/tmp/pool-req.json \
-            "$CF_API_BASE/api/v2/platform/shards/$SHARD/pool" | tee /tmp/pool.json
-          echo
-          jq -c '{created, pooled, target, bindings_changed}' /tmp/pool.json
 
       # ---- 2.1 暂停开通（挡开通与补池，不挡服务）----
       - name: Pause provisioning
