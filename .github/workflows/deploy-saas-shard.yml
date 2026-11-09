@@ -206,11 +206,6 @@ jobs:
           fi
           printf '%s' "$APP_SECRET" | npx wrangler secret put APP_SECRET --config wrangler.shard.jsonc
           echo "✔ APP_SECRET 已写入（值不打印）"
-          # 历史残留清理（旧的两把已并入 APP_SECRET；不存在也无所谓）
-          for legacy in SIGNING_SECRET PAYMENT_SECRET_KEY; do
-            npx wrangler secret delete "$legacy" --config wrangler.shard.jsonc >/dev/null 2>&1 \
-              && echo "✔ 已清理历史 secret $legacy" || true
-          done
 
       # ---- 2.4 以 registry 为准再刷一次绑定 ----
       # 做法是「拿最新清单再 wrangler deploy 一次」，**不是** PATCH settings。

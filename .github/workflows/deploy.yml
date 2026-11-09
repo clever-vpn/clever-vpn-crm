@@ -119,11 +119,6 @@ jobs:
             echo "::error::缺少 secret APP_SECRET（见 docs/self-host.md §2）"; exit 1
           fi
           printf '%s' "$APP_SECRET" | npx wrangler secret put APP_SECRET --config wrangler.ci.jsonc
-          # 历史残留清理（旧的两把已并入 APP_SECRET；不存在也无所谓）
-          for legacy in SIGNING_SECRET PAYMENT_SECRET_KEY; do
-            npx wrangler secret delete "$legacy" --config wrangler.ci.jsonc >/dev/null 2>&1 \
-              && echo "✔ 已清理历史 secret $legacy" || true
-          done
           if [ -n "${SETUP_TOKEN:-}" ]; then
             printf '%s' "$SETUP_TOKEN" | npx wrangler secret put SETUP_TOKEN --config wrangler.ci.jsonc
           else
