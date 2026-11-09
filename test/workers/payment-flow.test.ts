@@ -193,6 +193,48 @@ describe("mock 支付全链路", () => {
     expect(Date.parse(sub?.expires_at ?? "")).toBeGreaterThan(Date.now());
   });
 
+  it("演示页三个按钮：失败与取消都不发货", async () => {
+    const mk = async (method: string) => {
+      const res = await call("/api/app/v1/orders", {
+        method: "POST",
+        token: TOKEN,
+        body: { plan_id: "pay_plan_30d", payment_method: method },
+      });
+      expect(res.status).toBe(201);
+      return (await res.json()) as { order_code: string; pay_url: string };
+    };
+
+    // 页面必须给三个分支，否则租户测不到"失败/取消"之后界面长什么样
+    const page = await worker.default.fetch(new Request((await mk("alipay")).pay_url));
+    const html = await page.text();
+    expect(html).toContain("模拟支付成功");
+    expect(html).toContain("模拟支付失败");
+    expect(html).toContain("模拟用户取消");
+
+    const statusOf = (code: string) =>
+      env.DB.prepare(`SELECT status FROM orders WHERE code = ?`)
+        .bind(code)
+        .first<{ status: string }>();
+
+    // 失败：回调验签通过但不是成功态 ⇒ 只应答、不改单
+    const failed = await mk("wechat");
+    const f = await worker.default.fetch(
+      new Request(`${failed.pay_url}/failed`, { method: "POST" }),
+    );
+    expect(f.status).toBe(200);
+    expect(await f.text()).toContain("已模拟支付失败");
+    expect((await statusOf(failed.order_code))?.status).toBe("pending");
+
+    // 取消：什么回调都不发，订单同样保持待支付
+    const cancelled = await mk("alipay");
+    const c = await worker.default.fetch(
+      new Request(`${cancelled.pay_url}/cancel`, { method: "POST" }),
+    );
+    expect(c.status).toBe(200);
+    expect(await c.text()).toContain("已模拟用户取消");
+    expect((await statusOf(cancelled.order_code))?.status).toBe("pending");
+  });
+
   it("重复点「模拟支付」不会重复发货", async () => {
     const created = await call("/api/app/v1/orders", {
       method: "POST",
