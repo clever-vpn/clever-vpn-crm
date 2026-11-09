@@ -34,7 +34,7 @@ import { rowToPlan, planForClient, paymentMethodsOf } from "../plans/model";
 import { methodsForViewer } from "../payments/gateways";
 import { placeIapOrder } from "../payments/iap-order";
 import { handleWebhooks } from "./webhooks";
-import { quotePurchase } from "../plans/quote";
+import { currentOfSubscription, quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
 import { claimGiftFor, claimRewardCard, listGiftShelf } from "../promotions/gift";
 import { listTimeline } from "../subscriptions/timeline";
@@ -247,19 +247,8 @@ async function planListPrice(env: Env, planId: string): Promise<number> {
   return row?.price_minor ?? 0;
 }
 
-function toQuoteInput(sub: Subscription, listPriceMinor: number): CurrentSubscription {
-  return {
-    plan_id: sub.plan_id,
-    kind: sub.kind === "traffic" ? "traffic" : "period",
-    list_price_minor: listPriceMinor,
-    paid_minor: sub.paid_minor,
-    period_term_days: sub.period_term_days,
-    traffic_total_gb: sub.traffic_total_gb,
-    expires_at: sub.expires_at,
-    traffic_remaining_gb: sub.traffic_remaining_gb,
-    unlimited: sub.period_quota_gb === null && sub.kind === "period",
-  };
-}
+const toQuoteInput = (sub: Subscription, listPriceMinor: number) =>
+  currentOfSubscription(sub, listPriceMinor);
 
 /**
  * 取订阅并保证余量不旧于 15 分钟（缓存新则一次库都不多查）。
