@@ -99,10 +99,18 @@
           var specs = p.specs.map(function (s) {
             return '<li>' + SiteCrm.escape(s) + '</li>';
           }).join('');
+          // 未登录时后端不给 payment_methods，但"要不要先登录"是另一回事：
+          // 直接把按钮指向登录，别让人点完才被告知"这一档买不了"。
+          var needLogin = p.action === 'login_required';
           var cta = p.buyable
-            ? '<button class="btn" type="button" data-plan="' + SiteCrm.escape(p.id) + '">'
+            ? '<button class="btn" type="button" data-plan="' + SiteCrm.escape(p.id) + '"'
+                + (needLogin ? ' data-login="1"' : '') + '>'
                 + SiteCrm.escape(p.cta) + '</button>'
             : '<button class="ghost" type="button" disabled>' + SiteCrm.escape(p.cta) + '</button>';
+          // 支持的支付方式必须先摆在按钮旁边：用户点之前就要知道能用什么付。
+          var pay = (p.methods && p.methods.length)
+            ? '<div class="pay-with">支持 ' + SiteCrm.escape(p.methods.join(' / ')) + '</div>'
+            : '';
           el.innerHTML =
             '<div class="row" style="justify-content:space-between;align-items:flex-start">'
             + '<div><p class="plan-name">' + SiteCrm.escape(p.name) + '</p>'
@@ -114,7 +122,7 @@
             + '</div>'
             + '<div class="per">' + (p.action === 'renewal' ? '续订价' : '实付价格') + '</div>'
             + '<ul class="spec">' + specs + '</ul>'
-            + '<div class="plan-cta">' + cta
+            + '<div class="plan-cta">' + pay + cta
             + (!p.buyable && p.reason
                 ? '<div class="blocked">' + SiteCrm.escape(p.reason) + '</div>' : '')
             + '</div>';
@@ -122,6 +130,11 @@
         }
 
         function buy(btn) {
+          // 需要登录的档位：一步到位跳登录，回来接着买（不发起下单请求）
+          if (btn.getAttribute('data-login') === '1') {
+            location.assign('login.html?next=pricing.html');
+            return;
+          }
           var planId = btn.getAttribute('data-plan');
           var label = btn.textContent;
           btn.disabled = true;

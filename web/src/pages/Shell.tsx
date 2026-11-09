@@ -27,6 +27,7 @@ import {
 } from "@ant-design/icons";
 import { api, type Me } from "../api";
 import ComingSoon from "./ComingSoon";
+import { PANEL_BASE, stripPanelBase } from "./panelBase";
 import Customers from "./Customers";
 import Gateways from "./Gateways";
 import Marketing from "./Marketing";
@@ -55,35 +56,38 @@ interface NavItem {
 /**
  * 侧栏：一级栏目少而稳；「营销」是一个分组，子项直接可点（一次点到位）。
  * 早期这里写死“只放六项”，现在已经放开 —— 以“用户能不能一步到达”为准。
+ *
+ * 路径**不带** `/admin` 前缀：面板入口就是 `/`（CRM 在自己的域名上，没必要多
+ * 一层）。配了 `SITE_URL` 的自托管会挂在 `/admin` 下，由 `BASE` 统一拼接。
  */
 const NAV: NavItem[] = [
-  { key: "/admin/", href: "/admin/", label: "概览", icon: <DashboardOutlined /> },
-  { key: "/admin/customers", href: "/admin/customers", label: "客户", icon: <TeamOutlined /> },
-  { key: "/admin/orders", href: "/admin/orders", label: "订单", icon: <FileTextOutlined /> },
-  { key: "/admin/plans", href: "/admin/plans", label: "套餐", icon: <AppstoreOutlined /> },
-  { key: "/admin/site", href: "/admin/site", label: "网站", icon: <GlobalOutlined /> },
+  { key: "/", href: "/", label: "概览", icon: <DashboardOutlined /> },
+  { key: "/customers", href: "/customers", label: "客户", icon: <TeamOutlined /> },
+  { key: "/orders", href: "/orders", label: "订单", icon: <FileTextOutlined /> },
+  { key: "/plans", href: "/plans", label: "套餐", icon: <AppstoreOutlined /> },
+  { key: "/site", href: "/site", label: "网站", icon: <GlobalOutlined /> },
   {
-    key: "/admin/payments",
+    key: "/payments",
     label: "支付",
     icon: <CreditCardOutlined />,
     children: [
-      { key: "/admin/payments/gateways", href: "/admin/payments/gateways", label: "支付网关" },
-      { key: "/admin/payments/stores", href: "/admin/payments/stores", label: "商店渠道" },
+      { key: "/payments/gateways", href: "/payments/gateways", label: "支付网关" },
+      { key: "/payments/stores", href: "/payments/stores", label: "商店渠道" },
     ],
   },
   {
-    key: "/admin/marketing",
+    key: "/marketing",
     label: "营销",
     icon: <GiftOutlined />,
     children: [
-      { key: "/admin/marketing/overview", href: "/admin/marketing/overview", label: "营销总览" },
-      { key: "/admin/marketing/coupons", href: "/admin/marketing/coupons", label: "优惠券" },
-      { key: "/admin/marketing/gifts", href: "/admin/marketing/gifts", label: "礼包" },
-      { key: "/admin/marketing/referrals", href: "/admin/marketing/referrals", label: "邀请返利" },
-      { key: "/admin/marketing/report", href: "/admin/marketing/report", label: "营销报表" },
+      { key: "/marketing/overview", href: "/marketing/overview", label: "营销总览" },
+      { key: "/marketing/coupons", href: "/marketing/coupons", label: "优惠券" },
+      { key: "/marketing/gifts", href: "/marketing/gifts", label: "礼包" },
+      { key: "/marketing/referrals", href: "/marketing/referrals", label: "邀请返利" },
+      { key: "/marketing/report", href: "/marketing/report", label: "营销报表" },
     ],
   },
-  { key: "/admin/settings", href: "/admin/settings", label: "设置", icon: <SettingOutlined /> },
+  { key: "/settings", href: "/settings", label: "设置", icon: <SettingOutlined /> },
 ];
 
 /** 所有可点节点（分组本身不可点）——面包屑、选中态、手机 Tab 都靠它 */
@@ -102,15 +106,15 @@ const MENU_ITEMS = NAV.map((n) =>
 );
 
 /** 营销分组默认展开：分类存在的意义是“一眼看全”，不该先让人再点一次 */
-const DEFAULT_OPEN_KEYS = ["/admin/marketing", "/admin/payments"];
+const DEFAULT_OPEN_KEYS = ["/marketing", "/payments"];
 
 /**
- * 旧地址 → 新地址。支付拆成二级菜单后，早期收藏的 `/admin/gateways` 仍要能打开，
- * 否则"书签失效"会被当成功能坏了。
+ * 旧地址 → 新地址。支付拆成二级菜单后，早期收藏的 `/gateways` 仍要能打开，
+ * 否则"书签失效"会被当成功能坏了。`/admin/*` 这一层由 Worker 302 掉，不用管。
  */
 const LEGACY_PATHS: Record<string, string> = {
-  "/admin/gateways": "/admin/payments/gateways",
-  "/admin/stores": "/admin/payments/stores",
+  "/gateways": "/payments/gateways",
+  "/stores": "/payments/stores",
 };
 
 /**
@@ -120,20 +124,24 @@ const LEGACY_PATHS: Record<string, string> = {
 const MOBILE_TABS = NAV.filter((n): n is NavItem & { href: string } => Boolean(n.href)).slice(0, 3);
 
 const PLACEHOLDERS: Record<string, string> = {
-  "/admin/": "今日注册 / 今日收入 / 待处理订单 / 即将到期客户 —— 数据来自订单与 cf-api 客户镜像。",
+  "/": "今日注册 / 今日收入 / 待处理订单 / 即将到期客户 —— 数据来自订单与 cf-api 客户镜像。",
 };
 
+/**
+ * 面板的实际挂载前缀：默认空（入口就是 `/`）；自托管把官网放在根路径时，后台
+ * 挂在 `/admin` 下，前缀由**首次加载的地址**决定，前端只需拼一次。
+ */
 function usePathname(): [string, (href: string) => void] {
-  const [path, setPath] = useState(window.location.pathname);
+  const [path, setPath] = useState(stripPanelBase(window.location.pathname));
   useEffect(() => {
-    const onPop = () => setPath(window.location.pathname);
+    const onPop = () => setPath(stripPanelBase(window.location.pathname));
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
   const navigate = (href: string) => {
-    if (href === window.location.pathname) return;
-    window.history.pushState(null, "", href);
-    setPath(window.location.pathname);
+    if (href === stripPanelBase(window.location.pathname)) return;
+    window.history.pushState(null, "", PANEL_BASE + href);
+    setPath(stripPanelBase(window.location.pathname));
   };
   return [path, navigate];
 }
@@ -163,29 +171,29 @@ export default function Shell({
   }
 
   const page =
-    path === "/admin/settings" ? (
+    path === "/settings" ? (
       <Settings me={me} onMeChanged={onMeChanged} />
-    ) : path === "/admin/customers" ? (
+    ) : path === "/customers" ? (
       <Customers />
-    ) : path === "/admin/orders" ? (
+    ) : path === "/orders" ? (
       <Orders />
-    ) : path === "/admin/plans" ? (
+    ) : path === "/plans" ? (
       <Plans />
-    ) : path === "/admin/site" ? (
+    ) : path === "/site" ? (
       <Site />
-    ) : path === "/admin/payments/gateways" ? (
+    ) : path === "/payments/gateways" ? (
       <Gateways />
-    ) : path === "/admin/payments/stores" ? (
+    ) : path === "/payments/stores" ? (
       <Stores />
-    ) : path === "/admin/marketing/overview" ? (
+    ) : path === "/marketing/overview" ? (
       <Marketing />
-    ) : path === "/admin/marketing/coupons" ? (
+    ) : path === "/marketing/coupons" ? (
       <Promotions kind="coupon" />
-    ) : path === "/admin/marketing/referrals" ? (
+    ) : path === "/marketing/referrals" ? (
       <Promotions kind="referral" />
-    ) : path === "/admin/marketing/gifts" ? (
+    ) : path === "/marketing/gifts" ? (
       <Promotions kind="gift" />
-    ) : path === "/admin/marketing/report" ? (
+    ) : path === "/marketing/report" ? (
       <ComingSoon
         title="营销报表"
         stage="P3（核销台账已有，只差聚合）"
@@ -270,7 +278,7 @@ export default function Shell({
                 { type: "divider" },
                 { key: "logout", icon: <LogoutOutlined />, label: "退出登录", danger: true },
               ],
-              onClick: ({ key }) => (key === "logout" ? void logout() : navigate("/admin/settings")),
+              onClick: ({ key }) => (key === "logout" ? void logout() : navigate("/settings")),
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>

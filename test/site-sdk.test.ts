@@ -90,6 +90,87 @@ describe("SiteCrm SDK", () => {
     await expect((sdk.me as () => Promise<unknown>)()).resolves.toBeNull();
   });
 
+  it("没有登录态时 checkout() 说「请先登录」，不说「买不了」", async () => {
+    // 这两句必须分开：一句是"去登录"，另一句是"确实没有可用的支付方式"。
+    // 混在一起会把人带向错误结论（以为网关没配，其实是没登录）。
+    const seen: string[] = [];
+    const { sdk } = load({
+      fetch: (url) => {
+        seen.push(url);
+        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve("[]") });
+      },
+    });
+    await expect(
+      (sdk.checkout as (o: { planId: string }) => Promise<unknown>)({ planId: "p_1" }),
+    ).rejects.toMatchObject({ code: "unauthorized" });
+    // 连 /plans 都不该拉：未登录时没有"这个访客能用的支付方式"这回事
+    expect(seen).toEqual([]);
+  });
+
+  it("套餐卡片带上支付方式（用户点之前就要知道能用什么付）", async () => {
+    const { sdk } = load({
+      fetch: () =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify([
+                {
+                  plan_id: "p_1",
+                  name: "月付",
+                  kind: "period",
+                  price_minor: 1500,
+                  currency: "CNY",
+                  action: "buy",
+                  buyable: true,
+                  payment_methods: [
+                    { id: "alipay", label: "支付宝", icon_url: null },
+                    { id: "wechat", label: "微信支付", icon_url: null },
+                  ],
+                },
+              ]),
+            ),
+        }),
+    });
+    const plans = (await (sdk.plans as () => Promise<Record<string, unknown>[]>)()) as Record<
+      string,
+      unknown
+    >[];
+    expect(plans[0]!.methods).toEqual(["支付宝", "微信支付"]);
+  });
+
+  it("没有可用支付方式时 methods 是空数组（模板就不显示那行）", async () => {
+    const { sdk } = load({
+      fetch: () =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify([
+                {
+                  plan_id: "p_1",
+                  name: "月付",
+                  kind: "period",
+                  price_minor: 1500,
+                  currency: "CNY",
+                  action: "login_required",
+                  buyable: true,
+                  payment_methods: null,
+                },
+              ]),
+            ),
+        }),
+    });
+    const plans = (await (sdk.plans as () => Promise<Record<string, unknown>[]>)()) as Record<
+      string,
+      unknown
+    >[];
+    expect(plans[0]!.methods).toEqual([]);
+    expect(plans[0]!.action).toBe("login_required");
+  });
+
   it("escape() 挡住注入", () => {
     const { sdk } = load();
     const esc = sdk.escape as (s: string) => string;
