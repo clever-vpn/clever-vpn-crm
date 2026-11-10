@@ -92,6 +92,13 @@
       "when": 1794202348358,
       "tag": "0012_high_shotgun",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1794279214754,
+      "tag": "0013_sloppy_toxin",
+      "breakpoints": true
     }
   ]
 }

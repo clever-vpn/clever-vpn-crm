@@ -1046,6 +1046,14 @@ export const siteSettings = sqliteTable("site_settings", {
   collections: text("collections").notNull().default("{}"),
   /** 乐观锁：每次写 +1。CRM 后台与 studio 都能改，`PUT` 带 `if_rev`，不匹配返 409 */
   rev: integer("rev").notNull().default(0),
+  /**
+   * **当前模板指针**：`v7`（`site_templates.version`）。
+   *
+   * 与数据设置同表，是有意的：发布要"模板版本 + 数据快照"一致，分开两张表就得
+   * 分布式事务；同一行 + 乐观锁只要一次 UPDATE（契约 §9）。
+   * 空串 = 还没交付过模板，发布用公共模板。
+   */
+  template_version: text("template_version").notNull().default(""),
   // ── 以下 7 列是 v1 的列式字段，**已废弃**：数据搬进 `values` 后只读不再写。
   // 删列要重建表，留到下一版（standards/site-template.md §11.3）。
   /** @deprecated 用 `values.site.name` */
@@ -1094,3 +1102,52 @@ export const cfApi = sqliteTable("cf_api", {
   last_error: text("last_error"),
   _updated_at: text("_updated_at").notNull().default(""),
 });
+
+// ─────────────────────────────────────────────────────────────
+// 站点模板版本（studio ⇄ CRM 交付，契约 `site-studio-crm.md` §5 / §7 / §9）
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 租户**模板版本**表（一次交付一行，不可变）。
+ *
+ * 与 `site_versions` 的区别（别混）：
+ *   - `site_templates` = **模板**版本：studio 交付的源包，`tpl/<sha>/` 内容寻址；
+ *   - `site_versions`  = **产物**版本：渲染+注入后的静态文件，回滚切的是它。
+ *   一个模板版本可以被不同数据发布成多个产物版本。
+ *
+ * 为什么版本号用自增整数 `seq` 而对外是 `v<seq>` 字符串：排序/比较用整数，
+ * 展示与契约用带前缀的字符串，两件事分开就不会出现 `v10 < v9` 这种字符串比较事故。
+ */
+export const siteTemplates = sqliteTable(
+  "site_templates",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** 托管分片一个库可能服务多个租户；自部署时恒为一个租户 */
+    tenant_id: text("tenant_id").notNull().default(""),
+    /** 租户内自增，对外是 `v<seq>`；不可变 */
+    seq: integer("seq").notNull(),
+    version: text("version").notNull(),
+    /** 血缘：我改自哪一版（`sha256:…`）；首版为空 */
+    parent_sha: text("parent_sha").notNull().default(""),
+    /** 包内容寻址：`sha256:<hex>`；同内容永远同一个值 */
+    sha: text("sha").notNull(),
+    /** 渲染引擎版本（`manifest.engine`）；不匹配即 422 */
+    engine: text("engine").notNull(),
+    /** 数据 schema 版本（`manifest.schema`） */
+    schema_version: integer("schema_version").notNull().default(1),
+    files: integer("files").notNull(),
+    bytes: integer("bytes").notNull(),
+    /** 交付者（管理员邮箱或 `studio:<ticket>`）；审计用 */
+    created_by: text("created_by"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => ({
+    uqTenantVersion: uniqueIndex("uq_site_templates_tenant_version").on(
+      t.tenant_id,
+      t.version,
+    ),
+    idxTenantSha: index("idx_site_templates_tenant_sha").on(t.tenant_id, t.sha),
+  }),
+);
+
+export type SiteTemplateRow = typeof siteTemplates.$inferSelect;
