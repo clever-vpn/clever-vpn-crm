@@ -30,10 +30,18 @@ const worker = rawExports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
 };
 
-/** 必须用**测试环境自己的** `APP_SECRET`：签名与验签在同一个 Worker 里，
- *  自己造一把密钥会让这条链"两头都绿、合起来 401" —— 正是要测的那种事故。 */
-const envOf = (over: Partial<Env> = {}): Env =>
-  ({ ...testEnv, STUDIO_SITE_URL: SITE, ...over }) as Env;
+/**
+ * 主密钥**就地**写进测试环境（和 `site-settings.test.ts` 的 `setSecret` 同一招）：
+ * workerd 的 env 是同一个对象，就地改才"签名的一方"和"验签的一方"看到同一把密钥。
+ *
+ * 不用 `{ ...testEnv }` 造副本 —— 副本是 Node 侧的对象，Worker 里读不到，
+ * 结果就是"本地绿、CI 红"（CI 没有 `.dev.vars`）。
+ */
+function setSecret(value = "chain-test-master-key"): void {
+  (testEnv as unknown as Record<string, unknown>).APP_SECRET = value;
+}
+
+const envOf = (): Env => testEnv as unknown as Env;
 
 async function seedTenantToken(): Promise<void> {
   await testEnv.DB.prepare(
@@ -59,6 +67,8 @@ function fakeStudio(): { impl: typeof fetch; bodies: Record<string, unknown>[] }
 
 /** 走一遍入场，把交给 studio 的 `site_token` 拿回来 */
 async function enter(): Promise<string> {
+  setSecret();
+  (testEnv as unknown as Record<string, unknown>).STUDIO_SITE_URL = SITE;
   await seedTenantToken();
   const studio = fakeStudio();
   vi.spyOn(globalThis, "fetch").mockImplementation(studio.impl);
