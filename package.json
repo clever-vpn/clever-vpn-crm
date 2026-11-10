@@ -9,7 +9,6 @@
     "dev:web": "vite",
     "dev:app-web": "node scripts/dev-app-web.mjs",
     "build:web": "node -e \"require('node:fs').rmSync('web/dist',{recursive:true,force:true})\" && vite build",
-    "deploy": "wrangler deploy",
     "build": "npm run build:web && wrangler deploy --dry-run --outdir dist",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "npm run test:unit && npm run test:workers",
