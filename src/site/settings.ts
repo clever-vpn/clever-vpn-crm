@@ -24,8 +24,14 @@ interface FieldSpec {
 }
 
 /**
- * 已知设置字段：**加字段先改这里，再改模板**。
- * 将来由模板包里的 `data.schema.json` 驱动，届时删掉这份常量。
+ * 已知设置字段 = **数据契约本身**（契约 `site-studio-crm.md` v8 §4.4）。
+ *
+ * 这份清单**只住在这里**：模板（studio 产出的静态文件包）只引用路径，不声明字段；
+ * AI 也不能新增字段 —— 加一个可编辑项是**平台动作**（+`SITE_CONTRACT`、过评审、
+ * 影响所有站点），不是某次设计对话的副作用。
+ *
+ * 对外形态：`GET /api/site/meta` 的 `capabilities`（见 `src/site/meta.ts`）。
+ * 改这里时同时补 `meta.ts` 的 `LABELS`，否则表单会回退成路径本身。
  */
 export const SETTING_FIELDS: Record<string, FieldSpec> = {
   "site.name": { kind: "text", max: 40 },
