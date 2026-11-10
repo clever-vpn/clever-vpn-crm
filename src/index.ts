@@ -17,8 +17,9 @@ import { ensureSchema } from "./db";
 import { isSpaDeepLink, panelRoute } from "./panel-route";
 import type { Env } from "./env";
 import { handleAppApi } from "./app/router";
-import { handleAdminApi } from "./admin/router";
+import { handleAdminApi, readAdminSession } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
+import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
 import { handleUnsubscribe } from "./notices/unsubscribe";
@@ -115,6 +116,18 @@ export default {
 
     if (url.pathname.startsWith("/api/")) {
       await ensureSchema(env.DB);
+      // studio 身份：管理员 Cookie 鉴权 → 一次性票据 → `#t=` 跳转
+      // （契约 `contracts/studio-identity.md`；site / app 两个 studio 共用这一个端点）
+      if (url.pathname === "/api/studio/ticket") {
+        if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+        return handleStudioTicket(
+          request,
+          env,
+          scoped.tenantId,
+          await readAdminSession(env, request),
+          request.headers.get("x-crm-request") === "1",
+        );
+      }
       if (url.pathname.startsWith("/api/admin")) {
         return handleAdminApi(request, env, scoped.tenantId);
       }
