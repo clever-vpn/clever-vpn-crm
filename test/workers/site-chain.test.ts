@@ -1,0 +1,146 @@
+/**
+ * **完整一条链**：管理员点「打开设计器」→ 拿到 `sacc_…` → 用它对 CRM 干活。
+ *
+ * 契约 `site-studio-crm.md` §4.5 + `studio-identity.md` §2.1.1。
+ *
+ * 这条链分处两个仓，靠一个**手写错就崩**的格式串起来（HMAC + base64url + 租户比对），
+ * 单测各测一半很容易"两边都绿、合起来 401"。所以这里在**同一个 Worker 里**跑一遍
+ * 真的：真 D1、真 R2、真 crypto，只把 studio 那一跳替身掉（它不在本仓）。
+ *
+ * 断言的四步：
+ *   1. 入场时交给 studio 的 body 里**有** `site_token`；
+ *   2. 这枚 token 能读设置（`GET /api/site/settings`）；
+ *   3. 同一枚能拉模板（`GET /api/site/template`，公共模板三态里的 public 分支）；
+ *   4. 别的租户的 token 在这两个端点上都是 401。
+ */
+import { exports as rawExports } from "cloudflare:workers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { env as testEnv } from "./apply-migrations";
+import { handleStudioTicket } from "../../src/site/studio-ticket";
+import type { Env } from "../../src/env";
+
+const SITE = "https://site-studio.test";
+const TENANT = "0"; // 单租户模式：`scoped.tenantId` = `CRM_TENANT_ID`
+const TENANT_TOKEN = "cv_api_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+
+const SITES = (testEnv as unknown as { SITES: R2Bucket }).SITES!;
+
+const worker = rawExports as unknown as {
+  default: { fetch(request: Request): Promise<Response> };
+};
+
+/** 必须用**测试环境自己的** `APP_SECRET`：签名与验签在同一个 Worker 里，
+ *  自己造一把密钥会让这条链"两头都绿、合起来 401" —— 正是要测的那种事故。 */
+const envOf = (over: Partial<Env> = {}): Env =>
+  ({ ...testEnv, STUDIO_SITE_URL: SITE, ...over }) as Env;
+
+async function seedTenantToken(): Promise<void> {
+  await testEnv.DB.prepare(
+    `INSERT INTO cf_api (id, base_url, token_enc, _updated_at) VALUES (1, '', ?, ?)
+     ON CONFLICT(id) DO UPDATE SET token_enc = excluded.token_enc`,
+  )
+    .bind(TENANT_TOKEN, new Date().toISOString())
+    .run();
+}
+
+/** 替身 studio：只记下我们交给它的东西 */
+function fakeStudio(): { impl: typeof fetch; bodies: Record<string, unknown>[] } {
+  const bodies: Record<string, unknown>[] = [];
+  const impl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response(JSON.stringify({ url: `${SITE}/#t=tkt_abc.def`, expires_at: null, tenant: TENANT }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  return { impl, bodies };
+}
+
+/** 走一遍入场，把交给 studio 的 `site_token` 拿回来 */
+async function enter(): Promise<string> {
+  await seedTenantToken();
+  const studio = fakeStudio();
+  vi.spyOn(globalThis, "fetch").mockImplementation(studio.impl);
+
+  const res = await handleStudioTicket(
+    new Request("https://crm.test/api/studio/ticket", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-crm-request": "1" },
+      body: JSON.stringify({ aud: "site-studio" }),
+    }),
+    envOf(),
+    TENANT,
+    { user_id: 1 },
+    true,
+  );
+  expect(res.status).toBe(200);
+
+  const token = String(studio.bodies[0]?.site_token ?? "");
+  expect(token).toMatch(/^sacc_/);
+  return token;
+}
+
+const siteCall = (path: string, token: string) =>
+  worker.default.fetch(
+    new Request(`https://t-beta.clever-panel.win${path}`, {
+      headers: { authorization: `Bearer ${token}` },
+    }),
+  );
+
+beforeEach(async () => {
+  for (const prefix of ["g/templates/basic/", "tpl/"]) {
+    const listed = await SITES.list({ prefix });
+    for (const o of listed.objects) await SITES.delete(o.key);
+  }
+  await testEnv.DB.prepare("DELETE FROM site_templates").run();
+  await testEnv.DB.prepare("UPDATE site_settings SET template_version = '' WHERE id = 1").run();
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("入场 → 回电：一条链跑通", () => {
+  it("入场给的 sacc_ 能读设置", async () => {
+    const token = await enter();
+    const res = await siteCall("/api/site/settings", token);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { rev: number; scope: Record<string, unknown> };
+    expect(body.rev).toBeGreaterThanOrEqual(0);
+    expect((body.scope as { site?: { name?: string } }).site?.name).toBeTruthy();
+  });
+
+  it("同一枚 sacc_ 能拉模板（公共模板分支）", async () => {
+    const token = await enter();
+    await SITES.put("g/templates/basic/v1/index.html", "<h1>公共模板</h1>");
+    await SITES.put("g/templates/basic/v1/assets/site.css", "h1{}");
+
+    const res = await siteCall("/api/site/template", token);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      source: string;
+      sha: string;
+      files: { path: string; content_b64: string }[];
+    };
+    expect(body.source).toBe("public");
+    expect(body.sha).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    const textOf = (b64: string) =>
+      new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+    const html = body.files.find((f) => f.path === "index.html")!;
+    expect(textOf(html.content_b64)).toBe("<h1>公共模板</h1>");
+  });
+
+  it("别的租户的 token：两个端点都 401（一枚 token 不能改别人家站点）", async () => {
+    const { issueSiteAccess } = await import("../../src/site/access");
+    const foreign = (await issueSiteAccess(envOf(), "999"))!;
+    expect((await siteCall("/api/site/settings", foreign)).status).toBe(401);
+    expect((await siteCall("/api/site/template", foreign)).status).toBe(401);
+  });
+
+  it("没有 token：两个端点都 401（模板也是租户内容，不是公开资料）", async () => {
+    const bare = (path: string) =>
+      worker.default.fetch(new Request(`https://t-beta.clever-panel.win${path}`));
+    expect((await bare("/api/site/settings")).status).toBe(401);
+    expect((await bare("/api/site/template")).status).toBe(401);
+  });
+});
