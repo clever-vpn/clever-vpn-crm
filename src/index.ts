@@ -22,6 +22,7 @@ import { handlePayRoutes } from "./payments/routes";
 import { verifySiteAccess } from "./site/access";
 import { siteMeta } from "./site/meta";
 import { buildScope, readSiteSettings } from "./site/settings";
+import { siteTemplateOf } from "./site/template-source";
 import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
@@ -162,6 +163,21 @@ export default {
             scope: buildScope(settings, "我的站点"),
           },
         );
+      }
+
+      /**
+       * studio 用：拉当前模板（租户有则租户的，否则公共模板）。
+       *
+       * 与设置同一条凭据；`sha` 用交付时**同一个算法**算 —— 对齐只看 sha
+       * （契约 §7.3），版本号不是内容。
+       */
+      if (url.pathname === "/api/site/template") {
+        if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+        const access = await verifySiteAccess(request, env, scoped.tenantId);
+        if (!access) return json({ error: "site_access_invalid" }, 401);
+        const tpl = await siteTemplateOf(env, scoped.tenantId);
+        if (!tpl) return json({ error: "site_template_missing" }, 404);
+        return json(tpl);
       }
 
       if (url.pathname.startsWith("/api/admin")) {
