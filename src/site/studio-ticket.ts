@@ -5,8 +5,9 @@
  * site-studio / app-studio 两侧用**同一套格式**，所以这里每一处编码都必须与契约字节一致。
  *
  * 三件事在这里：
- *   1. `K_aud = HMAC(K_master, "studio-ticket:<aud>")` —— 按产品派生，一个 studio 的
- *      密钥泄漏只影响它自己那个产品；
+ *   1. `K_aud = HMAC(APP_SECRET|crm/studio/v1, "studio-ticket:<aud>")` —— 两层派生：
+ *      第一层与退订链接、AES-GCM 并列（同一把 `APP_SECRET`，不同标签），第二层按产品
+ *      分开，所以一个 studio 的密钥泄漏只影响它自己那个产品。
  *   2. 签 `tkt_`（60 秒）/ 验 `tkt_` 与 `sts_`（studio 拿同一把 K_aud 换发会话）；
  *   3. `POST /api/studio/ticket`（管理员 Cookie 鉴权 → 返回带 `#t=` 的跳转 URL）。
  *
@@ -15,6 +16,7 @@
  */
 
 import { fromBase64Url, sha256Hex, toBase64Url } from "../admin/crypto";
+import { studioKeyMaterialOf } from "../secrets";
 
 import type { Env } from "../env";
 
@@ -50,9 +52,13 @@ function b64(bytes: ArrayBuffer | Uint8Array): string {
   return toBase64Url(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
 }
 
-/** `HMAC(K_master, "studio-ticket:<aud>")` → 该产品的签名密钥。 */
+/**
+ * `HMAC(APP_SECRET|crm/studio/v1, "studio-ticket:<aud>")` → 该产品的签名密钥。
+ *
+ * 没有 `APP_SECRET` 就返回 `null`（fail closed）。**不额外引入 secret**。
+ */
 export async function studioKeyOf(env: Env, aud: StudioAud): Promise<CryptoKey | null> {
-  const master = String(env.STUDIO_TICKET_MASTER ?? "").trim();
+  const master = studioKeyMaterialOf(env);
   if (!master) return null;
   const base = await crypto.subtle.importKey(
     "raw",
@@ -154,7 +160,7 @@ export async function mintStudioTicket(
       ok: false,
       status: 500,
       code: "studio_not_configured",
-      message: "缺少 STUDIO_TICKET_MASTER（wrangler secret put），签不出票据",
+      message: "缺少 APP_SECRET（wrangler secret put），签不出票据",
     };
   }
   const origin = studioOriginOf(env, input.aud);

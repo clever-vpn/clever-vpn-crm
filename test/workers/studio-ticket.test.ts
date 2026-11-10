@@ -24,7 +24,8 @@ import {
 
 import type { Env } from "../../src/env";
 
-const MASTER = "test-master-key";
+/** 唯一主密钥（studio 票据从它派生，契约 §3.2；**不额外引入 secret**） */
+const APP_SECRET = "test-app-secret-0123456789abcdef";
 const SITE = "https://site-studio.test";
 const APP = "https://app-studio.test";
 const TENANT = "42";
@@ -32,7 +33,7 @@ const TOKEN = "plain-session-token-for-tests";
 
 const testEnv = {
   ...env,
-  STUDIO_TICKET_MASTER: MASTER,
+  APP_SECRET,
   STUDIO_SITE_URL: SITE,
   STUDIO_APP_URL: APP,
 } as unknown as Env;
@@ -126,7 +127,7 @@ describe("mintStudioTicket", () => {
   });
 
   it("缺配置时给出可照做的错误，而不是签一张空票", async () => {
-    const noMaster = { ...testEnv, STUDIO_TICKET_MASTER: "" } as unknown as Env;
+    const noMaster = { ...testEnv, APP_SECRET: "" } as unknown as Env;
     const r1 = await mintStudioTicket(noMaster, { tenant: TENANT, crm: "https://c", aud: "site-studio" });
     expect(r1.ok ? "" : r1.code).toBe("studio_not_configured");
 

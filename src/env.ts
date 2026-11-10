@@ -40,14 +40,6 @@ export interface Env {
    */
   APP_SECRET?: string;
   /**
-   * studio 票据的**主密钥**（`wrangler secret put STUDIO_TICKET_MASTER`）。
-   *
-   * 与 `APP_SECRET` **分开**：这把只用来派生 `K_site` / `K_app` 两把 studio 签名密钥
-   * （契约 `contracts/studio-identity.md` §3.2）。分开的好处是轮换 studio 身份不影响
-   * 已发出的退订链接与已加密的商户密钥。
-   */
-  STUDIO_TICKET_MASTER?: string;
-  /**
    * 两个 studio 的对外地址（**服务端配置**，从不接受请求方传入 —— 否则是开放重定向）。
    * 票据 URL 形如 `<origin>/#t=<ticket>`。
    */
