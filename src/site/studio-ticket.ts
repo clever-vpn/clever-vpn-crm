@@ -20,6 +20,7 @@
  * ⚠️ 票据只以 **URL fragment**（`#t=`）形式出现，由 studio 生成；CRM 不碰 token 本体。
  */
 
+import { issueSiteAccess } from "./access";
 import { platformCreds } from "../platform/creds";
 
 import type { Env } from "../env";
@@ -59,6 +60,13 @@ export async function requestStudioEntry(
     /** 本次请求的 origin —— 会话里要用它回电 CRM 的 `/api/site/*` */
     crm: string;
     tenantToken: string;
+    /**
+     * studio 回来调 `/api/site/*` 用的凭据（`site-access`）。
+     *
+     * 只给 `site-studio`：app-studio 没有站点，给它一枚也用不上 —— 少发一枚就少
+     * 一处可能被记进日志的东西。
+     */
+    siteToken?: string;
     fetchImpl?: typeof fetch;
   },
 ): Promise<EntryResult> {
@@ -92,7 +100,11 @@ export async function requestStudioEntry(
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: JSON.stringify({ aud: input.aud, crm: input.crm.replace(/\/+$/, "") }),
+      body: JSON.stringify({
+        aud: input.aud,
+        crm: input.crm.replace(/\/+$/, ""),
+        ...(input.siteToken ? { site_token: input.siteToken } : {}),
+      }),
       signal: AbortSignal.timeout(STUDIO_TIMEOUT_MS),
     });
   } catch {
@@ -198,10 +210,15 @@ export async function handleStudioTicket(
     );
   }
 
+  // 站点侧还要一枚"只能做 /api/site/*"的凭据：studio 拿它读设置、交模板、点发布，
+  // 而不必持有租户的全权 API token（见 `site/access.ts`）
+  const siteToken = aud === "site-studio" ? await issueSiteAccess(env, tenantId) : null;
+
   const result = await requestStudioEntry(env, {
     aud,
     crm: new URL(request.url).origin,
     tenantToken: creds.token,
+    ...(siteToken ? { siteToken } : {}),
   });
   if (!result.ok) return json({ error: result.code, message: result.message }, result.status);
 

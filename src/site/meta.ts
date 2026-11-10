@@ -120,24 +120,34 @@ function settingsCapabilities(): Capability[] {
   });
 }
 
-/** 集合（烘焙进产物的一小张表）：目前只有下载入口 */
+const PLATFORM_LABEL: Record<string, string> = {
+  ios: "iOS",
+  android: "Android",
+  windows: "Windows",
+  macos: "macOS",
+};
+
+/**
+ * 集合（烘焙进产物的一小张表）：下载入口。
+ *
+ * **路径是 `site.download.<平台>`，不是 `downloads`。** 数据库里叫 `downloads`，但
+ * `buildScope()` 会按平台分组 —— 模板真正能引用的是渲染作用域里的那个形状。
+ * 这一点必须写成"scope 的路径"，否则闸门会放行一个渲染出来是空白的路径
+ * （或者拦下一个本来能用的）。
+ */
 function collectionCapabilities(): Capability[] {
-  return [
-    {
-      path: "downloads",
-      kind: "collection",
-      label: "下载入口",
-      items: {
-        max: MAX_DOWNLOADS,
-        fields: {
-          platform: { kind: "enum", values: DOWNLOAD_PLATFORMS, label: DOWNLOAD_LABELS.platform! },
-          kind: { kind: "enum", values: DOWNLOAD_KINDS, label: DOWNLOAD_LABELS.kind! },
-          label: { kind: "text", max: 24, label: DOWNLOAD_LABELS.label! },
-          url: { kind: "url", max: 300, label: DOWNLOAD_LABELS.url! },
-        },
-      },
-    },
-  ];
+  const fields = {
+    platform: { kind: "enum" as const, values: DOWNLOAD_PLATFORMS, label: DOWNLOAD_LABELS.platform! },
+    kind: { kind: "enum" as const, values: DOWNLOAD_KINDS, label: DOWNLOAD_LABELS.kind! },
+    label: { kind: "text" as const, max: 24, label: DOWNLOAD_LABELS.label! },
+    url: { kind: "url" as const, max: 300, label: DOWNLOAD_LABELS.url! },
+  };
+  return DOWNLOAD_PLATFORMS.map((platform) => ({
+    path: `site.download.${platform}`,
+    kind: "collection" as const,
+    label: `下载入口 · ${PLATFORM_LABEL[platform] ?? platform}`,
+    items: { max: MAX_DOWNLOADS, fields },
+  }));
 }
 
 /** 全部可引用路径。顺序稳定（设置字段按声明顺序，集合追加在后）。 */

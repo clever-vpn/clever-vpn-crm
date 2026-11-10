@@ -121,10 +121,20 @@ describe("出示给 studio 的东西", () => {
     expect(calls[0]!.url).toBe(`${SITE}/api/studio/session`);
     const headers = calls[0]!.init.headers as Record<string, string>;
     expect(headers.authorization).toBe(`Bearer ${TENANT_TOKEN}`);
-    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
-      aud: "site-studio",
-      crm: "https://crm.test",
-    });
+    const body = JSON.parse(String(calls[0]!.init.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({ aud: "site-studio", crm: "https://crm.test" });
+    // studio 回来调 `/api/site/*` 的凭据（不是租户的全权 token）
+    expect(String(body.site_token)).toMatch(/^sacc_/);
+  });
+
+  it("app-studio 不发 site_token（它没有站点，发了也用不上）", async () => {
+    await seedToken();
+    const { impl, calls } = studioFetch({ url: `${APP}/#t=tkt_x`, expires_at: null, tenant: "42" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(impl);
+
+    await handleStudioTicket(requestOf({ aud: "app-studio" }), envOf(), "42", { user_id: 1 }, true);
+    const body = JSON.parse(String(calls[0]!.init.body)) as Record<string, unknown>;
+    expect(body.site_token).toBeUndefined();
   });
 
   it("回给前端的是 studio 给的 URL + 本次解析出的 tenant（客户端塞的不算数）", async () => {
