@@ -1,214 +1,204 @@
 /**
- * studio 票据：签发 + 验签 + 端点。
+ * studio 入口：CRM 出示租户 token → studio 回一个跳转 URL。
  *
- * 契约 `clever-vpn-docs/docs/contracts/studio-identity.md`（Contract 1，kind: shared）。
- * 这里钉住的是**契约里能判定的那部分**：
+ * 契约 `clever-vpn-docs/docs/contracts/studio-identity.md`（Contract 2，kind: shared）。
+ * 这里钉住的是**行为边界**，不是字节格式（格式现在是 studio 自己的事了）：
  *
- *   1. 没会话 / 没 CSRF 头 ⇒ 不给票；
- *   2. 票一定在 URL **fragment**（`#t=`），且 `url` 来自服务端配置（不是请求参数）；
- *   3. 签名 + `exp` + `aud` 三项都验；`aud` 不同的票互不通用；
- *   4. `tenant` 来自本次请求解析出的租户，**不接受客户端传入**。
+ *   1. 没会话 / 没 CSRF 头 ⇒ 不给 URL；
+ *   2. 本租户没有 cf-api 凭据 ⇒ 409，**不发请求**出去；
+ *   3. `url` 只能来自服务端配置的 studio，且必须是 `#t=tkt_` 片段（否则开放重定向）；
+ *   4. 出示给 studio 的必须是**本租户自己那把 token**，且带 `aud` + CRM origin；
+ *   5. studio 的四种拒绝各自映射成一次能读懂的话，不把上游细节糊给浏览器。
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { handleStudioTicket, requestStudioEntry, studioOriginOf } from "../../src/site/studio-ticket";
 
 import { env } from "./apply-migrations";
-import { sha256Hex } from "../../src/admin/crypto";
-import {
-  SESSION_TTL_SECONDS,
-  TICKET_TTL_SECONDS,
-  handleStudioTicket,
-  mintStudioTicket,
-  verifyStudioToken,
-} from "../../src/site/studio-ticket";
 
 import type { Env } from "../../src/env";
 
-/** 唯一主密钥（studio 票据从它派生，契约 §3.2；**不额外引入 secret**） */
 const APP_SECRET = "test-app-secret-0123456789abcdef";
 const SITE = "https://site-studio.test";
 const APP = "https://app-studio.test";
-const TENANT = "42";
-const TOKEN = "plain-session-token-for-tests";
+const TENANT_TOKEN = "cv_api_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
 
-const testEnv = {
-  ...env,
-  APP_SECRET,
-  STUDIO_SITE_URL: SITE,
-  STUDIO_APP_URL: APP,
-} as unknown as Env;
+const envOf = (over: Partial<Env> = {}): Env =>
+  ({ ...env, APP_SECRET, STUDIO_SITE_URL: SITE, STUDIO_APP_URL: APP, ...over }) as Env;
 
-/** 造一条管理员会话（与 `sessionFrom` 的算法一致：id = sha256(token)） */
-async function seedAdminSession(): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO admin_users (id, email, password_hash, created_at, updated_at)
-     VALUES (1, 'a@b.c', 'x', '2026-11-10T00:00:00Z', '2026-11-10T00:00:00Z')`,
-  ).run();
-  await env.DB.prepare(
-    `INSERT INTO admin_sessions (id, user_id, pending, created_at, last_used_at, ip, user_agent)
-     VALUES (?, 1, 0, ?, ?, '', '')`,
+/** 把租户自己的 cf-api token 写进 D1（明文即可：creds 会容忍并就地升级） */
+async function seedToken(token = TENANT_TOKEN, e: Env = envOf()): Promise<void> {
+  await e.DB.prepare(
+    `INSERT INTO cf_api (id, base_url, token_enc, _updated_at) VALUES (1, '', ?, ?)
+     ON CONFLICT(id) DO UPDATE SET token_enc = excluded.token_enc`,
   )
-    .bind(await sha256Hex(TOKEN), new Date().toISOString(), new Date().toISOString())
+    .bind(token, new Date().toISOString())
     .run();
 }
 
-const request = (body: unknown, headers: Record<string, string> = {}) =>
-  new Request("https://crm.example.com/api/studio/ticket", {
+function requestOf(body: unknown, init: { csrf?: boolean; origin?: string } = {}): Request {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (init.csrf !== false) headers["x-crm-request"] = "1";
+  return new Request(`${init.origin ?? "https://crm.test"}/api/studio/ticket`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-crm-request": "1", ...headers },
+    headers,
     body: JSON.stringify(body),
   });
+}
 
-beforeEach(async () => {
-  await env.DB.prepare("DELETE FROM admin_sessions").run();
-  await env.DB.prepare("DELETE FROM admin_users").run();
+function studioFetch(
+  body: unknown,
+  status = 200,
+): { impl: typeof fetch; calls: Array<{ url: string; init: RequestInit }> } {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init: init ?? {} });
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+
+const okBody = (url = `${SITE}/#t=tkt_abc.def`) => ({
+  url,
+  expires_at: "2026-11-10T07:00:00.000Z",
+  tenant: "42",
 });
 
-describe("mintStudioTicket", () => {
-  it("票据在 fragment 里，且能被同一 aud 验出来", async () => {
-    const minted = await mintStudioTicket(testEnv, {
-      tenant: TENANT,
-      crm: "https://crm.example.com",
-      aud: "site-studio",
-    });
-    if (!minted.ok) throw new Error(minted.message);
+afterEach(() => vi.restoreAllMocks());
 
-    expect(minted.url.startsWith(`${SITE}/#t=tkt_`)).toBe(true);
-    // 严格说：不允许落到 query（会进日志与 Referer）
-    expect(minted.url).not.toContain("?t=");
-
-    const ticket = minted.url.split("#t=")[1]!;
-    const claims = await verifyStudioToken(testEnv, ticket, { aud: "site-studio", prefix: "tkt" });
-    expect(claims?.tenant).toBe(TENANT);
-    expect(claims?.crm).toBe("https://crm.example.com");
-    expect(claims?.aud).toBe("site-studio");
-    expect(claims?.exp).toBeGreaterThan(Math.floor(Date.now() / 1000));
+describe("入口守卫（不花钱、不发请求）", () => {
+  it("没有 CSRF 头 ⇒ 403", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    const res = await handleStudioTicket(requestOf({ aud: "site-studio" }, { csrf: false }), envOf(), "42", { user_id: 1 }, false);
+    expect(res.status).toBe(403);
+    expect(spy).not.toHaveBeenCalled();
   });
 
-  it("aud 不同 ⇒ 验不过（一张票只能用于一个产品）", async () => {
-    const minted = await mintStudioTicket(testEnv, {
-      tenant: TENANT,
-      crm: "https://crm.example.com",
-      aud: "site-studio",
-    });
-    if (!minted.ok) throw new Error(minted.message);
-    const ticket = minted.url.split("#t=")[1]!;
-
-    expect(await verifyStudioToken(testEnv, ticket, { aud: "app-studio", prefix: "tkt" })).toBeNull();
-  });
-
-  it("过期、改一个字节、换前缀都验不过", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const minted = await mintStudioTicket(testEnv, {
-      tenant: TENANT,
-      crm: "https://crm.example.com",
-      aud: "site-studio",
-      now,
-    });
-    if (!minted.ok) throw new Error(minted.message);
-    const ticket = minted.url.split("#t=")[1]!;
-
-    // 过期：用票据到期之后的时间点验
-    expect(
-      await verifyStudioToken(testEnv, ticket, {
-        aud: "site-studio",
-        prefix: "tkt",
-        now: now + TICKET_TTL_SECONDS + 1,
-      }),
-    ).toBeNull();
-
-    // 篡改 payload（改一个字符）
-    const [payload, signature] = ticket.slice(4).split(".");
-    const tampered = `tkt_${payload!.slice(0, -1)}${payload!.endsWith("A") ? "B" : "A"}.${signature}`;
-    expect(await verifyStudioToken(testEnv, tampered, { aud: "site-studio", prefix: "tkt" })).toBeNull();
-
-    // 前缀不对
-    expect(await verifyStudioToken(testEnv, ticket, { aud: "site-studio", prefix: "sts" })).toBeNull();
-  });
-
-  it("缺配置时给出可照做的错误，而不是签一张空票", async () => {
-    const noMaster = { ...testEnv, APP_SECRET: "" } as unknown as Env;
-    const r1 = await mintStudioTicket(noMaster, { tenant: TENANT, crm: "https://c", aud: "site-studio" });
-    expect(r1.ok ? "" : r1.code).toBe("studio_not_configured");
-
-    const noUrl = { ...testEnv, STUDIO_SITE_URL: "" } as unknown as Env;
-    const r2 = await mintStudioTicket(noUrl, { tenant: TENANT, crm: "https://c", aud: "site-studio" });
-    expect(r2.ok ? "" : r2.message).toContain("STUDIO_SITE_URL");
-  });
-});
-
-describe("POST /api/studio/ticket", () => {
   it("没有管理员会话 ⇒ 401", async () => {
-    const res = await handleStudioTicket(request({ aud: "site-studio" }), testEnv, TENANT, null, true);
+    const res = await handleStudioTicket(requestOf({ aud: "site-studio" }), envOf(), "42", null, true);
     expect(res.status).toBe(401);
   });
 
-  it("没有 x-crm-request 头 ⇒ 403（与后台同一道 CSRF 防线）", async () => {
-    const res = await handleStudioTicket(
-      request({ aud: "site-studio" }),
-      testEnv,
-      TENANT,
-      { user_id: 1 },
-      false,
-    );
-    expect(res.status).toBe(403);
-  });
-
   it("aud 不在白名单 ⇒ 400", async () => {
-    const res = await handleStudioTicket(
-      request({ aud: "other-studio" }),
-      testEnv,
-      TENANT,
-      { user_id: 1 },
-      true,
-    );
+    const res = await handleStudioTicket(requestOf({ aud: "nope" }), envOf(), "42", { user_id: 1 }, true);
     expect(res.status).toBe(400);
-    expect((await res.json() as { error: string }).error).toBe("studio_aud_unknown");
+    expect(((await res.json()) as { error: string }).error).toBe("studio_aud_unknown");
   });
 
-  it("带会话 + 正确 aud ⇒ 200，返回的 url 能验出当前租户", async () => {
-    await seedAdminSession();
-    const res = await handleStudioTicket(
-      request({ aud: "app-studio" }),
-      testEnv,
-      TENANT,
-      { user_id: 1 },
-      true,
-    );
-    expect(res.status).toBe(200);
-
-    const body = (await res.json()) as { url: string; aud: string };
-    expect(body.aud).toBe("app-studio");
-    expect(body.url.startsWith(`${APP}/#t=tkt_`)).toBe(true);
-
-    const claims = await verifyStudioToken(testEnv, body.url.split("#t=")[1]!, {
-      aud: "app-studio",
-      prefix: "tkt",
-    });
-    expect(claims?.tenant).toBe(TENANT);
+  it("本租户没有 cf-api 凭据 ⇒ 409，且一个请求都不发", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    await env.DB.prepare("DELETE FROM cf_api WHERE id = 1").run();
+    const res = await handleStudioTicket(requestOf({ aud: "site-studio" }), envOf(), "42", { user_id: 1 }, true);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("studio_tenant_token_missing");
+    expect(spy).not.toHaveBeenCalled();
   });
 
-  it("tenant 只认服务端解析出来的那个（客户端传了也没用）", async () => {
-    await seedAdminSession();
-    const res = await handleStudioTicket(
-      request({ aud: "site-studio", tenant: "999" }),
-      testEnv,
-      TENANT,
-      { user_id: 1 },
-      true,
-    );
-    const body = (await res.json()) as { url: string };
-    const claims = await verifyStudioToken(testEnv, body.url.split("#t=")[1]!, {
+  it("没配 studio 地址 ⇒ 500 studio_not_configured", async () => {
+    const result = await requestStudioEntry(envOf({ STUDIO_SITE_URL: "" }), {
       aud: "site-studio",
-      prefix: "tkt",
+      crm: "https://crm.test",
+      tenantToken: TENANT_TOKEN,
     });
-    expect(claims?.tenant).toBe(TENANT);
+    expect(result).toMatchObject({ ok: false, status: 500, code: "studio_not_configured" });
   });
 });
 
-describe("会话时长", () => {
-  it("是 14 天（契约 §3.1），不是 24 小时", () => {
-    expect(SESSION_TTL_SECONDS).toBe(14 * 24 * 60 * 60);
-    expect(TICKET_TTL_SECONDS).toBe(60);
+describe("出示给 studio 的东西", () => {
+  it("带本租户自己的 token + aud + CRM origin，且打到配置的 studio", async () => {
+    await seedToken();
+    const { impl, calls } = studioFetch(okBody());
+    vi.spyOn(globalThis, "fetch").mockImplementation(impl);
+
+    const res = await handleStudioTicket(requestOf({ aud: "site-studio" }), envOf(), "42", { user_id: 1 }, true);
+    expect(res.status).toBe(200);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${SITE}/api/studio/session`);
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers.authorization).toBe(`Bearer ${TENANT_TOKEN}`);
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      aud: "site-studio",
+      crm: "https://crm.test",
+    });
+  });
+
+  it("回给前端的是 studio 给的 URL + 本次解析出的 tenant（客户端塞的不算数）", async () => {
+    await seedToken();
+    vi.spyOn(globalThis, "fetch").mockImplementation(studioFetch(okBody()).impl);
+
+    const res = await handleStudioTicket(
+      requestOf({ aud: "site-studio", tenant: "999", tenant_id: 999 }),
+      envOf(),
+      "42",
+      { user_id: 1 },
+      true,
+    );
+    const body = (await res.json()) as { url: string; tenant: string; aud: string };
+    expect(body.url).toBe(`${SITE}/#t=tkt_abc.def`);
+    expect(body.tenant).toBe("42");
+    expect(body.aud).toBe("site-studio");
+  });
+
+  it("app-studio 打另一个地址（两个产品各自配置）", async () => {
+    await seedToken();
+    const { impl, calls } = studioFetch(okBody(`${APP}/#t=tkt_x.y`));
+    vi.spyOn(globalThis, "fetch").mockImplementation(impl);
+
+    const res = await handleStudioTicket(requestOf({ aud: "app-studio" }), envOf(), "42", { user_id: 1 }, true);
+    expect(res.status).toBe(200);
+    expect(calls[0]!.url).toBe(`${APP}/api/studio/session`);
+  });
+});
+
+describe("studio 的拒绝与故障", () => {
+  const cases: Array<{ status: number; error: string; expectStatus: number; word: string }> = [
+    { status: 401, error: "studio_tenant_token_invalid", expectStatus: 409, word: "重新签发" },
+    { status: 403, error: "studio_tenant_denied", expectStatus: 403, word: "未开通" },
+    { status: 503, error: "studio_not_configured", expectStatus: 502, word: "稍后重试" },
+    { status: 502, error: "studio_platform_unreachable", expectStatus: 502, word: "稍后重试" },
+  ];
+
+  for (const c of cases) {
+    it(`studio ${c.status} ${c.error} ⇒ ${c.expectStatus}，给人话不给上游细节`, async () => {
+      await seedToken();
+      vi.spyOn(globalThis, "fetch").mockImplementation(studioFetch({ error: c.error }, c.status).impl);
+
+      const res = await handleStudioTicket(requestOf({ aud: "site-studio" }), envOf(), "42", { user_id: 1 }, true);
+      expect(res.status).toBe(c.expectStatus);
+      const body = (await res.json()) as { error: string; message: string };
+      expect(body.error).toBe(c.error);
+      expect(body.message).toContain(c.word);
+    });
+  }
+
+  it("网络异常/超时 ⇒ 502，不抛给调用方", async () => {
+    await seedToken();
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("boom"));
+    const res = await handleStudioTicket(requestOf({ aud: "site-studio" }), envOf(), "42", { user_id: 1 }, true);
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { error: string }).error).toBe("studio_unreachable");
+  });
+
+  it("studio 回了别的 origin / 不是 #t= 片段 ⇒ 502（防开放重定向）", async () => {
+    await seedToken();
+    for (const url of ["https://evil.example/#t=tkt_abc.def", `${SITE}/?t=tkt_abc.def`, `${SITE}/#t=sts_abc.def`]) {
+      vi.spyOn(globalThis, "fetch").mockImplementation(studioFetch(okBody(url)).impl);
+      const res = await handleStudioTicket(requestOf({ aud: "site-studio" }), envOf(), "42", { user_id: 1 }, true);
+      expect(res.status).toBe(502);
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+describe("studioOriginOf", () => {
+  it("按产品取各自配置，去尾斜杠", () => {
+    const e = envOf({ STUDIO_SITE_URL: " https://site-studio.test/ ", STUDIO_APP_URL: "" });
+    expect(studioOriginOf(e, "site-studio")).toBe("https://site-studio.test");
+    expect(studioOriginOf(e, "app-studio")).toBe("");
   });
 });

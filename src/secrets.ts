@@ -24,14 +24,6 @@ import type { Env } from "./env";
 
 const SIGN_LABEL = "crm/sign/v1";
 const ENC_LABEL = "crm/enc/v1";
-/**
- * studio 票据（`contracts/studio-identity.md`）用的标签。
- *
- * 与 sign / enc 并列的**第三个用途**，仍然从同一把 `APP_SECRET` 派生 ——
- * 部署要记的密钥只有一把（这是本文件的既定原则，别再为某个功能加 secret）。
- */
-const STUDIO_LABEL = "crm/studio/v1";
-
 /** 主密钥原文；空串 = 没配（调用方必须当成"功能不可用"，不能用空密钥签/加密） */
 export function appSecretOf(env: Env): string {
   return String(env.APP_SECRET ?? "").trim();
@@ -48,18 +40,6 @@ export function signingKeyOf(env: Env): string {
   return secret ? `${secret}|${SIGN_LABEL}` : "";
 }
 
-/**
- * studio 票据密钥的**材料**（字符串）。
- *
- * 用法：`K_aud = HMAC-SHA256(这份材料, "studio-ticket:<aud>")`，再把 hex 配给对应的
- * studio。两个 studio 各自只拿自己那一个 `K_aud`。
- *
- * 返回空串 = 没配 `APP_SECRET`（调用方必须当成"身份功能不可用"，不能用空密钥凑合）。
- */
-export function studioKeyMaterialOf(env: Env): string {
-  const secret = appSecretOf(env);
-  return secret ? `${secret}|${STUDIO_LABEL}` : "";
-}
 
 /** AES-GCM 用的 CryptoKey；`null` = 没配主密钥（调用方应拒绝保存明文） */
 export async function encryptionKeyOf(env: Env): Promise<CryptoKey | null> {
