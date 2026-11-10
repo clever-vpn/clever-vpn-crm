@@ -1,6 +1,6 @@
 # 站点存储布局（R2 + KV）
 
-Last updated: 2026-11-08
+Last updated: 2026-11-10
 Status: `as-built`（本仓内部实现说明，**不是跨仓契约**）
 
 > 写这份东西的是 `src/site/publish.ts`，读它的是 `workers/site/src/index.ts`
@@ -16,7 +16,10 @@ Status: `as-built`（本仓内部实现说明，**不是跨仓契约**）
 共用同一个桶）。
 
 ```
-g/templates/<模板>/<版本>/…           全局模板，一份，所有租户共享
+g/templates/<模板>/<版本>/…           全局模板（公共模板），一份，所有租户共享
+tpl/<sha256>/…                        租户模板包的**内容寻址**存储（studio 交付）
+  files/<包内路径>                    包里的静态文件
+  manifest.json                       包清单（契约 site-studio-crm.md §4.1）
 sites/<租户>/versions/<n>/public/…    已发布的产物，按版本隔离
 ```
 
@@ -27,6 +30,31 @@ sites/<租户>/versions/<n>/public/…    已发布的产物，按版本隔离
   - `config.js` 重写成注入后的 `window.CRM_API_BASE`
   - 所有文本产物做 `{{site.*}}` 占位符替换（品牌设置烘焙，见下）
 - **版本不可变**：写完就不再改。回滚 = 把指针指回旧 `n`，**不重建、不删除旧版本**。
+
+### 1.1 `tpl/<sha>/`：模板版本（内容寻址）
+
+studio 交付的模板包走这一层，与 `g/templates/` 的区别是**键不是版本号而是内容 sha**：
+
+| | `g/templates/basic/v1/` | `tpl/<sha>/` |
+|---|---|---|
+| 谁写 | `npm run site:template:upload`（我们，手工） | `storeTemplate()`（studio 交付） |
+| 键 | 模板名 + 版本 | **内容 sha256** |
+| 语义 | 公共模板，所有租户共享 | 一份内容；租户的 `v7` 只是它的别名 |
+
+三条纪律（`src/site/templates.ts`）：
+
+1. **内容寻址**：同内容 → 同 sha → 同前缀。两个租户交同样的包只占一份。
+2. **不可变**：写进去的 `tpl/<sha>/` 永不修改；改模板 = 新 sha = 新键。
+3. **幂等**：同内容重复交付返回已有版本号（`idempotent: true`），不新增行 —— 所以
+   sha 里不能有时间戳（契约 §4.3 的"确定性"就是为这条服务的）。
+
+版本号 `v<seq>` 与 `sha` 的关系记在 D1 的 `site_templates`（`tenant_id, seq,
+version, parent_sha, sha, engine, schema_version, files, bytes, created_by,
+created_at`），当前指针是 `site_settings.template_version`（与数据设置同表，一起
+做乐观锁）。
+
+**交付 ≠ 上线**：`storeTemplate()` 只产生模板版本；上线仍然走 `publishSite()`
+（渲染 + 注入 SDK + 写 `sites/…` + 切 KV 指针）。
 
 ## 2. KV：指针，只有一把
 
