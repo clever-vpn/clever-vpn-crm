@@ -19,7 +19,9 @@ import type { Env } from "./env";
 import { handleAppApi } from "./app/router";
 import { handleAdminApi, readAdminSession } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
+import { verifySiteAccess } from "./site/access";
 import { siteMeta } from "./site/meta";
+import { buildScope, readSiteSettings } from "./site/settings";
 import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
@@ -140,6 +142,28 @@ export default {
           request.headers.get("x-crm-request") === "1",
         );
       }
+      /**
+       * studio 用：读**这个租户的**站点设置 + 渲染作用域（预览直接用它）。
+       *
+       * 凭据是入场时 CRM 签的 `sacc_…`（只做 `/api/site/*`，14 天，见
+       * `site/access.ts`）—— 不是租户的全权 API token。
+       */
+      if (url.pathname === "/api/site/settings") {
+        if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+        const access = await verifySiteAccess(request, env, scoped.tenantId);
+        if (!access) return json({ error: "site_access_invalid" }, 401);
+        const settings = await readSiteSettings(env);
+        return json(
+          {
+            rev: settings.rev,
+            values: settings.values,
+            collections: settings.collections,
+            // 与发布时**同一套** buildScope：预览与线上不会因为"两处拼数据"而漂移
+            scope: buildScope(settings, "我的站点"),
+          },
+        );
+      }
+
       if (url.pathname.startsWith("/api/admin")) {
         return handleAdminApi(request, env, scoped.tenantId);
       }

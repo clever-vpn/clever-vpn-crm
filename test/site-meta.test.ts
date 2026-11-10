@@ -48,16 +48,20 @@ describe("capabilities：模板能引用什么", () => {
     }
   });
 
-  it("集合带条目上限与字段定义（表单要靠它渲染）", () => {
-    const downloads = caps.find((c) => c.path === "downloads");
-    expect(downloads?.kind).toBe("collection");
-    expect(downloads?.items?.max).toBeGreaterThan(0);
-    expect(Object.keys(downloads?.items?.fields ?? {}).sort()).toEqual([
-      "kind",
-      "label",
-      "platform",
-      "url",
-    ]);
+  /**
+   * 路径必须是**渲染作用域**里的形状：库里叫 `downloads`，但 `buildScope()` 按平台
+   * 分组。写成库里那个名字，闸门会放行一个渲染出来是空白的路径。
+   */
+  it("集合按平台分组（`site.download.<platform>`），带条目上限与字段定义", () => {
+    for (const platform of ["ios", "android", "windows", "macos"]) {
+      const cap = caps.find((c) => c.path === `site.download.${platform}`);
+      expect(cap, platform).toBeDefined();
+      expect(cap?.kind).toBe("collection");
+      expect(cap?.items?.max).toBeGreaterThan(0);
+      expect(Object.keys(cap?.items?.fields ?? {}).sort()).toEqual(["kind", "label", "platform", "url"]);
+    }
+    // 库里那个名字不是可引用路径
+    expect(caps.some((c) => c.path === "downloads")).toBe(false);
   });
 
   /**
