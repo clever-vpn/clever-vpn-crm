@@ -13,7 +13,7 @@
  *
  * 必需：`D1_DATABASE_ID`、`CRM_TENANT_ID`
  * 可选：`WORKER_NAME`、`D1_NAME`、`CF_API_BASE`、`CRM_CODE_VERSION`、
- *       `CRM_CONTRACT_VERSION`
+ *       `CRM_CONTRACT_VERSION`、`STUDIO_SITE_URL`、`STUDIO_APP_URL`
  *
  * 这个文件里**没有也不应该有**任何密钥；token 一律走 `wrangler secret put`。
  */
@@ -74,6 +74,9 @@ setString("database_id", value("D1_DATABASE_ID"));
 setString("migrations_dir", "migrations");
 setString("CRM_TENANT_ID", value("CRM_TENANT_ID"));
 setString("CF_API_BASE", value("CF_API_BASE"));
+// studio 票据的跳转落点（GitHub Actions Variables；空值表示该产品还没上线）
+setString("STUDIO_SITE_URL", process.env.STUDIO_SITE_URL ?? "");
+setString("STUDIO_APP_URL", process.env.STUDIO_APP_URL ?? "");
 setString("CRM_CODE_VERSION", value("CRM_CODE_VERSION"));
 setString("CRM_CONTRACT_VERSION", value("CRM_CONTRACT_VERSION"));
 

@@ -41,6 +41,9 @@ jobs:
       D1_NAME: ${{ vars.D1_NAME || 'clever-vpn-crm' }}
       CRM_TENANT_ID: ${{ vars.CRM_TENANT_ID }}
       CF_API_BASE: ${{ vars.CF_API_BASE || 'https://api.clever-vpn.org' }}
+      # studio 票据的跳转落点（空 = 该产品未上线，签票会返回 500 studio_not_configured）
+      STUDIO_SITE_URL: ${{ vars.STUDIO_SITE_URL }}
+      STUDIO_APP_URL: ${{ vars.STUDIO_APP_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -113,6 +116,7 @@ jobs:
         env:
           APP_SECRET: ${{ secrets.APP_SECRET }}
           SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
+          STUDIO_TICKET_MASTER: ${{ secrets.STUDIO_TICKET_MASTER }}
         run: |
           set -euo pipefail
           if [ -z "${APP_SECRET:-}" ]; then
@@ -123,6 +127,12 @@ jobs:
             printf '%s' "$SETUP_TOKEN" | npx wrangler secret put SETUP_TOKEN --config wrangler.ci.jsonc
           else
             echo "::warning::未配置 SETUP_TOKEN，管理后台首次初始化会被禁用（见 docs/admin.md）"
+          fi
+          # studio 身份：没有它签不出票据（site / app studio 都进不去）
+          if [ -n "${STUDIO_TICKET_MASTER:-}" ]; then
+            printf '%s' "$STUDIO_TICKET_MASTER" | npx wrangler secret put STUDIO_TICKET_MASTER --config wrangler.ci.jsonc
+          else
+            echo "::warning::未配置 STUDIO_TICKET_MASTER，studio 设计器入口不可用（见 docs/self-host.md）"
           fi
 
       - name: 摘要

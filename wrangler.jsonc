@@ -47,6 +47,10 @@
   // cf-api 租户 token 不走 secret：后台「设置 → cf-api 对接」填，加密存进 D1
   "vars": {
     "CRM_TENANT_ID": "0",
+    // 两个 studio 的对外地址 —— 票据跳转的落点，**只来自服务端配置**（契约
+    // `studio-identity.md` §2.1：接受请求参数就是开放重定向）。空 = 该产品不可用。
+    "STUDIO_SITE_URL": "",
+    "STUDIO_APP_URL": "",
     "CF_API_BASE": "https://api.clever-vpn.org",
     "CRM_CODE_VERSION": "dev",
     "CRM_CONTRACT_VERSION": "19",
