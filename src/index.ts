@@ -19,6 +19,7 @@ import type { Env } from "./env";
 import { handleAppApi } from "./app/router";
 import { handleAdminApi, readAdminSession } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
+import { siteMeta } from "./site/meta";
 import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
@@ -112,6 +113,17 @@ export default {
       await ensureSchema(env.DB);
       const payResponse = await handlePayRoutes(request, env);
       if (payResponse) return payResponse;
+    }
+
+    /**
+     * 平台的数据契约：字段清单 + 契约版本 + 渲染引擎版本。
+     *
+     * 放在 `/api/` 那一串前面，是因为它**不读库也不要鉴权** —— 它是平台能力的广告，
+     * 不含任何租户数据（`src/site/meta.ts` 头部解释了为什么不含套餐/订单）。
+     */
+    if (url.pathname === "/api/site/meta") {
+      if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+      return json(siteMeta());
     }
 
     if (url.pathname.startsWith("/api/")) {

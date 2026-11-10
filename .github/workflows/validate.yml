@@ -19,6 +19,9 @@ jobs:
           node-version-file: .nvmrc
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
+      # 引擎版本号 = render.ts 的 sha256：改了渲染器却没重新生成，两侧就会
+      # "同版本号、不同行为"。这条必须能红，不能靠记性。
+      - run: npm run engine:check
       - name: 迁移链自检（结构 / 不可变 / 与 schema 同步）
         run: npm run check:migrations
       - run: npm test
