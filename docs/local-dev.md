@@ -204,3 +204,17 @@ npm run db:migrate:local   # 只 apply（不清库）
 | 浏览器证书告警 | Caddy 内部 CA 没被信任：`caddy trust`（或用 `Caddyfile` 里 `sign_with_root` 对应的根证书） |
 | `send-code` 不给 `code` | `ENVIRONMENT` 被设成了 `production` |
 | 本地够不到线上 `crm.clever-vpn.org` | hosts 钉到 127.0.0.1 了；用 `curl --resolve` 指定真实 IP |
+
+## 本地没有部署命令
+
+`package.json` 里的 `"deploy": "wrangler deploy"` 已删除：**托管版（我们自己的线上）
+只能由 Actions → `deploy` 发**。本地那条会绕开 Bitwarden 的密钥同步、绕开版本号注入
+（`/__version` 会停在 `dev`）、也不建 tag/release —— 两条路发出去的是两个不同的线上
+状态。
+
+```bash
+gh workflow run deploy.yml --repo clever-vpn/clever-vpn-crm
+```
+
+> **自托管租户不受这条约束**：他们发的是**自己账号里的** Worker，见
+> [self-host.md](self-host.md)。
