@@ -39,6 +39,20 @@ export interface Env {
    * ⚠️ **定了就别换**：换掉 = 已发出的退订链接失效 + 已存的密钥/token 全部解不开。
    */
   APP_SECRET?: string;
+  /**
+   * studio 票据的**主密钥**（`wrangler secret put STUDIO_TICKET_MASTER`）。
+   *
+   * 与 `APP_SECRET` **分开**：这把只用来派生 `K_site` / `K_app` 两把 studio 签名密钥
+   * （契约 `contracts/studio-identity.md` §3.2）。分开的好处是轮换 studio 身份不影响
+   * 已发出的退订链接与已加密的商户密钥。
+   */
+  STUDIO_TICKET_MASTER?: string;
+  /**
+   * 两个 studio 的对外地址（**服务端配置**，从不接受请求方传入 —— 否则是开放重定向）。
+   * 票据 URL 形如 `<origin>/#t=<ticket>`。
+   */
+  STUDIO_SITE_URL?: string;
+  STUDIO_APP_URL?: string;
   /** 首次初始化管理员用的一次性口令（wrangler secret put SETUP_TOKEN） */
   SETUP_TOKEN?: string;
   /** 密码哈希迭代次数；Workers 免费版 CPU 只有 10ms，必要时下调 */

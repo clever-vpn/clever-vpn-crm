@@ -161,6 +161,14 @@ async function sessionFrom(
   return { ...row, token };
 }
 
+/**
+ * 读管理员会话（Cookie `crm_admin`）。导出给 `/api/studio/ticket` 这类**不在**
+ * `/api/admin` 前缀下、但需要同一套鉴权的端点复用 —— 不能有第二套会话校验。
+ */
+export async function readAdminSession(env: Env, request: Request): Promise<SessionRow | null> {
+  return sessionFrom(env, request, SESSION_COOKIE);
+}
+
 /** 所有写操作的 CSRF 防线：必须是同源 fetch（自定义头无法跨源静默发送） */
 function csrfOk(request: Request): boolean {
   if (request.method === "GET") return true;
