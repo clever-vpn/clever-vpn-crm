@@ -36,7 +36,8 @@ import {
 /**
  * 网站：三个页签，一屏一件事。
  *
- *   发布   → 看一眼线上是哪一版，点一下发布（唯一的 primary 按钮）
+ *   发布   → 主按钮是「打开设计器」（改内容的正路）；「发布站点」是次要动作
+ *            （改完设置要重新发布时用）
  *   站点设置 → 名称 / 介绍 / 主色 / 客服邮箱 / 页脚，**发布后才生效**
  *   域名   → **只有 SaaS（multi）模式才有**；自部署由租户自己在 Cloudflare 挂
  *
@@ -112,6 +113,30 @@ export default function Site() {
         message.error("发布失败");
       }
     } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * 进设计器：先换一张一次性票据，再整页跳过去。
+   *
+   * `url` 由 CRM 后端拼（studio 的 origin 只从服务端配置来，契约
+   * `studio-identity.md` §2.1）；票据在 URL 的 `#` 片段里，**不会发给任何服务端**，
+   * 由 studio 页面自己用一次就作废。
+   */
+  async function openStudio() {
+    setBusy(true);
+    try {
+      const { url } = await api.studioTicket();
+      window.location.assign(url);
+    } catch (e) {
+      const msg =
+        e instanceof ApiError && e.body?.error === "studio_not_configured"
+          ? "设计器还没启用：先在部署里配 STUDIO_SITE_URL（studio 的地址）。"
+          : e instanceof ApiError
+            ? e.message
+            : "打不开设计器";
+      message.error(msg);
       setBusy(false);
     }
   }
@@ -216,6 +241,24 @@ export default function Site() {
 
   const publishTab = (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
+      <Card
+        title="改内容"
+        extra={
+          <Button type="primary" loading={busy} onClick={openStudio}>
+            打开设计器
+          </Button>
+        }
+      >
+        <Typography.Paragraph style={{ marginBottom: 8 }}>
+          文案、配色、页面结构都在设计器里改，边改边看。改完点设计器里的「发布」，
+          线上就会切到新的一版。
+        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          这里是「设置 + 发布」：站点名称、客服邮箱这些改完要再点一次发布才会生效
+          （品牌值是发布时写进页面的）。
+        </Typography.Paragraph>
+      </Card>
+
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
           <Card>
@@ -287,7 +330,7 @@ export default function Site() {
             onConfirm={publish}
             disabled={busy || !templateReady}
           >
-            <Button type="primary" loading={busy} disabled={!templateReady}>
+            <Button loading={busy} disabled={!templateReady}>
               发布站点
             </Button>
           </Popconfirm>
@@ -295,7 +338,11 @@ export default function Site() {
       >
         <Descriptions column={1} size="small">
           <Descriptions.Item label="模板">
-            {templateReady ? "已就绪（basic v1）" : "未上传"}
+            {state?.templateVersion
+              ? `设计器交付的 ${state.templateVersion}`
+              : templateReady
+                ? "公共模板 basic v1（你还没在设计器里改过）"
+                : "未上传"}
           </Descriptions.Item>
           <Descriptions.Item label="生效时间">
             切指针后约 5 秒（site-serve 有 5 秒指针缓存）

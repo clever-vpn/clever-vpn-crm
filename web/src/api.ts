@@ -12,8 +12,17 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api/admin${path}`, {
+/**
+ * `absolute` 用于**不在 `/api/admin` 下**的端点（比如换 studio 票据走的
+ * `/api/studio/ticket`）—— 路径是契约里定死的，不能跟着后台前缀跑。
+ */
+async function call<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  absolute = false,
+): Promise<T> {
+  const res = await fetch(absolute ? path : `/api/admin${path}`, {
     method,
     credentials: "same-origin",
     headers: {
@@ -166,6 +175,10 @@ export interface SiteStateView {
   versions: SiteVersion[];
   /** 模板是否已在 R2；false 时发布必然失败，页面要提前提示 */
   templateReady: boolean;
+  /** 发布时会用哪一份模板：`studio:v2`（设计器交付）或 `public:basic@v1` */
+  templateSource: string;
+  /** 租户在设计器里交付的版本号；从没交付过是 null */
+  templateVersion: string | null;
 }
 
 export interface SitePublishResult {
@@ -266,6 +279,14 @@ export const api = {
   /** 站点：状态 / 发布 / 回滚（产物在 R2，指针在 KV，见 contracts/site-studio-crm.md §6） */
   site: () => call<SiteStateView>("GET", "/site"),
   sitePublish: () => call<SitePublishResult>("POST", "/site/publish", {}),
+  /**
+   * 换一张进设计器的票据（一次性，60 秒）。
+   *
+   * **地址由 CRM 后端拼**：studio 的 origin 只从服务端配置来（契约
+   * `studio-identity.md` §2.1）—— 前端把 `aud` 递上去，拿到 `url` 就跳过去。
+   */
+  studioTicket: () =>
+    call<{ url: string }>("POST", "/api/studio/ticket", { aud: "site-studio" }, true),
   siteSettings: () => call<{ settings: SiteSettingsView }>("GET", "/site/settings"),
   /** `collections` 不传就不动（只改设置时别把下载入口清空） */
   saveSiteSettings: (input: {

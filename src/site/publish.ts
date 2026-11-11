@@ -16,7 +16,7 @@
  * （指针是 CRM 自己的东西，site-serve 只读它）。
  */
 import { renderTemplate } from "./render";
-import { FILES_PREFIX, tplPrefix } from "./templates";
+import { FILES_PREFIX, readTemplateVersion, tplPrefix } from "./templates";
 import { RETURN_HTML, SDK_JS } from "./sdk";
 import { buildScope, readSiteSettings } from "./settings";
 
@@ -334,6 +334,16 @@ export async function publishSite(
 export interface SiteState {
   /** 当前线上版本；从未发布过是 null */
   active: number | null;
+  /**
+   * 发布时会用哪一份模板。
+   *
+   * `studio:v2` = 租户在设计器里交付的那一版（`tpl/<sha>`）；
+   * `public:basic@v1` = 库里那份演示模板（租户还没动过）。
+   * 后台必须看得见这个差别 —— 否则"我在设计器里改的怎么没上线"会变成一个谜。
+   */
+  templateSource: string;
+  /** 租户交付的版本号（没有交付过是 null） */
+  templateVersion: string | null;
   /** 最近若干版，最新在前 */
   versions: {
     seq: number;
@@ -364,6 +374,9 @@ export async function siteState(env: Env, tenantId: string): Promise<SiteState> 
     created_at: string;
   }>();
 
+  const delivered = await readTemplateVersion(env, tenantId);
+  const templateVersion = delivered?.version ?? null;
+
   let templateReady = false;
   if (env.SITES) {
     const probe = await env.SITES.list({
@@ -375,6 +388,8 @@ export async function siteState(env: Env, tenantId: string): Promise<SiteState> 
 
   return {
     active: pointer?.n ?? null,
+    templateSource: templateVersion ? `studio:${templateVersion}` : "public:basic@v1",
+    templateVersion,
     versions: rows.results ?? [],
     templateReady,
   };
