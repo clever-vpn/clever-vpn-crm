@@ -25,12 +25,13 @@ const OUT = "wrangler.ci.jsonc";
 const DEFAULTS = {
   WORKER_NAME: "clever-vpn-crm",
   D1_NAME: "clever-vpn-crm",
+  HOSTS_KV_ID: "",
   CF_API_BASE: "https://api.clever-vpn.org",
   CRM_CONTRACT_VERSION: "1",
   CRM_CODE_VERSION: (process.env.GITHUB_SHA ?? "").slice(0, 7) || "ci",
 };
 
-const REQUIRED = ["D1_DATABASE_ID", "CRM_TENANT_ID"];
+const REQUIRED = ["D1_DATABASE_ID", "HOSTS_KV_ID", "CRM_TENANT_ID"];
 
 const value = (key) => {
   const raw = process.env[key];
@@ -69,6 +70,8 @@ function setString(jsKey, replacement) {
 setString("name", value("WORKER_NAME"));
 setString("database_name", value("D1_NAME"));
 setString("database_id", value("D1_DATABASE_ID"));
+// 站点指针用的 KV（部署工作流里按名字查找/创建）
+setString("id", value("HOSTS_KV_ID"));
 // 本地模板指向 migrations-dev（reset 脚本生成的临时链）；
 // CI 用生产链，必须在渲染时改回来。
 setString("migrations_dir", "migrations");

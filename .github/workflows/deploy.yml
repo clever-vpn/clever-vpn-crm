@@ -39,6 +39,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       WORKER_NAME: ${{ vars.WORKER_NAME || 'clever-vpn-crm' }}
       D1_NAME: ${{ vars.D1_NAME || 'clever-vpn-crm' }}
+      # 站点指针的 KV（site:<租户>:active）。自托管一件小事：没有它站点发不出去
+      HOSTS_NAME: ${{ vars.HOSTS_NAME || format('{0}-hosts', vars.WORKER_NAME || 'clever-vpn-crm') }}
       CRM_TENANT_ID: ${{ vars.CRM_TENANT_ID }}
       CF_API_BASE: ${{ vars.CF_API_BASE || 'https://api.clever-vpn.org' }}
       # studio 票据的跳转落点（空 = 该产品未上线，签票会返回 500 studio_not_configured）
@@ -92,9 +94,39 @@ jobs:
           echo "D1_ID=$ID" >> "$GITHUB_OUTPUT"
           echo "D1 database_id = $ID"
 
+      - name: 确保 KV（站点指针）存在
+        id: kv
+        run: |
+          set -euo pipefail
+          find_kv() {
+            npx wrangler kv namespace list --json 2>/dev/null | node -e '
+              let s = "";
+              process.stdin.on("data", (d) => (s += d)).on("end", () => {
+                const start = s.indexOf("[");
+                const rows = start >= 0 ? JSON.parse(s.slice(start)) : [];
+                const hit = rows.find((r) => r.title === process.env.HOSTS_NAME);
+                process.stdout.write(hit ? hit.id : "");
+              });
+            '
+          }
+
+          ID="$(find_kv)"
+          if [ -z "$ID" ]; then
+            echo "KV「${HOSTS_NAME}」不存在，创建…"
+            npx wrangler kv namespace create "$HOSTS_NAME"
+            ID="$(find_kv)"
+          fi
+          if [ -z "$ID" ]; then
+            echo "::error::无法解析 KV namespace id（检查 CLOUDFLARE_API_TOKEN 是否有 Workers KV Storage:Edit）"
+            exit 1
+          fi
+          echo "HOSTS_KV_ID=$ID" >> "$GITHUB_OUTPUT"
+          echo "KV ${HOSTS_NAME} = $ID"
+
       - name: 渲染部署配置
         env:
           D1_DATABASE_ID: ${{ steps.d1.outputs.D1_ID }}
+          HOSTS_KV_ID: ${{ steps.kv.outputs.HOSTS_KV_ID }}
         run: node scripts/render-config.mjs
 
       # 先迁移、再部署：迁移失败就别切流量。
