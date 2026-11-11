@@ -155,3 +155,21 @@ describe("模板只引用清单里的路径（与 H1 同一条判据）", () => 
     });
   }
 });
+
+/**
+ * 模板不能有内联 `<script>`：发布产物的 CSP 会拦掉它，等于线上**静默不执行**。
+ * 判据在 studio 的 L0（`inline_script` 硬项），这里提前把人会犯的错拦住 ——
+ * 一份被闸门拒收的公共模板，会让每个新租户的第一步就是红的。
+ */
+describe("模板不含内联脚本（L0 的 inline_script 是硬项）", () => {
+  const pages = readdirSync(resolve(process.cwd(), "site-template"), { recursive: true })
+    .map(String)
+    .filter((name) => name.endsWith(".html"));
+
+  for (const name of pages) {
+    it(name, () => {
+      // `<script src=...>` 允许；`<script>` 之后直接跟代码的一律不允许
+      expect(page(name)).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/i);
+    });
+  }
+});
