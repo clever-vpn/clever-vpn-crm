@@ -6,11 +6,12 @@
  * 写错一个路径，发布时会以 `template_token_unknown` 失败——而这两类错误
  * 都只会在点发布的那一刻才暴露。这里提前到单测。
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { siteCapabilities } from "../src/site/meta";
 import { renderTemplate } from "../src/site/render";
 import { buildScope } from "../src/site/settings";
 
@@ -103,6 +104,54 @@ describe("其它页面：不留占位符、不留指令", () => {
       expect(r.html).not.toContain("{{");
       expect(r.html).not.toContain("data-repeat");
       expect(r.html).not.toContain("data-if");
+    });
+  }
+});
+
+/**
+ * 模板引用的每一个路径都必须在契约清单里。
+ *
+ * 这是把 studio 的 H1 提前到 CRM 这一侧：交付时闸门用 `/api/site/meta` 的
+ * `capabilities` 判“这个路径能不能用”，清单漏一项，一份合法模板就会被判死
+ * （`{{site.footer}}` 就是这么被拦的）。模板与清单左右互查，谁漂了一目了然。
+ */
+describe("模板只引用清单里的路径（与 H1 同一条判据）", () => {
+  const caps = siteCapabilities();
+  const declared = new Set(caps.map((c) => c.path));
+  const reserved = new Set(["plans", "orders", "subscription", "me"]);
+
+  /** 站内全部页面（含 legal/ 这类子目录） */
+  const pages = readdirSync(resolve(process.cwd(), "site-template"), { recursive: true })
+    .map(String)
+    .filter((name) => name.endsWith(".html") && !name.startsWith("_"));
+
+  it("根路径有 index.html（交付硬项）", () => {
+    expect(pages).toContain("index.html");
+  });
+
+  for (const name of pages) {
+    it(name, () => {
+      const html = page(name);
+      // data-as 声明的别名在条目作用域里，不属于契约路径
+      const aliases = new Set(
+        [...html.matchAll(/\bdata-as\s*=\s*"([^"]*)"/g)].map((m) => m[1]!.trim()).filter(Boolean),
+      );
+      const refs = new Set<string>();
+      for (const m of html.matchAll(/\{\{\s*([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)\s*\}\}/g)) {
+        refs.add(m[1]!);
+      }
+      for (const m of html.matchAll(/\bdata-(?:repeat|if)\s*=\s*"([^"]*)"/g)) {
+        const value = m[1]!.trim();
+        if (value) refs.add(value);
+      }
+
+      const unknown = [...refs].filter((ref) => {
+        const head = ref.split(".")[0]!;
+        if (aliases.has(head)) return false;
+        if (reserved.has(head)) return false;
+        return !declared.has(ref);
+      });
+      expect(unknown, `${name} 引用了清单外的路径`).toEqual([]);
     });
   }
 });

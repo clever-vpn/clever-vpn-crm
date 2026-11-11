@@ -21,7 +21,8 @@
     "db:migrate:local": "wrangler d1 migrations apply clever-vpn-crm --local",
     "db:migrate:remote": "wrangler d1 migrations apply clever-vpn-crm --remote",
     "test:unit": "vitest run",
-    "test:workers": "vitest run --config vitest.workers.config.ts"
+    "test:workers": "vitest run --config vitest.workers.config.ts",
+    "site:template:local": "node scripts/seed-site-template-local.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.7",

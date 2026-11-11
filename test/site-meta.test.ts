@@ -19,7 +19,8 @@ import { describe, expect, it } from "vitest";
 
 import { ENGINE_ID, ENGINE_SHA256 } from "../src/site/engine.generated";
 import { SITE_CONTRACT, siteCapabilities, siteMeta } from "../src/site/meta";
-import { SETTING_FIELDS } from "../src/site/settings";
+import { renderTemplate } from "../src/site/render";
+import { SETTING_FIELDS, buildScope } from "../src/site/settings";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -86,5 +87,38 @@ describe("响应体", () => {
   it("只含三件东西：契约版本 + 引擎版本 + 能力清单", () => {
     expect(Object.keys(siteMeta()).sort()).toEqual(["capabilities", "contract", "engine"]);
     expect(siteMeta().contract).toBe(SITE_CONTRACT);
+  });
+});
+
+/**
+ * 派生值也必须在清单里。
+ *
+ * 踩过的坑：模板用 `{{site.footer}}`（标准 §3 的 `derived`），而 `capabilities`
+ * 只列了设置字段 ⇒ studio 的 H1 判它 `unknown_path` **硬项**，一份合法模板被拦死。
+ * 闸门用清单判"能不能引用"，所以清单必须把**渲染作用域里真实存在**的路径都写上。
+ */
+describe("capabilities：派生值也在清单里（但不能填）", () => {
+  const caps = siteCapabilities();
+
+  it("site.footer 被声明为 derived，且不在设置字段里", () => {
+    const cap = caps.find((c) => c.path === "site.footer");
+    expect(cap).toBeDefined();
+    expect(cap?.derived).toBe(true);
+    expect(Object.keys(SETTING_FIELDS)).not.toContain("site.footer");
+  });
+
+  it("派生值真的能渲染出东西（声明与渲染作用域一致）", () => {
+    const scope = buildScope({ values: { site: { name: "Acme" } } }, "兜底");
+    const rendered = renderTemplate("<p>{{site.footer}}</p>", scope as never);
+    expect(rendered.missing).toEqual([]);
+    expect(rendered.html).toContain("Acme");
+  });
+
+  it("每个 derived 能力都能在渲染作用域里取到值（不靠手写清单）", () => {
+    const scope = buildScope({ values: {} }, "兜底");
+    for (const cap of caps.filter((c) => c.derived)) {
+      const { missing } = renderTemplate(`{{${cap.path}}}`, scope as never);
+      expect(missing, cap.path).toEqual([]);
+    }
   });
 });
