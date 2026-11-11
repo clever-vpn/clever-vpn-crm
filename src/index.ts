@@ -21,7 +21,7 @@ import { handleAdminApi, readAdminSession } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
 import { verifySiteAccess } from "./site/access";
 import { siteMeta } from "./site/meta";
-import { buildScope, readSiteSettings } from "./site/settings";
+import { buildScope, readSiteSettings, saveSiteSettings } from "./site/settings";
 import { siteTemplateOf } from "./site/template-source";
 import { deliverSite, type DeliveryInput } from "./site/deliver";
 import { sampleDataOf } from "./site/sample";
@@ -154,19 +154,64 @@ export default {
        * `site/access.ts`）—— 不是租户的全权 API token。
        */
       if (url.pathname === "/api/site/settings") {
-        if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
         const access = await verifySiteAccess(request, env, scoped.tenantId);
         if (!access) return json({ error: "site_access_invalid" }, 401);
-        const settings = await readSiteSettings(env);
-        return json(
-          {
-            rev: settings.rev,
-            values: settings.values,
-            collections: settings.collections,
-            // 与发布时**同一套** buildScope：预览与线上不会因为"两处拼数据"而漂移
-            scope: buildScope(settings, "我的站点"),
-          },
-        );
+
+        if (request.method === "GET") {
+          const settings = await readSiteSettings(env);
+          return json(
+            {
+              rev: settings.rev,
+              values: settings.values,
+              collections: settings.collections,
+              // 与发布时**同一套** buildScope：预览与线上不会因为"两处拼数据"而漂移
+              scope: buildScope(settings, "我的站点"),
+            },
+            );
+        }
+
+        /**
+         * 设计器里改设置（契约 §4.6）：**真源在这里**，studio 只是一张表单。
+         *
+         * `if_rev` 必带：设计器与后台同时改时，那正是最容易丢改动的地方；冲突回
+         * 409，让前端去说"CRM 里刚改过"，而不是让后写的人静默覆盖先写的人。
+         */
+        if (request.method === "PUT") {
+          let body: { if_rev?: unknown; values?: unknown; collections?: unknown } = {};
+          try {
+            body = (await request.json()) as typeof body;
+          } catch {
+            return json({ error: "invalid_body", message: "body 必须是 JSON" }, 400);
+          }
+          if (typeof body.if_rev !== "number") {
+            return json(
+              { error: "rev_required", message: "必须带 if_rev（乐观锁），否则并写时谁也不知道被谁覆盖了" },
+              400,
+            );
+          }
+          const result = await saveSiteSettings(env, {
+            ifRev: body.if_rev,
+            values: body.values,
+            collections: body.collections,
+          });
+          if (!result.ok) {
+            // 冲突是 409（前端据此提示刷新），其余是 400（指出哪个字段不对）
+            return json(
+              { error: result.code, message: result.message },
+              result.code === "rev_conflict" ? 409 : 400,
+            );
+          }
+          const saved = result.settings;
+          return json({
+            ok: true,
+            rev: saved.rev,
+            values: saved.values,
+            collections: saved.collections,
+            scope: buildScope(saved, "我的站点"),
+          });
+        }
+
+        return json({ error: "method_not_allowed" }, 405);
       }
 
       /**

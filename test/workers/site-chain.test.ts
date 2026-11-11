@@ -154,3 +154,78 @@ describe("入场 → 回电：一条链跑通", () => {
     expect((await bare("/api/site/template")).status).toBe(401);
   });
 });
+
+/**
+ * `PUT /api/site/settings`（契约 v13 §4.6）：设计器里改设置。
+ *
+ * 三件事：`sacc_` 能写、`if_rev` 是必带的乐观锁（冲突 409）、派生值不可写。
+ * 真源永远在 CRM —— 这组用例就是在锁这条。
+ */
+describe("设置可写（设计器 → CRM）", () => {
+  const put = (token: string, body: unknown) =>
+    worker.default.fetch(
+      new Request("https://t-beta.clever-panel.win/api/site/settings", {
+        method: "PUT",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it("带 if_rev 写入 ⇒ rev +1，scope 立刻反映新值", async () => {
+    const token = await enter();
+    const before = (await (await siteCall("/api/site/settings", token)).json()) as { rev: number };
+
+    const res = await put(token, {
+      if_rev: before.rev,
+      values: { site: { name: "云端加速" } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      rev: number;
+      values: { site?: { name?: string } };
+      scope: { site?: { name?: string } };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.rev).toBe(before.rev + 1);
+    expect(body.values.site?.name).toBe("云端加速");
+    expect(body.scope.site?.name).toBe("云端加速");
+  });
+
+  it("rev 不匹配 ⇒ 409（不许后写静默覆盖先写）", async () => {
+    const token = await enter();
+    const before = (await (await siteCall("/api/site/settings", token)).json()) as { rev: number };
+
+    const res = await put(token, { if_rev: before.rev - 1, values: { site: { name: "x" } } });
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: "rev_conflict" });
+  });
+
+  it("不带 if_rev ⇒ 400（缺乐观锁就不收）", async () => {
+    const token = await enter();
+    const res = await put(token, { values: { site: { name: "x" } } });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: "rev_required" });
+  });
+
+  it("派生值不可写 ⇒ 400（写了也不会生效，那是最糟的结果）", async () => {
+    const token = await enter();
+    const before = (await (await siteCall("/api/site/settings", token)).json()) as { rev: number };
+    const res = await put(token, {
+      if_rev: before.rev,
+      values: { site: { footer: "© 我改的" } },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("不传 collections ⇒ 下载入口原样保留", async () => {
+    const token = await enter();
+    const before = (await (await siteCall("/api/site/settings", token)).json()) as {
+      rev: number;
+      collections: unknown;
+    };
+    const res = await put(token, { if_rev: before.rev, values: { site: { tagline: "t" } } });
+    const body = (await res.json()) as { collections: unknown };
+    expect(body.collections).toEqual(before.collections);
+  });
+});
