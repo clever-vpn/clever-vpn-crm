@@ -10,6 +10,7 @@
  * 模板上传（构建期由 `npm run site:template:upload` 做）。
  */
 import { publishSite, siteState, activeKey } from "../site/publish";
+import { readTemplateVersion } from "../site/templates";
 import { readSiteSettings, saveSiteSettings } from "../site/settings";
 
 import type { Env } from "../env";
@@ -102,6 +103,17 @@ export async function handleAdminSite(
 
   if (method === "POST" && path === "/site/publish") {
     const body = await readBody(request);
+    /**
+     * **默认发租户在设计器里交付的那一版**（`tpl/<sha>`），只有租户从没交付过
+     * 才发库里那份公共模板。
+     *
+     * 不这么做的后果很难查：租户在 studio 改完、发布成功，回头在后台再点一次
+     * 「发布站点」，线上就退回公共模板了 —— 而且两条路都显示"发布成功"。
+     * 显式传 `template` / `template_version` 的老调用不受影响。
+     */
+    const wantsExplicit =
+      typeof body.template === "string" || typeof body.template_version === "string";
+    const delivered = wantsExplicit ? null : await readTemplateVersion(env, tenantId);
     const result = await publishSite(env, tenantId, {
       // 站点调 CRM 的地址：默认就是管理后台自己的 origin（租户看到哪个域就用哪个）；
       // 需要固定成别的值（比如后台同时挂了多个域）时用 SITE_API_BASE 覆盖。
@@ -112,6 +124,13 @@ export async function handleAdminSite(
           ? body.template_version
           : undefined,
       actor,
+      ...(delivered
+        ? {
+            templateSha: delivered.sha,
+            template: "tenant",
+            templateVersion: delivered.version,
+          }
+        : {}),
     });
     if (!result.ok) {
       // L0 失败是"内容有问题"，不是服务器错误：400 + 逐条 issues
