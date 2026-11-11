@@ -23,6 +23,7 @@
  */
 
 import { ENGINE_ID } from "./engine.generated";
+import { SDK_VERSION } from "./sdk";
 import {
   DOWNLOAD_KINDS,
   DOWNLOAD_PLATFORMS,
@@ -36,7 +37,7 @@ import {
  * 只新增字段不算破坏性，但也要 +1 —— 老模板仍然能渲染，新模板需要新版才可用，
  * 所以交付时比对的是">= 本版本"里的**字段存在性**，不是数字相等。
  */
-export const SITE_CONTRACT = 5;
+export const SITE_CONTRACT = 6;
 
 export type CapabilityKind =
   | "text"
@@ -182,10 +183,19 @@ export function siteCapabilities(): Capability[] {
 export interface SiteMeta {
   contract: number;
   engine: string;
+  /** 平台 SDK 的版本（`/_crm/sdk.js` 里的 `SiteCrm.version`）—— 预览与线上对账用 */
+  sdk_version: string;
   capabilities: Capability[];
 }
 
 /** 端点的响应体。纯函数 —— 没有 env、没有 DB，所以永远不会有"500 因为库挂了" */
 export function siteMeta(): SiteMeta {
-  return { contract: SITE_CONTRACT, engine: ENGINE_ID, capabilities: siteCapabilities() };
+  return {
+    contract: SITE_CONTRACT,
+    engine: ENGINE_ID,
+    // 与 `/_crm/sdk.js` 同一个常量：租户排障时"这个站跑的是哪版 SDK"一眼可查；
+    // studio 预览用它证明"预览与线上是同一份 SDK"（site-crm.md §3.1）。
+    sdk_version: SDK_VERSION,
+    capabilities: siteCapabilities(),
+  };
 }

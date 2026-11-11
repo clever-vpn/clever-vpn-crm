@@ -27,7 +27,8 @@ sites/<租户>/versions/<n>/public/…    已发布的产物，按版本隔离
   现在固定是 `g/templates/basic/v1/`。
 - **产物**由发布写入：把模板整体复制到 `sites/<租户>/versions/<n>/public/`，
   复制时做两件事（**只在发布时做，运行时不改**）：
-  - `config.js` 重写成注入后的 `window.CRM_API_BASE`
+  - 写三个平台文件 `_crm/{config,sdk,return.html}`（`config.js` 里是本次发布的
+    `window.CRM_API_BASE`；源包里**没有** `_crm/`，出现了 L0 直接拒）
   - 所有文本产物做 `{{site.*}}` 占位符替换（品牌设置烘焙，见下）
 - **版本不可变**：写完就不再改。回滚 = 把指针指回旧 `n`，**不重建、不删除旧版本**。
 

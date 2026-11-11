@@ -95,8 +95,8 @@ describe("发布", () => {
     const sha = await sourceOf();
 
     const result = await publishSite(env, TENANT, { sourceSha: sha, actor: "admin@test", apiBase: BASE });
-    // 2 个模板文件 + 2 个平台文件（SDK、支付回跳页）
-    expect(result).toMatchObject({ ok: true, version: 1, files: 4 });
+    // 2 个模板文件 + 3 个平台文件（config / SDK / 支付回跳页）
+    expect(result).toMatchObject({ ok: true, version: 1, files: 5 });
 
     // 平台文件随产物发布：两个站点出口（自部署 / 托管）都只是读 R2，
     // SDK 只有这一份，不会因为出口实现不同而漂移。
@@ -184,8 +184,27 @@ describe("状态", () => {
   });
 });
 
-describe("config.js：发布时注入 CRM 地址", () => {
-  it("产物里的 config.js 是注入后的，不是模板占位", async () => {
+describe("平台文件：发布时写 /_crm/config.js", () => {
+  it("三个平台文件都在，config.js 写的是本次发布的 CRM 地址", async () => {
+    const sha = await sourceOf();
+
+    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+
+    // 源包里没有 `_crm/`（L0 直接拒），所以这三个只能由发布写
+    for (const path of ["_crm/config.js", "_crm/sdk.js", "_crm/return.html"]) {
+      const file = await SITES.get(`sites/${TENANT}/versions/1/public/${path}`);
+      expect(file, path).toBeTruthy();
+    }
+
+    const body = (await (
+      await SITES.get(`sites/${TENANT}/versions/1/public/_crm/config.js`)
+    )?.text()) ?? "";
+    expect(body).toContain(`window.CRM_API_BASE = ${JSON.stringify(BASE)}`);
+  });
+
+  it("源包里带 config.js ⇒ 不再被特殊对待，就是普通文件（也不该有人再这么写）", async () => {
+    // 契约 contract 6：根 `config.js` 已作废。这里只钉住"发布器不再改写它"，
+    // 免得有人以为改它能生效。
     const sha = await sourceOf({
       "index.html": "<!doctype html><h1>Hello</h1>",
       "config.js": 'window.CRM_API_BASE = "https://crm.example.com";',
@@ -193,11 +212,10 @@ describe("config.js：发布时注入 CRM 地址", () => {
 
     await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
 
-    const js = await SITES.get(`sites/${TENANT}/versions/1/public/config.js`);
-    const body = (await js?.text()) ?? "";
-    expect(body).toContain(BASE);
-    // 占位值必须消失：它是"站点发上去了但 API 全挂"的典型原因
-    expect(body).not.toContain("crm.example.com");
+    const own = await SITES.get(`sites/${TENANT}/versions/1/public/config.js`);
+    expect((await own?.text()) ?? "").toContain("crm.example.com");
+    const platform = await SITES.get(`sites/${TENANT}/versions/1/public/_crm/config.js`);
+    expect((await platform?.text()) ?? "").toContain(BASE);
   });
 
   it("没给 apiBase ⇒ 直接拒绝，不写产物", async () => {
