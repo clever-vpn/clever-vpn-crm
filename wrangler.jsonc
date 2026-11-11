@@ -25,6 +25,17 @@
   "triggers": {
     "crons": ["*/2 * * * *"]
   },
+  // 站点**指针**：`site:<租户>:active → { n }`（谁在线上由它说了算）。
+  //
+  // 为什么非有不可：产物版本不可变、回滚靠切指针，所以指针必须有一处**单点**可写。
+  // 本地 `wrangler dev` 用模拟 KV，id 写占位就行；线上由部署工作流创建并渲染真 id
+  // （`HOSTS_KV_ID`，见 scripts/render-config.mjs）。
+  "kv_namespaces": [
+    {
+      "binding": "HOSTS",
+      "id": "REPLACE_WITH_HOSTS_KV_ID"
+    }
+  ],
   "r2_buckets": [
     {
       // 站点产物：sites/<租户>/versions/<n>/public/…
