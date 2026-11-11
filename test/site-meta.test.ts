@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 
 import { ENGINE_ID, ENGINE_SHA256 } from "../src/site/engine.generated";
 import { SITE_CONTRACT, siteCapabilities, siteMeta } from "../src/site/meta";
+import { SDK_VERSION } from "../src/site/sdk";
 import { renderTemplate } from "../src/site/render";
 import { SETTING_FIELDS, buildScope } from "../src/site/settings";
 
@@ -84,9 +85,17 @@ describe("capabilities：模板能引用什么", () => {
 });
 
 describe("响应体", () => {
-  it("只含三件东西：契约版本 + 引擎版本 + 能力清单", () => {
-    expect(Object.keys(siteMeta()).sort()).toEqual(["capabilities", "contract", "engine"]);
+  it("只有四件东西：契约版本 + 引擎版本 + SDK 版本 + 能力清单", () => {
+    // `sdk_version` 是 contract 6 加的：租户排障要看"这个站跑的是哪版 SDK"，
+    // studio 预览也用它证明"预览与线上同一份 SDK"（site-crm.md §3.1）。
+    expect(Object.keys(siteMeta()).sort()).toEqual([
+      "capabilities",
+      "contract",
+      "engine",
+      "sdk_version",
+    ]);
     expect(siteMeta().contract).toBe(SITE_CONTRACT);
+    expect(siteMeta().sdk_version).toBe(SDK_VERSION);
   });
 });
 

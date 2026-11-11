@@ -34,7 +34,7 @@ export const SDK_VERSION = "1.2.0";
  * 截断，报的却是一堆 "Expected ;"，看起来完全不像根因。已经踩过三次。
  */
 export const SDK_JS = `(function () {
-  // config.js 只给 origin（如 https://acme.clever-panel.win），
+  // 平台写入的 /_crm/config.js 只给 origin（如 https://acme.clever-panel.win），
   // 而 App/站点共用的接口全在 /api/app/v1/* 下 —— 少了这段前缀会打到站点的
   // 404（跨源 404 没有 CORS 头，浏览器报的是 CORS error，极易误判成网络问题）。
   var BASE = String(window.CRM_API_BASE || "").replace(/\\/+$/, "");
@@ -291,7 +291,7 @@ export const SDK_JS = `(function () {
 `;
 
 /**
- * `/_crm/return?order=<code>`：支付回跳的**平台保底页**。
+ * `/_crm/return.html?order=<code>`：支付回跳的**平台保底页**。
  *
  * 为什么不放在租户模板里：第三方付完是在**外部浏览器**打开的，回来时是新会话，
  * 依赖登录态的页面会失效；而这个页必须永远存在（租户改了模板也不能丢）。

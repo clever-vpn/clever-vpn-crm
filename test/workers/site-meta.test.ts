@@ -27,10 +27,18 @@ describe("GET /api/site/meta", () => {
     const body = (await res.json()) as {
       contract: number;
       engine: string;
+      sdk_version: string;
       capabilities: { path: string; kind: string; label: string }[];
     };
-    expect(Object.keys(body).sort()).toEqual(["capabilities", "contract", "engine"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "capabilities",
+      "contract",
+      "engine",
+      "sdk_version",
+    ]);
     expect(body.engine).toMatch(/^sha256:[0-9a-f]{16}$/);
+    // 预览与线上对账用：它必须是个真版本号，不是占位
+    expect(body.sdk_version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(body.capabilities.length).toBeGreaterThan(0);
     expect(body.capabilities.some((c) => c.path === "site.name")).toBe(true);
   });

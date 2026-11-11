@@ -76,7 +76,7 @@ export interface PublishInput {
   /**
    * 站点调 CRM 的基址（= CRM 自己的 origin）。
    *
-   * **必须由发布方给**：`config.js` 在发布时写死它，站点与 CRM 不同域，发上去之后
+   * **必须由发布方给**：`/_crm/config.js` 在发布时写死它，站点与 CRM 不同域，发上去之后
    * 没人能改。
    */
   apiBase?: string;
@@ -277,13 +277,6 @@ export async function publishSite(
   const rendered = new Map<string, string | ArrayBuffer>();
   const texts: { path: string; text: string }[] = [];
   for (const file of raw) {
-    // `config.js` 是源包里**唯一需要外部输入**的文件：发布时把 CRM 地址写死。
-    if (file.path === "config.js") {
-      const body = `// 由 CRM 在发布时写入（不要手改；改 CRM 地址请重新发布）\nwindow.CRM_API_BASE = ${JSON.stringify(apiBase)};\n`;
-      rendered.set(file.path, body);
-      texts.push({ path: file.path, text: body });
-      continue;
-    }
     if (!isTextPath(file.path)) {
       rendered.set(file.path, file.body);
       continue;
@@ -321,6 +314,13 @@ export async function publishSite(
 
   // 6b) **平台文件**：SDK 与支付回跳页，每次发布都写进产物（理由见 docs/site-storage.md）
   const platform: Array<[string, string, string]> = [
+    // 三个平台文件一次写全：源包里没有 `_crm/`（L0 直接拒），所以"哪些文件是
+    // 平台的"只有一条规则，不存在"某个平台文件其实由租户管"的例外。
+    [
+      "_crm/config.js",
+      `// 由 CRM 在发布时写入（不要手改；换域名请重新发布）\nwindow.CRM_API_BASE = ${JSON.stringify(apiBase)};\n`,
+      "text/javascript; charset=utf-8",
+    ],
     ["_crm/sdk.js", SDK_JS, "text/javascript; charset=utf-8"],
     ["_crm/return.html", RETURN_HTML, "text/html; charset=utf-8"],
   ];

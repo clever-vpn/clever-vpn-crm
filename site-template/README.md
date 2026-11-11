@@ -18,11 +18,17 @@ R2、GitHub Pages、自家服务器都行），通过 HTTP 调 CRM 的接口。
 
 ## 部署三步
 
-1. **改 `config.js`** —— 只填一个值：
+1. **在**部署目录**里建 `/_crm/config.js`** —— 只填一个值：
 
    ```js
+   // 目录里本没有 _crm/：它是**平台区**（`/_crm/config.js` = CRM 地址、
+   // `/_crm/sdk.js` = 平台 SDK）。走 CRM 发布时这三个文件由 CRM 写入；
+   // 自己上传到静态托管时，你自己就是"平台"，手工建一个。
    window.CRM_API_BASE = "https://crm.你的域名.com"; // 不要以 / 结尾
    ```
+
+   `/_crm/sdk.js` 同样要么从 CRM 发布的产物里拷出来，要么直接用 CRM 发布出来的整份站点。
+   **不要把这个 `_crm/` 放进源包**：源包里出现 `_crm/` 会被发布前检查直接拒掉。
 
 2. **把本目录上传到你选好的静态托管**，确保 `index.html` 在根路径。
 
@@ -39,7 +45,7 @@ R2、GitHub Pages、自家服务器都行），通过 HTTP 调 CRM 的接口。
 
 | 文件 | 作用 |
 |---|---|
-| `config.js` | **唯一需要你改的文件**：CRM 地址（发布时会被 CRM 改写） |
+
 | `index.html` | 首页 |
 | `pricing.html` | 套餐列表 + 购买按钮（全走 `SiteCrm`） |
 | `login.html` | 邮箱验证码登录（`SiteCrm.sendCode` / `verify`） |

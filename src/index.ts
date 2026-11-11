@@ -24,7 +24,7 @@ import { siteMeta } from "./site/meta";
 import { buildScope, readSiteSettings, saveSiteSettings } from "./site/settings";
 import { siteSourceOf } from "./site/template-source";
 import { deliverSite, type DeliveryInput } from "./site/deliver";
-import { sampleDataOf } from "./site/sample";
+import { SAMPLE_PLANS_RAW, sampleDataOf } from "./site/sample";
 import { latestRelease, publishSite } from "./site/publish";
 import { storeSource } from "./site/source";
 import { handleStudioTicket } from "./site/studio-ticket";
@@ -239,6 +239,26 @@ export default {
         const access = await verifySiteAccess(request, env, scoped.tenantId);
         if (!access) return json({ error: "site_access_invalid" }, 401);
         return json(sampleDataOf());
+      }
+
+      /**
+       * 预览宿主用的**接口同形样例**（契约 `site-crm.md` §3.1 `contract: 6`）。
+       *
+       * studio 预览跑的是**真 SDK**（`/_crm/sdk.js` 与线上同一份），所以它需要
+       * `/api/app/v1/plans` 的**原始**返回，而不是 `sample-data` 那份视图模型 ——
+       * SDK 会自己再映射一遍。预览把这里当上游，于是"预览看到的价格卡"就是"线上
+       * 拿到同样数据渲染的价格卡"，中间没有第二套实现。
+       */
+      if (url.pathname.startsWith("/api/site/sample-api/")) {
+        if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+        const access = await verifySiteAccess(request, env, scoped.tenantId);
+        if (!access) return json({ error: "site_access_invalid" }, 401);
+        const kind = url.pathname.slice("/api/site/sample-api/".length);
+        const sample = sampleDataOf();
+        if (kind === "plans") return json(SAMPLE_PLANS_RAW);
+        if (kind === "me") return json(sample.me);
+        if (kind === "orders") return json({ items: sample.orders });
+        return json({ error: "unknown_sample", message: "样例只有 plans / me / orders" }, 404);
       }
 
       /**
