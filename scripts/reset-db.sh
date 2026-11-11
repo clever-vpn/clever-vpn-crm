@@ -77,6 +77,17 @@ INSERT OR IGNORE INTO customers (email, status, created_at) VALUES
   ('alice@example.com', 'active', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   ('bob@example.com',   'active', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
+-- cf-api 凭据：指向本地替身（`npm run chain` 的 127.0.0.1:8799，任何 Bearer 都收）。
+-- 没有它，`db:reset` 之后「打开设计器」会 409 studio_tenant_token_missing ——
+-- 建库建得好好的，却卡在一个跟代码无关的地方。
+-- 前缀必须是 `cv_api_`：studio 的 `/api/studio/session` 只认这个形状（见
+-- src/auth/entry.ts），换成别的串会被判成"没有凭据"。
+-- 明文入库是**允许**的：`platformCreds()` 读到不带 v1: 前缀的值会就地加密升级
+-- （见 src/platform/creds.ts 的约束 2）。
+INSERT OR REPLACE INTO cf_api (id, base_url, token_enc, _updated_at)
+VALUES (1, 'http://127.0.0.1:8799', 'cv_api_dev_local_only',
+        strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
 -- 一笔已支付的周期订阅（alice）
 INSERT INTO platform_subscriptions
   (customer_id, plan_id, kind, hold, paid_minor, currency, licence_limit, period_term_days,
