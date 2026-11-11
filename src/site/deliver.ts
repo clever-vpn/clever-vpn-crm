@@ -1,14 +1,14 @@
 /**
- * `POST /api/site/deliveries` —— studio 交付一版模板（契约 §5）。
+ * 源包**入库前**的校验（契约 `site-studio-crm.md` §4、§5.1）。
  *
- * 一句话：**把"租户签收的那一版"变成一个不可变的模板版本**，交给 `storeTemplate()` 存。
+ * 一句话：把 studio 交上来的文件变成"内容寻址的源包"，只做校验 + 存字节，
+ * **不分配版本号**（那是发布记录的事，见 `publish.ts`）。
  *
- * 这个文件几乎全是**校验**，因为交付是唯一一个"外部内容进入我们存储"的入口：
+ * 这个文件几乎全是**校验**，因为它是唯一一个"外部内容进入我们存储"的入口：
  *
- *   · `engine` 不一致 ⇒ 拒。渲染器不同，"预览长这样"就没有意义（契约 §4.2）。
+ *   · `engine` 不一致 ⇒ 拒。渲染器不同，"预览长这样"就没有意义（§4.2）。
  *   · `contract` 不一致 ⇒ 拒。模板引用的字段在当前契约里没了，不做"尽力渲染"。
- *   · 逐文件 `sha256`/`bytes` 与 `content_b64` 不符 ⇒ 拒。**整包拒**，不留半份 ——
- *     半份模板比没有模板更危险（能渲染出别人没签收过的页面）。
+ *   · 逐文件 `sha256`/`bytes` 与 `content_b64` 不符 ⇒ 拒。**整包拒**，不留半份。
  *   · 用**当前数据**渲染一遍 `.html`：出现 `missing` 路径（H1）⇒ 拒，并列出路径。
  *   · 渲染结果算一次 `artifact_sha256`，与 `manifest.preview.artifact_sha256` 比
  *     （§5.1）。不相等 = 租户看到的和真实数据渲染出来的不是同一页 ⇒ 拒。
@@ -21,14 +21,9 @@ import { SITE_CONTRACT } from "./meta";
 import { renderTemplate } from "./render";
 import { ALLOWED_EXT } from "./publish";
 import { buildScope, readSiteSettings } from "./settings";
-import {
-  MANIFEST_PATH,
-  TPL_LIMITS,
-  checkTemplatePath,
-  storeTemplate,
-} from "./templates";
+import { TPL_LIMITS, checkSourcePath, storeSource } from "./source";
 
-import type { TemplateFileInput } from "./templates";
+import type { SourceFileInput } from "./source";
 import type { Env } from "../env";
 
 const enc = new TextEncoder();
@@ -59,11 +54,10 @@ export interface DeliveryInput {
 
 export interface DeliveryOk {
   ok: true;
-  template_version: string;
+  /** 源包指纹（内容寻址）；`tpl/<hex>/files/` */
   sha: string;
-  engine: string;
-  /** 同内容重复交付 ⇒ true（返回的是已有版本） */
-  idempotent: boolean;
+  files: number;
+  bytes: number;
 }
 
 export interface DeliveryErr {
@@ -157,7 +151,7 @@ export async function deliverSite(
   }
 
   // ── 2) 文件：路径、保留前缀、体积 ────────────────────────────────────
-  const files: TemplateFileInput[] = [];
+  const files: SourceFileInput[] = [];
   const texts = new Map<string, string>();
   const actual = new Map<string, { sha256: string; bytes: number }>();
   let total = 0;
@@ -166,13 +160,10 @@ export async function deliverSite(
     const path = String(item?.path ?? "");
     const b64 = String(item?.content_b64 ?? "");
     if (!path || !b64) return fail(400, "site_manifest_invalid", "每个文件都要 path 与 content_b64");
-    if (path === MANIFEST_PATH) {
-      return fail(400, "site_path_rejected", "files 里不要带 manifest.json（它由 CRM 生成）");
-    }
     if (RESERVED.some((prefix) => path.startsWith(prefix))) {
       return fail(400, "site_path_rejected", `${path} 是平台保留路径（/_crm/*）`);
     }
-    const problem = checkTemplatePath(path);
+    const problem = checkSourcePath(path);
     if (problem) return fail(400, "site_path_rejected", problem);
 
     let bytes: Uint8Array;
@@ -241,26 +232,16 @@ export async function deliverSite(
     );
   }
 
-  // ── 5) 入库：内容寻址 + 版本号 + 指针（`storeTemplate` 已保证幂等）──────
-  const stored = await storeTemplate(env, tenantId, {
-    files,
-    engine,
-    schemaVersion: SITE_CONTRACT,
-    studioRev: Number(manifest.studio_rev ?? 0),
-    basePackage: typeof manifest.base_package === "string" ? manifest.base_package : null,
-    preview: { engine, artifact_sha256: artifact.sha },
-    signoff: { by: signoffBy, at: String(manifest.signoff?.at ?? new Date().toISOString()) },
-    actor: `studio:${signoffBy}`,
-  });
+  // ── 5) 入库：内容寻址（同内容只存一份），**不记账、不分配版本** ──────────
+  const stored = await storeSource(env, files);
   if (!stored.ok) {
-    return fail(stored.code === "site_template_conflict" ? 409 : 400, stored.code, stored.message);
+    return fail(400, stored.code, stored.message);
   }
 
   return {
     ok: true,
-    template_version: stored.version,
     sha: stored.sha,
-    engine,
-    idempotent: stored.idempotent,
+    files: stored.entries.length,
+    bytes: stored.totalBytes,
   };
 }

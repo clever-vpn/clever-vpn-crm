@@ -11,6 +11,8 @@
     "build:web": "node -e \"require('node:fs').rmSync('web/dist',{recursive:true,force:true})\" && vite build",
     "engine:sync": "node scripts/gen-engine.mjs",
     "engine:check": "node scripts/gen-engine.mjs --check",
+    "seed:gen": "node scripts/gen-seed.mjs",
+    "seed:check": "node scripts/gen-seed.mjs --check",
     "build": "npm run build:web && wrangler deploy --dry-run --outdir dist",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "npm run test:unit && npm run test:workers",

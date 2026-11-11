@@ -9,8 +9,7 @@
  * **不在这里做的事**：域名绑定（cf-api）、站点编辑（site-studio）、
  * 模板上传（构建期由 `npm run site:template:upload` 做）。
  */
-import { publishSite, siteState, activeKey } from "../site/publish";
-import { readTemplateVersion } from "../site/templates";
+import { latestRelease, publishSite, siteState, switchPointer } from "../site/publish";
 import { readSiteSettings, saveSiteSettings } from "../site/settings";
 
 import type { Env } from "../env";
@@ -104,33 +103,19 @@ export async function handleAdminSite(
   if (method === "POST" && path === "/site/publish") {
     const body = await readBody(request);
     /**
-     * **默认发租户在设计器里交付的那一版**（`tpl/<sha>`），只有租户从没交付过
-     * 才发库里那份公共模板。
+     * **默认发"最近一次发布的那份源包"**（租户在 studio 里发过就用它，从没发过就用
+     * 部署自带的种子）。
      *
-     * 不这么做的后果很难查：租户在 studio 改完、发布成功，回头在后台再点一次
-     * 「发布站点」，线上就退回公共模板了 —— 而且两条路都显示"发布成功"。
-     * 显式传 `template` / `template_version` 的老调用不受影响。
+     * 这条默认值的意义：后台只改了设置（套餐价格、下载入口）时，点一次「发布」就该
+     * 用租户自己的页面重渲染，而不是退回种子把租户的改动抹掉。
      */
-    const wantsExplicit =
-      typeof body.template === "string" || typeof body.template_version === "string";
-    const delivered = wantsExplicit ? null : await readTemplateVersion(env, tenantId);
+    const latest = await latestRelease(env, tenantId);
     const result = await publishSite(env, tenantId, {
-      // 站点调 CRM 的地址：默认就是管理后台自己的 origin（租户看到哪个域就用哪个）；
-      // 需要固定成别的值（比如后台同时挂了多个域）时用 SITE_API_BASE 覆盖。
+      // 站点调 CRM 的地址：默认就是管理后台自己的 origin
       apiBase: (env.SITE_API_BASE ?? "").trim() || new URL(request.url).origin,
-      template: typeof body.template === "string" ? body.template : undefined,
-      templateVersion:
-        typeof body.template_version === "string"
-          ? body.template_version
-          : undefined,
+      sourceSha: latest?.sourceSha,
+      trigger: "crm",
       actor,
-      ...(delivered
-        ? {
-            templateSha: delivered.sha,
-            template: "tenant",
-            templateVersion: delivered.version,
-          }
-        : {}),
     });
     if (!result.ok) {
       // L0 失败是"内容有问题"，不是服务器错误：400 + 逐条 issues
@@ -148,13 +133,14 @@ export async function handleAdminSite(
 
     // 只能回滚到**真实存在过**的版本，不能凭空指一个 n
     const row = await env.DB.prepare(
-      `SELECT seq FROM site_versions WHERE seq = ?`,
+      `SELECT seq FROM site_releases WHERE tenant_id = ? AND seq = ?`,
     )
-      .bind(n)
+      .bind(tenantId, n)
       .first<{ seq: number }>();
     if (!row) return fail(404, "unknown_version", `没有 ${n} 这一版`);
 
-    await env.HOSTS.put(activeKey(tenantId), JSON.stringify({ n }));
+    // 回滚**不产生新版本**，所以"线上变过"这件事只能靠审计表记下来（契约 §0.1.3）
+    await switchPointer(env, tenantId, n, "rollback", actor);
     return json({ ok: true, active: n });
   }
 

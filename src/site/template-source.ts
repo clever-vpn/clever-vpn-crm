@@ -1,41 +1,31 @@
 /**
- * `GET /api/site/template` —— 拉当前模板（契约 §7.3）。
+ * `GET /api/site/template` —— **重建用**的源包（契约 `site-studio-crm.md` §0.1.4）。
  *
- * 三态：
+ * studio 的 DO 是可弃的：租户从 CRM 进来、DO 是空的时，按这张表决定给他哪一份源包：
  *
- * | 租户状态 | 返回 |
+ * | 场景 | 来源 |
  * |---|---|
- * | 有租户模板（`site_settings.template_version` 指向一版） | `source: "tenant"`，读 `tpl/<sha>/files/` |
- * | 没有 | `source: "public"`，读公共模板 `g/templates/<name>/<version>/` |
+ * | 发布过 | **最近一次发布记录的 `source_sha`** |
+ * | 从没发布过（新租户，或只在 studio 里改过还没发） | **当前部署的种子** |
  *
- * **对齐只看 `sha`**（契约 §7.3）：同一个模板版本可以被不同数据发布多次，版本号不是
- * 内容。所以两种来源都用同一套 `describeFiles` + `packageSha` 算 sha —— 与交付时
- * 同一个算法，`base_package` 才能直接比。
+ * 两条硬规则：
  *
- * 文件用 base64 传（`content_b64`）：模板里有 png/woff2，按文本传会在客户端悄悄变形。
+ *   1. **取不到就报错，绝不降级。** 内容缺失 / R2 不可用时返回 `null`，调用方回
+ *      404，studio 必须**挡住**（不建草稿、不建空站）。给一个空站或换一份骨架，
+ *      租户看起来都是"我的网站没了"。
+ *   2. **对齐只看 sha。** 版本号是发布记录的事；这里给的是内容。
  *
- * 这与"契约归 CRM"（v8）不冲突：模板**文件**本来就是租户/平台的内容，不是数据契约。
- * 数据契约走 `/api/site/meta`，两者是两件事。
+ * 返回值里没有 `template_version` —— 那个概念在 Contract 14 里已经不存在。
  */
 
 import { ENGINE_ID } from "./engine.generated";
 import { SITE_CONTRACT } from "./meta";
-import {
-  FILES_PREFIX,
-  describeFiles,
-  packageSha,
-  readTemplateFiles,
-  readTemplateVersion,
-  tplPrefix,
-} from "./templates";
+import { latestRelease } from "./publish";
+import { describeFiles, readSource, seedFiles, seedSha, sourceSha } from "./source";
 
 import type { Env } from "../env";
 
-/** 公共模板的位置（与 `scripts/upload-site-template.mjs` 一致） */
-export const PUBLIC_TEMPLATE_NAME = "basic";
-export const PUBLIC_TEMPLATE_VERSION = "v1";
-
-export interface TemplateFileOut {
+export interface SourceFileOut {
   path: string;
   sha256: string;
   bytes: number;
@@ -43,19 +33,17 @@ export interface TemplateFileOut {
   content_b64: string;
 }
 
-export type TemplateSource = "tenant" | "public";
+/** `release` = 已发布的那份源包；`seed` = 还没发布过，用部署自带的种子 */
+export type SourceOrigin = "release" | "seed";
 
-export interface SiteTemplateOut {
-  source: TemplateSource;
-  template_version: string;
+export interface SiteSourceOut {
+  source: SourceOrigin;
   /** `sha256:<hex>` —— 对齐只看这个 */
   sha: string;
   engine: string;
   contract: number;
-  files: TemplateFileOut[];
+  files: SourceFileOut[];
 }
-
-const PUBLIC_PREFIX = `g/templates/${PUBLIC_TEMPLATE_NAME}/${PUBLIC_TEMPLATE_VERSION}/`;
 
 const b64 = (bytes: Uint8Array): string => {
   let text = "";
@@ -63,74 +51,54 @@ const b64 = (bytes: Uint8Array): string => {
   return btoa(text);
 };
 
-/** 把一组 `{path, bytes}` 打包成对外形状，并用**交付时同一个算法**算 sha */
-async function pack(raw: { path: string; body: ArrayBuffer }[]): Promise<SiteTemplateOut | null> {
+const toBytes = (body: Uint8Array | string): Uint8Array =>
+  typeof body === "string" ? new TextEncoder().encode(body) : body;
+
+/** 把一组 `{path, bytes}` 打包成对外形状，并用**发布时同一个算法**算 sha */
+async function pack(
+  origin: SourceOrigin,
+  raw: { path: string; body: ArrayBuffer }[],
+): Promise<SiteSourceOut | null> {
   if (raw.length === 0) return null;
   const files = raw.map((f) => ({ path: f.path, body: new Uint8Array(f.body) }));
   const described = await describeFiles(files);
-  // 路径不安全 / 超限：**不返回半个包**，让调用方看到"没有模板"而不是一个坏包
+  // 路径不安全 / 超限：**不返回半个包**，让调用方看到"没有源包"而不是一个坏包
   if (!described.ok) return null;
 
-  const sha = await packageSha(described.entries);
+  const sha = await sourceSha(described.entries);
   const byPath = new Map(files.map((f) => [f.path, f.body]));
-  const out: TemplateFileOut[] = described.entries.map((entry) => ({
+  const out: SourceFileOut[] = described.entries.map((entry) => ({
     path: entry.path,
     sha256: entry.sha256,
     bytes: entry.bytes,
     content_b64: b64(byPath.get(entry.path) ?? new Uint8Array(0)),
   }));
 
-  return {
-    source: "public",
-    template_version: PUBLIC_TEMPLATE_VERSION,
-    sha,
-    engine: ENGINE_ID,
-    contract: SITE_CONTRACT,
-    files: out,
-  };
-}
-
-/** 公共模板：`g/templates/basic/v1/…` */
-async function readPublic(env: Env): Promise<SiteTemplateOut | null> {
-  const sites = env.SITES;
-  if (!sites) return null;
-  const listed = await sites.list({ prefix: PUBLIC_PREFIX, limit: 1000 });
-  const objects = listed.objects.filter((o) => !o.key.endsWith("/"));
-  if (objects.length === 0) return null;
-
-  const raw: { path: string; body: ArrayBuffer }[] = [];
-  for (const object of objects) {
-    const got = await sites.get(object.key);
-    if (!got) continue;
-    raw.push({ path: object.key.slice(PUBLIC_PREFIX.length), body: await got.arrayBuffer() });
-  }
-  raw.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  return pack(raw);
+  return { source: origin, sha, engine: ENGINE_ID, contract: SITE_CONTRACT, files: out };
 }
 
 /**
- * 取当前模板。**租户有就用租户的，否则用公共的**；两者都没有返回 `null`
- * （调用方回 404 `site_template_missing`，让 studio 说"还没有模板"而不是白屏）。
+ * 取重建用的源包。返回 `null` ⇒ 调用方回 `404`，studio 必须挡住、不许自己造一份。
  */
-export async function siteTemplateOf(env: Env, tenantId: string): Promise<SiteTemplateOut | null> {
-  const current = await readTemplateVersion(env, tenantId);
-  if (current) {
-    const raw = await readTemplateFiles(env, current.sha);
-    const packed = await pack(raw);
+export async function siteSourceOf(env: Env, tenantId: string): Promise<SiteSourceOut | null> {
+  const latest = await latestRelease(env, tenantId);
+  if (latest) {
+    const raw = await readSource(env, latest.sourceSha);
+    const packed = await pack("release", raw);
     if (packed) {
-      return {
-        ...packed,
-        source: "tenant",
-        template_version: current.version,
-        // 用**库里记的** sha，而不是重算的：内容寻址意味着两者必须相等，不相等就是
-        // 存储坏了（这时宁可暴露出来，也不要悄悄用另一个值）
-        sha: current.sha,
-        engine: current.engine || packed.engine,
-      };
+      // 用**库里记的** sha，而不是重算的：内容寻址意味着两者必须相等，不相等就是
+      // 存储坏了（这时宁可暴露出来，也不要悄悄用另一个值）
+      return { ...packed, sha: latest.sourceSha };
     }
+    // 发布过但内容读不到 ⇒ 明确失败，**不退回种子**（否则等于把租户的站换掉）
+    return null;
   }
-  return readPublic(env);
-}
 
-/** 排障用：`tpl/<sha>/` 前缀（日志里不打印完整 key 时用得上） */
-export const templatePrefixOf = (sha: string): string => `${tplPrefix(sha)}${FILES_PREFIX}`;
+  const seed = seedFiles().map((f) => {
+    const bytes = toBytes(f.body);
+    return { path: f.path, body: bytes.buffer.slice(0) as ArrayBuffer };
+  });
+  const packed = await pack("seed", seed);
+  if (!packed) return null;
+  return { ...packed, sha: await seedSha() };
+}
