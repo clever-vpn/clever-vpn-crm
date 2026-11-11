@@ -169,4 +169,9 @@ dev_seed > "$SEED_FILE"
 echo "==> 应用 dev 迁移链"
 "$WRANGLER" d1 migrations apply "$D1_NAME" --local
 
+# 公共模板在 R2 里（不在仓库里生效）。本地也种一份，否则设计器打开是"没有模板"
+# 或者一份手工丢进来的单页 —— 那会让人以为模板只有一页。
+echo "==> 种入本地公共模板（R2：clever-sites/g/templates/basic/v1/）"
+node scripts/seed-site-template-local.mjs
+
 echo "==> 完成。管理员：ops@example.com / crm-admin-2026；重新 npm run dev 即可。"

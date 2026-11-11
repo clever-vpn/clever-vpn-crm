@@ -36,7 +36,7 @@ import {
  * 只新增字段不算破坏性，但也要 +1 —— 老模板仍然能渲染，新模板需要新版才可用，
  * 所以交付时比对的是">= 本版本"里的**字段存在性**，不是数字相等。
  */
-export const SITE_CONTRACT = 4;
+export const SITE_CONTRACT = 5;
 
 export type CapabilityKind =
   | "text"
@@ -58,6 +58,15 @@ export interface Capability extends CapabilityField {
   path: string;
   /** 留空时用这个（只对文本类有意义） */
   default?: string;
+  /**
+   * **派生值**：渲染时由引擎算出来，不存在库里、也不能填。
+   *
+   * 模板可以引用（`{{site.footer}}`），设置表单必须跳过（否则租户会看到一个
+   * 改了也无效的输入框）。标准 `site-template.md` §3 的 `derived` 就是这几项 ——
+   * 但**必须是清单的一部分**：闸门用清单判"这个路径能不能用"，漏掉就等于
+   * 把一个合法模板判死（`{{site.footer}}` 就踩过这个坑）。
+   */
+  derived?: true;
   /** `kind === "collection"` 时：条目上限 + 每条有哪些字段 */
   items?: {
     max: number;
@@ -150,9 +159,24 @@ function collectionCapabilities(): Capability[] {
   }));
 }
 
-/** 全部可引用路径。顺序稳定（设置字段按声明顺序，集合追加在后）。 */
+/**
+ * 派生值：由引擎算，不进库、不可填。与标准 `site-template.md` §3 的 `derived` 对齐。
+ *
+ * 为什么要把它们放进 `capabilities`：闸门判"模板能不能引用这个路径"用的就是这份
+ * 清单。漏声明 = 把一份**合法**模板判成 `unknown_path`（`{{site.footer}}` 就是这么
+ * 被拦的）。
+ *
+ * 只有 `site.footer` 一项：`contact_link` 曾经也派生过，后来去掉了 —— 渲染器对
+ * 所有取值统一转义，值里带 `<a>` 只会变成 `&lt;a`。模板自己写
+ * `<a href="mailto:{{site.contact_email}}">`。
+ */
+function derivedCapabilities(): Capability[] {
+  return [{ path: "site.footer", kind: "text", label: "页脚版权行（自动）", derived: true }];
+}
+
+/** 全部可引用路径。顺序稳定（设置字段 → 集合 → 派生值）。 */
 export function siteCapabilities(): Capability[] {
-  return [...settingsCapabilities(), ...collectionCapabilities()];
+  return [...settingsCapabilities(), ...collectionCapabilities(), ...derivedCapabilities()];
 }
 
 export interface SiteMeta {
