@@ -22,6 +22,9 @@ jobs:
       # 引擎版本号 = render.ts 的 sha256：改了渲染器却没重新生成，两侧就会
       # "同版本号、不同行为"。这条必须能红，不能靠记性。
       - run: npm run engine:check
+      # 种子现在**随部署走**（打进 Worker）：改了 site-template/ 却忘了重新生成，
+      # 线上新租户拿到的还是旧骨架 —— 编译期与单测都看不见这种事。
+      - run: npm run seed:check
       - name: 迁移链自检（结构 / 不可变 / 与 schema 同步）
         run: npm run check:migrations
       - run: npm test

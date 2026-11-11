@@ -1,10 +1,10 @@
 /**
- * 后台「站点」页的两件事，都是**别让租户困惑**：
+ * 后台「站点」页的发布语义（Contract 14）：
  *
- *   1. 交付过模板之后，后台的「发布站点」发的必须**是设计器那一版**（`tpl/<sha>`），
- *      不是库里那份公共模板 —— 否则"我在设计器改的怎么没上线"会变成一个谜，
- *      而且两条路都显示"发布成功"。
- *   2. 状态里要能看见"这次发布用的是哪一份模板"（`studio:v2` / `public:basic@v1`）。
+ *   1. **后台发布默认用"最近一次发布的那份源包"** —— 租户在 studio 里发过就用它，
+ *      从没发过就用部署自带的种子。绝不"退回公共模板把租户的页面抹掉"。
+ *   2. 状态里要能看见线上是哪一版（`active`）以及源包从哪来（`sourceFrom`）。
+ *   3. **回滚只切指针**，不产生新版本；但必须留下审计行。
  *
  * 这里跑真 D1 / 真 R2 / 真 cookie：`/api/admin/*` 的正确性藏在路由与鉴权里。
  */
@@ -15,9 +15,10 @@ import { env as testEnv } from "./apply-migrations";
 import { ENGINE_ID } from "../../src/site/engine.generated";
 import { SITE_CONTRACT } from "../../src/site/meta";
 import { artifactShaOf } from "../../src/site/deliver";
-import { activeKey, publicPrefix } from "../../src/site/publish";
+import { activeKey } from "../../src/site/publish";
 import { buildScope, readSiteSettings } from "../../src/site/settings";
 import { issueSiteAccess } from "../../src/site/access";
+import { seedSha } from "../../src/site/source";
 
 const BASE = "https://crm.test";
 const TENANT = "0";
@@ -63,19 +64,19 @@ const hex = async (text: string): Promise<string> => {
 
 const PAGE = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>t</title></head><body><h1>工作室那一版</h1></body></html>';
 
-/** 走 studio 的那条路交付一版（用 `sacc_…`），顺便验证两条入口能对上同一份内容 */
-async function deliverViaStudio(): Promise<void> {
+/** 走 studio 的路发布一版（`/api/site/publish` 带 files，一次完成） */
+async function publishViaStudio(): Promise<number> {
   (testEnv as unknown as Record<string, unknown>).APP_SECRET = "admin-site-test-key";
   const token = (await issueSiteAccess(testEnv as never, TENANT))!;
   const settings = await readSiteSettings(testEnv as never);
   const artifact = await artifactShaOf([{ path: "index.html", text: PAGE }], buildScope(settings, "我的站点"));
   const res = await worker.default.fetch(
-    new Request(`${BASE}/api/site/deliveries`, {
+    new Request(`${BASE}/api/site/publish`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
+        trigger: "studio",
         manifest: {
-          package: 1,
           engine: ENGINE_ID,
           contract: SITE_CONTRACT,
           signoff: { by: "tenant:0", at: new Date().toISOString() },
@@ -86,7 +87,9 @@ async function deliverViaStudio(): Promise<void> {
       }),
     }),
   );
-  expect(res.status, "交付应成功").toBe(200);
+  expect(res.status, "发布应成功").toBe(200);
+  const body = (await res.json()) as { seq: number };
+  return body.seq;
 }
 
 beforeAll(async () => {
@@ -107,68 +110,88 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  // 公共模板也塞一份：这样才能证明"后台发的是设计器那版，不是公共模板"
-  for (const prefix of ["tpl/", "g/templates/", `sites/${TENANT}/`]) {
+  for (const prefix of ["tpl/", `sites/${TENANT}/`]) {
     const listed = await SITES.list({ prefix });
     for (const o of listed.objects) await SITES.delete(o.key);
   }
-  await SITES.put("g/templates/basic/v1/index.html", "<h1>公共模板</h1>");
   await HOSTS.delete(activeKey(TENANT));
-  await testEnv.DB.prepare("DELETE FROM site_templates").run();
-  await testEnv.DB.prepare("DELETE FROM site_versions").run();
-  await testEnv.DB.prepare("UPDATE site_settings SET template_version = '' WHERE id = 1").run();
+  await testEnv.DB.prepare("DELETE FROM site_releases").run();
+  await testEnv.DB.prepare("DELETE FROM site_pointer_log").run();
 });
 
 describe("后台站点状态", () => {
-  it("没交付过 ⇒ 模板来源是公共模板", async () => {
+  it("没发布过 ⇒ active 为 null，源包来自种子", async () => {
     const res = await call("/api/admin/site");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { templateSource: string; templateVersion: string | null };
-    expect(body.templateSource).toBe("public:basic@v1");
-    expect(body.templateVersion).toBeNull();
+    const body = (await res.json()) as { active: number | null; sourceFrom: string; releases: unknown[] };
+    expect(body.active).toBeNull();
+    expect(body.sourceFrom).toBe("seed");
+    expect(body.releases).toEqual([]);
   });
 
-  it("交付过 ⇒ 模板来源是设计器那一版", async () => {
-    await deliverViaStudio();
-    const body = (await (await call("/api/admin/site")).json()) as {
-      templateSource: string;
-      templateVersion: string | null;
+  it("发布过 ⇒ active 与发布记录一致，且血缘里带种子指纹", async () => {
+    await publishViaStudio();
+    const res = await call("/api/admin/site");
+    const body = (await res.json()) as {
+      active: number | null;
+      sourceFrom: string;
+      releases: { seq: number; source_sha: string; artifact_sha: string }[];
     };
-    expect(body.templateVersion).toBe("v1");
-    expect(body.templateSource).toBe("studio:v1");
+    expect(body.active).toBe(1);
+    expect(body.sourceFrom).toBe("release:v1");
+    expect(body.releases[0]!.seq).toBe(1);
+    expect(body.releases[0]!.source_sha).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(body.releases[0]!.artifact_sha).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    const row = await testEnv.DB.prepare("SELECT seed_sha FROM site_releases WHERE seq = 1").first<{
+      seed_sha: string;
+    }>();
+    expect(row?.seed_sha).toBe(await seedSha());
   });
 });
 
-describe("后台「发布站点」", () => {
-  it("交付过之后发的是设计器那一版（不是公共模板）", async () => {
-    await deliverViaStudio();
+describe("后台发布", () => {
+  it("从没发布过 ⇒ 能发（用种子）", async () => {
     const res = await call("/api/admin/site/publish", { method: "POST", body: {} });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { template: string; templateVersion: string };
-    expect(body.template).toBe("tenant");
-    expect(body.templateVersion).toBe("v1");
-
-    // 对象的 body 只能读一次：先取文本再断言
-    const text = await (await SITES.get(`${publicPrefix(TENANT, 1)}index.html`))!.text();
-    expect(text).toContain("工作室那一版");
-    expect(text).not.toContain("公共模板");
+    const body = (await res.json()) as { ok: boolean; version: number };
+    expect(body).toMatchObject({ ok: true, version: 1 });
+    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
   });
 
-  it("从没交付过 ⇒ 仍然能发公共模板（老路径不受影响）", async () => {
+  it("studio 发过之后，后台再发用的仍是**租户那份源包**（不退回种子）", async () => {
+    await publishViaStudio();
     const res = await call("/api/admin/site/publish", { method: "POST", body: {} });
     expect(res.status).toBe(200);
-    const html = await SITES.get(`${publicPrefix(TENANT, 1)}index.html`);
-    expect(await html!.text()).toContain("公共模板");
+    const body = (await res.json()) as { version: number; sourceSha: string };
+    expect(body.version).toBe(2);
+
+    const html = await SITES.get(`sites/${TENANT}/versions/2/public/index.html`);
+    expect(await html?.text()).toContain("工作室那一版");
+  });
+});
+
+describe("回滚", () => {
+  it("切指针 + 写审计，**不产生新版本**", async () => {
+    await publishViaStudio();
+    await call("/api/admin/site/publish", { method: "POST", body: {} }); // v2
+
+    const res = await call("/api/admin/site/rollback", { method: "POST", body: { version: 1 } });
+    expect(res.status).toBe(200);
+    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
+
+    const count = await testEnv.DB.prepare("SELECT COUNT(*) AS c FROM site_releases").first<{ c: number }>();
+    expect(count?.c).toBe(2); // 没有新增
+
+    const log = await testEnv.DB.prepare(
+      "SELECT from_n, to_n, reason FROM site_pointer_log ORDER BY id DESC LIMIT 1",
+    ).first<{ from_n: number; to_n: number; reason: string }>();
+    expect(log).toMatchObject({ from_n: 2, to_n: 1, reason: "rollback" });
   });
 
-  it("显式指定模板时按显式来（不因为交付过就改发别的）", async () => {
-    await deliverViaStudio();
-    const res = await call("/api/admin/site/publish", {
-      method: "POST",
-      body: { template: "basic", template_version: "v1" },
-    });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { template: string };
-    expect(body.template).toBe("basic");
+  it("不存在的版本 ⇒ 404，指针不动", async () => {
+    await publishViaStudio();
+    const res = await call("/api/admin/site/rollback", { method: "POST", body: { version: 99 } });
+    expect(res.status).toBe(404);
+    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
   });
 });

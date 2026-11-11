@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
 import { activeKey, lintManifest, publishSite, siteState } from "../../src/site/publish";
+import { storeSource } from "../../src/site/source";
 import {
   buildScope,
   readSiteSettings,
@@ -25,29 +26,35 @@ const BASE = "https://acme.clever-panel.win";
 const SITES: R2Bucket = env.SITES!;
 const HOSTS: KVNamespace = env.HOSTS!;
 
-/** 往"R2"里放一个模板；`tpl` 可选覆写某个文件的正文 */
-async function seedTemplate(
+/**
+ * 造一份**租户源包**并写进内容寻址存储，返回它的 sha。
+ *
+ * Contract 14 之后没有"公共模板目录"这回事：种子在代码里（`seed.generated.ts`），
+ * 租户的源包按 `tpl/<sha>/files/` 存。测试里用自己的一份，断言才有意义。
+ */
+async function sourceOf(
   files: Record<string, string> = {
     "index.html": "<!doctype html><h1>Hello</h1>",
     "assets/app.css": "h1{color:red}",
   },
-  version = "v1",
-) {
-  for (const [rel, body] of Object.entries(files)) {
-    await SITES.put(`g/templates/basic/${version}/${rel}`, body, {
-      httpMetadata: { contentType: rel.endsWith(".css") ? "text/css" : "text/html" },
-    });
-  }
+): Promise<string> {
+  const stored = await storeSource(
+    env,
+    Object.entries(files).map(([path, body]) => ({ path, body })),
+  );
+  if (!stored.ok) throw new Error(stored.message);
+  return stored.sha;
 }
 
 beforeEach(async () => {
   // 每个用例从干净状态开始：清模板、清产物、清指针、清账
-  for (const prefix of ["g/templates/basic/", `sites/${TENANT}/`]) {
+  for (const prefix of [`sites/${TENANT}/`]) {
     const listed = await SITES.list({ prefix });
     for (const o of listed.objects) await SITES.delete(o.key);
   }
   await HOSTS.delete(activeKey(TENANT));
-  await env.DB.prepare("DELETE FROM site_versions").run();
+  await env.DB.prepare("DELETE FROM site_releases").run();
+  await env.DB.prepare("DELETE FROM site_pointer_log").run();
 });
 
 describe("L0 闸门（服务端那一份）", () => {
@@ -85,9 +92,9 @@ describe("L0 闸门（服务端那一份）", () => {
 
 describe("发布", () => {
   it("模板进、产物出、指针指到 1", async () => {
-    await seedTemplate();
+    const sha = await sourceOf();
 
-    const result = await publishSite(env, TENANT, { actor: "admin@test", apiBase: BASE });
+    const result = await publishSite(env, TENANT, { sourceSha: sha, actor: "admin@test", apiBase: BASE });
     // 2 个模板文件 + 2 个平台文件（SDK、支付回跳页）
     expect(result).toMatchObject({ ok: true, version: 1, files: 4 });
 
@@ -116,9 +123,9 @@ describe("发布", () => {
   });
 
   it("再发一版 ⇒ n=2，且第 1 版原样保留（回滚的前提）", async () => {
-    await seedTemplate();
-    await publishSite(env, TENANT, { apiBase: BASE });
-    await publishSite(env, TENANT, { apiBase: BASE });
+    const sha = await sourceOf();
+    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
 
     expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 2 });
     expect(
@@ -129,28 +136,28 @@ describe("发布", () => {
     ).not.toBeNull();
   });
 
-  it("模板不在 R2 ⇒ 明确报错，指针不动", async () => {
-    await seedTemplate();
-    await publishSite(env, TENANT, { apiBase: BASE });
-    // 清掉模板，模拟"没上传模板就点发布"
-    const listed = await SITES.list({ prefix: "g/templates/basic/" });
+  it("源包内容没了 ⇒ 明确报错，指针不动", async () => {
+    const sha = await sourceOf();
+    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    // 清掉源包内容，模拟"内容存储被清过"
+    const listed = await SITES.list({ prefix: "tpl/" });
     for (const o of listed.objects) await SITES.delete(o.key);
 
-    const again = await publishSite(env, TENANT, { apiBase: BASE });
-    expect(again).toMatchObject({ ok: false, code: "template_missing" });
+    const again = await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    expect(again).toMatchObject({ ok: false, code: "source_missing" });
     // 关键：线上仍是 1，不是"半成品 2"
     expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
   });
 
   it("L0 失败 ⇒ 不写产物、不记账、不切指针", async () => {
-    await seedTemplate({ "style.css": "h1{color:red}" }); // 没有 index.html
+    const sha = await sourceOf({ "style.css": "h1{color:red}" }); // 没有 index.html
 
-    const result = await publishSite(env, TENANT, { apiBase: BASE });
+    const result = await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
     expect(result).toMatchObject({ ok: false, code: "l0_failed" });
     expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
 
     const rows = await env.DB.prepare(
-      "SELECT COUNT(*) AS c FROM site_versions",
+      "SELECT COUNT(*) AS c FROM site_releases",
     ).first<{ c: number }>();
     expect(rows?.c).toBe(0);
   });
@@ -166,25 +173,25 @@ describe("发布", () => {
 
 describe("状态", () => {
   it("没发布过 ⇒ active 为 null；发过 ⇒ active 与版本列表一致", async () => {
-    await seedTemplate();
+    const sha = await sourceOf();
     expect((await siteState(env, TENANT)).active).toBeNull();
 
-    await publishSite(env, TENANT, { apiBase: BASE });
+    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
     const state = await siteState(env, TENANT);
     expect(state.active).toBe(1);
-    expect(state.versions[0]).toMatchObject({ seq: 1, template: "basic" });
-    expect(state.templateReady).toBe(true);
+    expect(state.sourceFrom).toBe("release:v1");
+    expect(state.releases[0]).toMatchObject({ seq: 1, source_sha: sha });
   });
 });
 
 describe("config.js：发布时注入 CRM 地址", () => {
   it("产物里的 config.js 是注入后的，不是模板占位", async () => {
-    await seedTemplate({
+    const sha = await sourceOf({
       "index.html": "<!doctype html><h1>Hello</h1>",
       "config.js": 'window.CRM_API_BASE = "https://crm.example.com";',
     });
 
-    await publishSite(env, TENANT, { apiBase: BASE });
+    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
 
     const js = await SITES.get(`sites/${TENANT}/versions/1/public/config.js`);
     const body = (await js?.text()) ?? "";
@@ -194,8 +201,8 @@ describe("config.js：发布时注入 CRM 地址", () => {
   });
 
   it("没给 apiBase ⇒ 直接拒绝，不写产物", async () => {
-    await seedTemplate();
-    const result = await publishSite(env, TENANT, {});
+    const sha = await sourceOf();
+    const result = await publishSite(env, TENANT, { sourceSha: sha });
     expect(result).toMatchObject({ ok: false, code: "api_base_missing" });
     expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
   });
@@ -320,13 +327,13 @@ describe("站点设置：单行 JSON + rev 乐观锁", () => {
 
 describe("发布：把设置烘焙进产物", () => {
   it("占位符替换；没设的用兜底名与默认文案", async () => {
-    await seedTemplate({
+    const seed1 = await sourceOf({
       "index.html":
         "<title>{{site.name}}</title><h1>{{site.hero.title}}</h1><footer>{{site.footer}}</footer>",
     });
     await saveSiteSettings(env, { values: { site: { name: "Acme VPN" } } });
 
-    const r = await publishSite(env, TENANT, { apiBase: BASE });
+    const r = await publishSite(env, TENANT, { sourceSha: seed1, apiBase: BASE });
     expect(r.ok).toBe(true);
 
     const html = await (
@@ -340,20 +347,20 @@ describe("发布：把设置烘焙进产物", () => {
   });
 
   it("模板用了没有数据的路径 ⇒ 发布被拦，线上不变", async () => {
-    await seedTemplate({ "index.html": "<h1>{{site.nickname}}</h1>" });
-    const r = await publishSite(env, TENANT, { apiBase: BASE });
+    const seed2 = await sourceOf({ "index.html": "<h1>{{site.nickname}}</h1>" });
+    const r = await publishSite(env, TENANT, { sourceSha: seed2, apiBase: BASE });
     expect(r).toMatchObject({ ok: false, code: "template_token_unknown" });
     expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
   });
 
   it("主题色留空 ⇒ 回落默认色（否则 `--brand: ;` 整份 CSS 失效）", async () => {
-    await seedTemplate({
+    const seed3 = await sourceOf({
       "index.html": "<h1>{{site.name}}</h1>",
       "site.css": ":root{--brand: {{site.theme.brand}};}",
     });
     await saveSiteSettings(env, { values: { site: { name: "Acme" } } });
 
-    await publishSite(env, TENANT, { apiBase: BASE });
+    await publishSite(env, TENANT, { sourceSha: seed3, apiBase: BASE });
     const css = await (
       await SITES.get(`sites/${TENANT}/versions/1/public/site.css`)
     )?.text();
@@ -361,12 +368,12 @@ describe("发布：把设置烘焙进产物", () => {
   });
 
   it("配了客服邮箱 ⇒ 页脚出现 mailto；没配 ⇒ 整段链接消失", async () => {
-    await seedTemplate({
+    const seed4 = await sourceOf({
       "index.html":
         '<footer><a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a></footer>',
     });
 
-    await publishSite(env, TENANT, { apiBase: BASE });
+    await publishSite(env, TENANT, { sourceSha: seed4, apiBase: BASE });
     let html = await (
       await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
     )?.text();
@@ -375,7 +382,8 @@ describe("发布：把设置烘焙进产物", () => {
     await saveSiteSettings(env, {
       values: { site: { name: "Acme", contact_email: "help@acme.test" } },
     });
-    await publishSite(env, TENANT, { apiBase: BASE });
+    // 只改了设置 ⇒ 源包不变，用同一份重发（这正是 Contract 14 的主路径）
+    await publishSite(env, TENANT, { sourceSha: seed4, apiBase: BASE });
     html = await (
       await SITES.get(`sites/${TENANT}/versions/2/public/index.html`)
     )?.text();
@@ -384,14 +392,14 @@ describe("发布：把设置烘焙进产物", () => {
   });
 
   it("设置值过 HTML 转义（站点名里能放引号，不会破坏属性）", async () => {
-    await seedTemplate({
+    const seed5 = await sourceOf({
       "index.html": '<h1 title="{{site.name}}">{{site.name}}</h1>',
     });
     await saveSiteSettings(env, {
       values: { site: { name: '快 <script>不稳</h1>"' } },
     });
 
-    await publishSite(env, TENANT, { apiBase: BASE });
+    await publishSite(env, TENANT, { sourceSha: seed5, apiBase: BASE });
     const html = await (
       await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
     )?.text();

@@ -103,8 +103,8 @@ beforeEach(async () => {
     const listed = await SITES.list({ prefix });
     for (const o of listed.objects) await SITES.delete(o.key);
   }
-  await testEnv.DB.prepare("DELETE FROM site_templates").run();
-  await testEnv.DB.prepare("UPDATE site_settings SET template_version = '' WHERE id = 1").run();
+  await testEnv.DB.prepare("DELETE FROM site_releases").run();
+  await testEnv.DB.prepare("DELETE FROM site_pointer_log").run();
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -119,10 +119,8 @@ describe("入场 → 回电：一条链跑通", () => {
     expect((body.scope as { site?: { name?: string } }).site?.name).toBeTruthy();
   });
 
-  it("同一枚 sacc_ 能拉模板（公共模板分支）", async () => {
+  it("同一枚 sacc_ 能拉源包（没发布过 ⇒ 用部署自带的种子）", async () => {
     const token = await enter();
-    await SITES.put("g/templates/basic/v1/index.html", "<h1>公共模板</h1>");
-    await SITES.put("g/templates/basic/v1/assets/site.css", "h1{}");
 
     const res = await siteCall("/api/site/template", token);
     expect(res.status).toBe(200);
@@ -131,13 +129,11 @@ describe("入场 → 回电：一条链跑通", () => {
       sha: string;
       files: { path: string; content_b64: string }[];
     };
-    expect(body.source).toBe("public");
+    // Contract 14：没有"公共模板目录"了，种子在代码里（`seed.generated.ts`）
+    expect(body.source).toBe("seed");
     expect(body.sha).toMatch(/^sha256:[0-9a-f]{64}$/);
-
-    const textOf = (b64: string) =>
-      new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
-    const html = body.files.find((f) => f.path === "index.html")!;
-    expect(textOf(html.content_b64)).toBe("<h1>公共模板</h1>");
+    expect(body.files.map((f) => f.path)).toContain("index.html");
+    expect(body.files.length).toBeGreaterThan(5);
   });
 
   it("别的租户的 token：两个端点都 401（一枚 token 不能改别人家站点）", async () => {

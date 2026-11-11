@@ -22,11 +22,11 @@ import { handlePayRoutes } from "./payments/routes";
 import { verifySiteAccess } from "./site/access";
 import { siteMeta } from "./site/meta";
 import { buildScope, readSiteSettings, saveSiteSettings } from "./site/settings";
-import { siteTemplateOf } from "./site/template-source";
+import { siteSourceOf } from "./site/template-source";
 import { deliverSite, type DeliveryInput } from "./site/deliver";
 import { sampleDataOf } from "./site/sample";
-import { publishSite } from "./site/publish";
-import { readTemplateVersion } from "./site/templates";
+import { latestRelease, publishSite } from "./site/publish";
+import { storeSource } from "./site/source";
 import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
@@ -224,8 +224,8 @@ export default {
         if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
         const access = await verifySiteAccess(request, env, scoped.tenantId);
         if (!access) return json({ error: "site_access_invalid" }, 401);
-        const tpl = await siteTemplateOf(env, scoped.tenantId);
-        if (!tpl) return json({ error: "site_template_missing" }, 404);
+        const tpl = await siteSourceOf(env, scoped.tenantId);
+        if (!tpl) return json({ error: "site_source_missing", message: "源包读取失败" }, 404);
         return json(tpl);
       }
 
@@ -242,34 +242,17 @@ export default {
       }
 
       /**
-       * 交付一版模板（契约 §5）：**校验 → 存成不可变的租户模板版本**。
-       *
-       * 六道门（形状 / 引擎 / 契约 / 摘要 / 渲染 / 预览 sha）都在 `deliver.ts` 里；
-       * 这里只做鉴权与路由。交付 ≠ 上线，上线要再调 `/publish`。
+       * 交付已经并入发布（Contract 14，契约 §0.1.5）：这里是显式的墓碑，
+       * 让还在调老端点的脚本立刻看到原因，而不是静默 404。
        */
       if (url.pathname === "/api/site/deliveries") {
-        if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-        const access = await verifySiteAccess(request, env, scoped.tenantId);
-        if (!access) return json({ error: "site_access_invalid" }, 401);
-        let body: unknown;
-        try {
-          body = await request.json();
-        } catch {
-          return json({ error: "site_manifest_invalid", message: "请求体不是 JSON" }, 400);
-        }
-        const result = await deliverSite(env, scoped.tenantId, body as DeliveryInput);
-        if (!result.ok) {
-          return json(
-            { error: result.code, message: result.message, ...(result.issues ? { issues: result.issues } : {}) },
-            result.status,
-          );
-        }
-        return json({
-          template_version: result.template_version,
-          sha: result.sha,
-          engine: result.engine,
-          idempotent: result.idempotent,
-        });
+        return json(
+          {
+            error: "site_deliveries_gone",
+            message: "交付已并入 POST /api/site/publish：把源文件直接交给它，一次完成",
+          },
+          410,
+        );
       }
 
       /**
@@ -282,34 +265,73 @@ export default {
         if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
         const access = await verifySiteAccess(request, env, scoped.tenantId);
         if (!access) return json({ error: "site_access_invalid" }, 401);
-        let body: { template_version?: unknown } = {};
+        let body: Record<string, unknown> = {};
         try {
-          body = (await request.json()) as { template_version?: unknown };
+          body = (await request.json()) as Record<string, unknown>;
         } catch {
           body = {};
         }
-        const wanted = String(body.template_version ?? "").trim();
-        const version = await readTemplateVersion(env, scoped.tenantId, wanted || undefined);
-        if (!version) return json({ error: "site_template_missing", message: "还没有交付过模板" }, 404);
+
+        const apiBase = url.origin;
+        const trigger = body.trigger === "crm" ? "crm" : "studio";
+        const files = Array.isArray(body.files) ? body.files : null;
+
+        /**
+         * 两条路：
+         *  - 带了 `files` = studio 交源文件（**唯一一次跨服务写**，先入库再发布）；
+         *  - 没带 = 只改数据后重发（用最近一次发布的那份源包，或种子）。
+         */
+        let sourceSha = typeof body.source_sha === "string" ? body.source_sha : undefined;
+        if (files) {
+          const manifest = (body.manifest ?? {}) as Record<string, unknown>;
+          const ingested = await deliverSite(env, scoped.tenantId, {
+            manifest: {
+              ...manifest,
+              // 源文件直接交上来时，manifest 只剩"引擎 / 契约 / 签收 / 预览指纹"四件事
+              package: 1,
+            } as DeliveryInput["manifest"],
+            files: files as DeliveryInput["files"],
+          });
+          if (!ingested.ok) {
+            return json(
+              { error: ingested.code, message: ingested.message, ...(ingested.issues ? { issues: ingested.issues } : {}) },
+              ingested.status,
+            );
+          }
+          sourceSha = ingested.sha;
+        } else if (!sourceSha) {
+          const latest = await latestRelease(env, scoped.tenantId);
+          sourceSha = latest?.sourceSha;
+        }
+
         const published = await publishSite(env, scoped.tenantId, {
-          templateSha: version.sha,
-          template: "tenant",
-          templateVersion: version.version,
-          actor: "studio",
-          apiBase: url.origin,
+          sourceSha,
+          trigger,
+          actor: trigger === "crm" ? "crm" : "studio",
+          idemKey: typeof body.idem_key === "string" ? body.idem_key : undefined,
+          apiBase,
         });
         if (!published.ok) {
+          const status =
+            published.code === "version_conflict"
+              ? 409
+              : published.code === "source_missing"
+                ? 404
+                : 422;
           return json(
             { error: published.code, message: published.message, ...(published.issues ? { issues: published.issues } : {}) },
-            published.code === "version_conflict" ? 409 : 422,
+            status,
           );
         }
         return json({
-          version_id: published.version,
-          template_version: version.version,
-          template_sha: version.sha,
+          seq: published.version,
+          public_url: apiBase.replace(/\/+$/, ""),
+          source_sha: published.sourceSha,
+          artifact_sha: published.artifactSha,
+          seed_sha: published.seedSha,
           files: published.files,
           bytes: published.bytes,
+          idempotent: published.idempotent,
         });
       }
 

@@ -992,29 +992,66 @@ export type PromotionTargetRow = typeof promotionTargets.$inferSelect;
 export type PromotionCodeRow = typeof promotionCodes.$inferSelect;
 
 /**
- * 站点发布记录（每次发布一行）。**版本号以这张表为准**，KV 里的指针只是"现在服务
- * 哪一版"。
+ * **发布记录**（append-only，每次发布一行）。**版本号以这张表为准**，KV 里的指针只是
+ * "现在服务哪一版"（契约 `site-studio-crm.md` §0.1.3）。
  *
- * 为什么不用 `site_state` 单行改指针：回滚需要知道"历史上有过哪些 n"，
- * 否则有人手滑指向一个从未发布过的版本，站点会 404 而无从排查。
+ * 一次发布 = 一份源包 + 用它渲染出来的产物。两张 sha 都记在这里，于是：
+ *
+ *   · `source_sha` 回答"这一版的源文件是什么" —— DO 被清后据此重建工作区；
+ *   · `artifact_sha` 回答"这一版渲染出来是什么" —— 与交付时的预览指纹对齐；
+ *   · `seed_sha` 是血缘戳：这个站最初是从哪个种子长出来的（种子本身不版本化）。
+ *
+ * 为什么不用单行改指针：回滚需要知道"历史上有过哪些 n"，否则有人手滑指向一个从未
+ * 发布过的版本，站点会 404 而无从排查。
  */
-export const siteVersions = sqliteTable(
-  "site_versions",
+export const siteReleases = sqliteTable(
+  "site_releases",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    /** 正整数，从 1 递增；唯一 —— 并发发布撞号时靠它挡住 */
+    /** 托管分片一个库可能服务多个租户；自部署时恒为一个租户 */
+    tenant_id: text("tenant_id").notNull().default(""),
+    /** 租户内自增，从 1 起；对外是 `v<seq>`。**唯一版本号来源** */
     seq: integer("seq").notNull(),
-    /** 模板名与版本：`basic` / `v1`，便于日后知道这版是怎么渲染出来的 */
-    template: text("template").notNull(),
-    template_version: text("template_version").notNull(),
+    /** 源包（内容寻址）：`sha256:<hex>`，存 `tpl/<hex>/files/` */
+    source_sha: text("source_sha").notNull(),
+    /** 渲染后的产物指纹（契约 §5.1 的算法，两侧同一份） */
+    artifact_sha: text("artifact_sha").notNull(),
+    /** 血缘：建站时那个种子的内容指纹（种子不版本化，只有这一个戳） */
+    seed_sha: text("seed_sha").notNull().default(""),
     files: integer("files").notNull(),
     bytes: integer("bytes").notNull(),
-    /** 触发者（管理员邮箱）；自动发布时可空 */
+    /** 幂等键：`<source_sha>:<settings.rev>`，同键重复发布返回已有 seq */
+    idem_key: text("idem_key").notNull().default(""),
+    /** 触发者（管理员邮箱 / `studio`）；审计用 */
     created_by: text("created_by"),
     created_at: text("created_at").notNull(),
   },
   (t) => ({
-    uqSeq: uniqueIndex("uq_site_versions_seq").on(t.seq),
+    uqTenantSeq: uniqueIndex("uq_site_releases_tenant_seq").on(t.tenant_id, t.seq),
+    idxTenantSource: index("idx_site_releases_tenant_source").on(t.tenant_id, t.source_sha),
+  }),
+);
+
+/**
+ * 指针变更记录（审计）。**回滚不产生新版本**，所以"线上曾经变过"只能靠这张表回答；
+ * 少了它，事后查不出"谁在什么时候把线上从 v3 切回 v2"（契约 §0.1.3）。
+ */
+export const sitePointerLog = sqliteTable(
+  "site_pointer_log",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    tenant_id: text("tenant_id").notNull().default(""),
+    /** 切换前线上是哪一版；从没发布过时为空 */
+    from_n: integer("from_n"),
+    /** 切换后线上是哪一版 */
+    to_n: integer("to_n").notNull(),
+    /** `publish` / `rollback` */
+    reason: text("reason").notNull(),
+    created_by: text("created_by"),
+    created_at: text("created_at").notNull(),
+  },
+  (t) => ({
+    idxTenantAt: index("idx_site_pointer_log_tenant_at").on(t.tenant_id, t.created_at),
   }),
 );
 
@@ -1046,14 +1083,6 @@ export const siteSettings = sqliteTable("site_settings", {
   collections: text("collections").notNull().default("{}"),
   /** 乐观锁：每次写 +1。CRM 后台与 studio 都能改，`PUT` 带 `if_rev`，不匹配返 409 */
   rev: integer("rev").notNull().default(0),
-  /**
-   * **当前模板指针**：`v7`（`site_templates.version`）。
-   *
-   * 与数据设置同表，是有意的：发布要"模板版本 + 数据快照"一致，分开两张表就得
-   * 分布式事务；同一行 + 乐观锁只要一次 UPDATE（契约 §9）。
-   * 空串 = 还没交付过模板，发布用公共模板。
-   */
-  template_version: text("template_version").notNull().default(""),
   // ── 以下 7 列是 v1 的列式字段，**已废弃**：数据搬进 `values` 后只读不再写。
   // 删列要重建表，留到下一版（standards/site-template.md §11.3）。
   /** @deprecated 用 `values.site.name` */
@@ -1107,47 +1136,3 @@ export const cfApi = sqliteTable("cf_api", {
 // 站点模板版本（studio ⇄ CRM 交付，契约 `site-studio-crm.md` §5 / §7 / §9）
 // ─────────────────────────────────────────────────────────────
 
-/**
- * 租户**模板版本**表（一次交付一行，不可变）。
- *
- * 与 `site_versions` 的区别（别混）：
- *   - `site_templates` = **模板**版本：studio 交付的源包，`tpl/<sha>/` 内容寻址；
- *   - `site_versions`  = **产物**版本：渲染+注入后的静态文件，回滚切的是它。
- *   一个模板版本可以被不同数据发布成多个产物版本。
- *
- * 为什么版本号用自增整数 `seq` 而对外是 `v<seq>` 字符串：排序/比较用整数，
- * 展示与契约用带前缀的字符串，两件事分开就不会出现 `v10 < v9` 这种字符串比较事故。
- */
-export const siteTemplates = sqliteTable(
-  "site_templates",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    /** 托管分片一个库可能服务多个租户；自部署时恒为一个租户 */
-    tenant_id: text("tenant_id").notNull().default(""),
-    /** 租户内自增，对外是 `v<seq>`；不可变 */
-    seq: integer("seq").notNull(),
-    version: text("version").notNull(),
-    /** 血缘：我改自哪一版（`sha256:…`）；首版为空 */
-    parent_sha: text("parent_sha").notNull().default(""),
-    /** 包内容寻址：`sha256:<hex>`；同内容永远同一个值 */
-    sha: text("sha").notNull(),
-    /** 渲染引擎版本（`manifest.engine`）；不匹配即 422 */
-    engine: text("engine").notNull(),
-    /** 数据 schema 版本（`manifest.schema`） */
-    schema_version: integer("schema_version").notNull().default(1),
-    files: integer("files").notNull(),
-    bytes: integer("bytes").notNull(),
-    /** 交付者（管理员邮箱或 `studio:<ticket>`）；审计用 */
-    created_by: text("created_by"),
-    created_at: text("created_at").notNull(),
-  },
-  (t) => ({
-    uqTenantVersion: uniqueIndex("uq_site_templates_tenant_version").on(
-      t.tenant_id,
-      t.version,
-    ),
-    idxTenantSha: index("idx_site_templates_tenant_sha").on(t.tenant_id, t.sha),
-  }),
-);
-
-export type SiteTemplateRow = typeof siteTemplates.$inferSelect;
