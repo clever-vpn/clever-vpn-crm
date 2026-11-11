@@ -16,6 +16,7 @@
  * （指针是 CRM 自己的东西，site-serve 只读它）。
  */
 import { renderTemplate } from "./render";
+import { FILES_PREFIX, tplPrefix } from "./templates";
 import { RETURN_HTML, SDK_JS } from "./sdk";
 import { buildScope, readSiteSettings } from "./settings";
 
@@ -32,7 +33,7 @@ export const SITE_LIMITS = {
 } as const;
 
 /** 允许的扩展名：平台产出的静态资源。**没有 `.php` / `.exe` / 无扩展名可执行** */
-const ALLOWED_EXT = new Set([
+export const ALLOWED_EXT = new Set([
   "html",
   "css",
   "js",
@@ -54,6 +55,12 @@ export interface PublishInput {
   template?: string;
   /** 模板版本，默认 `v1` */
   templateVersion?: string;
+  /**
+   * 直接发**租户交付的那一版**（`tpl/<sha>/files/`，见 `templates.ts`）。
+   *
+   * 给了它就不看公共模板前缀 —— 租户的模板是 studio 交付来的，不是 R2 里那份 demo。
+   */
+  templateSha?: string;
   /** 触发者（写进 D1，便于"这版是谁发的"） */
   actor?: string;
   /**
@@ -195,7 +202,9 @@ export async function publishSite(
 
   const template = input.template ?? "basic";
   const templateVersion = input.templateVersion ?? "v1";
-  const prefix = templatePrefix(template, templateVersion);
+  const prefix = input.templateSha
+    ? `${tplPrefix(input.templateSha)}${FILES_PREFIX}`
+    : templatePrefix(template, templateVersion);
 
   const listed = await sites.list({ prefix, limit: SITE_LIMITS.files + 1 });
   const objects = listed.objects.filter((o) => !o.key.endsWith("/"));

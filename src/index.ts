@@ -23,6 +23,10 @@ import { verifySiteAccess } from "./site/access";
 import { siteMeta } from "./site/meta";
 import { buildScope, readSiteSettings } from "./site/settings";
 import { siteTemplateOf } from "./site/template-source";
+import { deliverSite, type DeliveryInput } from "./site/deliver";
+import { sampleDataOf } from "./site/sample";
+import { publishSite } from "./site/publish";
+import { readTemplateVersion } from "./site/templates";
 import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
@@ -178,6 +182,90 @@ export default {
         const tpl = await siteTemplateOf(env, scoped.tenantId);
         if (!tpl) return json({ error: "site_template_missing" }, 404);
         return json(tpl);
+      }
+
+      /**
+       * 运行期数据的**预览样例**（契约 §4.4）：形状与 `sdk.ts` 的 `planView()` 一致，
+       * 恒带 `sample: true`。模板开发时靠它看到"有数据时长什么样"，而不是把假价格
+       * 写进 HTML（写进去就没人拦得住了）。
+       */
+      if (url.pathname === "/api/site/sample-data") {
+        if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+        const access = await verifySiteAccess(request, env, scoped.tenantId);
+        if (!access) return json({ error: "site_access_invalid" }, 401);
+        return json(sampleDataOf());
+      }
+
+      /**
+       * 交付一版模板（契约 §5）：**校验 → 存成不可变的租户模板版本**。
+       *
+       * 六道门（形状 / 引擎 / 契约 / 摘要 / 渲染 / 预览 sha）都在 `deliver.ts` 里；
+       * 这里只做鉴权与路由。交付 ≠ 上线，上线要再调 `/publish`。
+       */
+      if (url.pathname === "/api/site/deliveries") {
+        if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+        const access = await verifySiteAccess(request, env, scoped.tenantId);
+        if (!access) return json({ error: "site_access_invalid" }, 401);
+        let body: unknown;
+        try {
+          body = await request.json();
+        } catch {
+          return json({ error: "site_manifest_invalid", message: "请求体不是 JSON" }, 400);
+        }
+        const result = await deliverSite(env, scoped.tenantId, body as DeliveryInput);
+        if (!result.ok) {
+          return json(
+            { error: result.code, message: result.message, ...(result.issues ? { issues: result.issues } : {}) },
+            result.status,
+          );
+        }
+        return json({
+          template_version: result.template_version,
+          sha: result.sha,
+          engine: result.engine,
+          idempotent: result.idempotent,
+        });
+      }
+
+      /**
+       * 发布（契约 §6.4）：**只有这一份实现**。studio 只能"发起"，渲染、写产物、切指针
+       * 全在这里；它没有云凭据，也不该有。
+       *
+       * `apiBase` 用**本请求的 origin**：站点与 CRM 不同域，发上去之后没人能改它。
+       */
+      if (url.pathname === "/api/site/publish") {
+        if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+        const access = await verifySiteAccess(request, env, scoped.tenantId);
+        if (!access) return json({ error: "site_access_invalid" }, 401);
+        let body: { template_version?: unknown } = {};
+        try {
+          body = (await request.json()) as { template_version?: unknown };
+        } catch {
+          body = {};
+        }
+        const wanted = String(body.template_version ?? "").trim();
+        const version = await readTemplateVersion(env, scoped.tenantId, wanted || undefined);
+        if (!version) return json({ error: "site_template_missing", message: "还没有交付过模板" }, 404);
+        const published = await publishSite(env, scoped.tenantId, {
+          templateSha: version.sha,
+          template: "tenant",
+          templateVersion: version.version,
+          actor: "studio",
+          apiBase: url.origin,
+        });
+        if (!published.ok) {
+          return json(
+            { error: published.code, message: published.message, ...(published.issues ? { issues: published.issues } : {}) },
+            published.code === "version_conflict" ? 409 : 422,
+          );
+        }
+        return json({
+          version_id: published.version,
+          template_version: version.version,
+          template_sha: version.sha,
+          files: published.files,
+          bytes: published.bytes,
+        });
       }
 
       if (url.pathname.startsWith("/api/admin")) {

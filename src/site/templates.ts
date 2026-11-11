@@ -276,9 +276,18 @@ export async function storeTemplate(
     return err("site_template_conflict", "有人同时在交付模板，请重试");
   }
 
-  // 3) 指针：交付即成为"当前模板"（上线仍需 publish）
+  /**
+   * 3) 指针：交付即成为"当前模板"（上线仍需 publish）。
+   *
+   * **必须是 upsert，不能只 UPDATE**：全新部署里 `site_settings` 还没有行（要等租户
+   * 第一次保存设置才出现）。只 UPDATE 的话这里影响 0 行 —— 版本进了库、指针却是空的，
+   * 表现是"交付成功但 studio 拉到的还是公共模板"。这个坑只在干净库上出现，
+   * 本地测过一轮设置就再也复现不了。
+   */
   await env.DB.prepare(
-    `UPDATE site_settings SET template_version = ?, rev = rev + 1, updated_at = ? WHERE id = 1`,
+    "INSERT INTO site_settings (id, template_version, rev, updated_at) VALUES (1, ?, 1, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET template_version = excluded.template_version, " +
+      "rev = site_settings.rev + 1, updated_at = excluded.updated_at",
   )
     .bind(version, new Date().toISOString())
     .run();

@@ -1,0 +1,266 @@
+/**
+ * `POST /api/site/deliveries` —— studio 交付一版模板（契约 §5）。
+ *
+ * 一句话：**把"租户签收的那一版"变成一个不可变的模板版本**，交给 `storeTemplate()` 存。
+ *
+ * 这个文件几乎全是**校验**，因为交付是唯一一个"外部内容进入我们存储"的入口：
+ *
+ *   · `engine` 不一致 ⇒ 拒。渲染器不同，"预览长这样"就没有意义（契约 §4.2）。
+ *   · `contract` 不一致 ⇒ 拒。模板引用的字段在当前契约里没了，不做"尽力渲染"。
+ *   · 逐文件 `sha256`/`bytes` 与 `content_b64` 不符 ⇒ 拒。**整包拒**，不留半份 ——
+ *     半份模板比没有模板更危险（能渲染出别人没签收过的页面）。
+ *   · 用**当前数据**渲染一遍 `.html`：出现 `missing` 路径（H1）⇒ 拒，并列出路径。
+ *   · 渲染结果算一次 `artifact_sha256`，与 `manifest.preview.artifact_sha256` 比
+ *     （§5.1）。不相等 = 租户看到的和真实数据渲染出来的不是同一页 ⇒ 拒。
+ *
+ * 校验顺序是刻意的：**先便宜后昂贵**（形状 → 摘要 → 渲染），渲染只发生在前面都过了之后。
+ */
+
+import { ENGINE_ID } from "./engine.generated";
+import { SITE_CONTRACT } from "./meta";
+import { renderTemplate } from "./render";
+import { ALLOWED_EXT } from "./publish";
+import { buildScope, readSiteSettings } from "./settings";
+import {
+  MANIFEST_PATH,
+  TPL_LIMITS,
+  checkTemplatePath,
+  storeTemplate,
+} from "./templates";
+
+import type { TemplateFileInput } from "./templates";
+import type { Env } from "../env";
+
+const enc = new TextEncoder();
+
+/** 平台保留前缀：模板不许占（H4），交上来就拒 */
+const RESERVED = ["_crm/"];
+
+export interface DeliveryFileIn {
+  path?: unknown;
+  content_b64?: unknown;
+}
+
+export interface DeliveryManifestIn {
+  package?: unknown;
+  engine?: unknown;
+  contract?: unknown;
+  studio_rev?: unknown;
+  base_package?: unknown;
+  preview?: { artifact_sha256?: unknown } | null;
+  signoff?: { by?: unknown; at?: unknown } | null;
+  files?: { path?: unknown; sha256?: unknown; bytes?: unknown }[] | null;
+}
+
+export interface DeliveryInput {
+  manifest?: DeliveryManifestIn | null;
+  files?: DeliveryFileIn[] | null;
+}
+
+export interface DeliveryOk {
+  ok: true;
+  template_version: string;
+  sha: string;
+  engine: string;
+  /** 同内容重复交付 ⇒ true（返回的是已有版本） */
+  idempotent: boolean;
+}
+
+export interface DeliveryErr {
+  ok: false;
+  status: number;
+  code: string;
+  message: string;
+  issues?: string[];
+}
+
+export type DeliveryResult = DeliveryOk | DeliveryErr;
+
+const fail = (
+  status: number,
+  code: string,
+  message: string,
+  issues?: string[],
+): DeliveryErr => ({ ok: false, status, code, message, ...(issues ? { issues } : {}) });
+
+const b64ToBytes = (text: string): Uint8Array => {
+  const raw = atob(text);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+  return out;
+};
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * 渲染后产物的指纹（契约 §5.1）：**只算 `.html` 页面**。
+ *
+ * CSS/JS/图片不算：它们不经渲染，算进去只是把同样的信息抄一遍。
+ * `config.js` 与 `_crm/*` 也不算：一个在发布时被写死 CRM 地址，一个每次发布重新注入，
+ * 算进去会让"同一版模板"的 sha 跟着部署地址变。
+ */
+export async function artifactShaOf(
+  files: { path: string; text: string }[],
+  scope: Record<string, unknown>,
+): Promise<{ sha: string; missing: string[] }> {
+  const missing = new Set<string>();
+  const entries: { path: string; sha256: string; bytes: number }[] = [];
+  for (const file of files) {
+    if (!/\.html?$/i.test(file.path)) continue;
+    const rendered = renderTemplate(file.text, scope);
+    for (const m of rendered.missing) missing.add(m);
+    const bytes = enc.encode(rendered.html);
+    entries.push({ path: file.path, sha256: await sha256Hex(bytes), bytes: bytes.byteLength });
+  }
+  const lines = entries
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    .map((e) => `${e.path}\u0000${e.sha256}\u0000${e.bytes}`)
+    .join("\n");
+  return { sha: `sha256:${await sha256Hex(enc.encode(lines))}`, missing: [...missing] };
+}
+
+export async function deliverSite(
+  env: Env,
+  tenantId: string,
+  input: DeliveryInput,
+): Promise<DeliveryResult> {
+  const manifest = input.manifest ?? null;
+  if (!manifest || typeof manifest !== "object") {
+    return fail(400, "site_manifest_invalid", "缺少 manifest");
+  }
+  const list = Array.isArray(input.files) ? input.files : [];
+  if (list.length === 0) return fail(400, "site_manifest_invalid", "files 为空");
+
+  // ── 1) 形状：包格式 / 引擎 / 契约 ─────────────────────────────────────
+  if (Number(manifest.package) !== 1) {
+    return fail(400, "site_manifest_invalid", "package 必须是 1");
+  }
+  const engine = String(manifest.engine ?? "");
+  if (engine !== ENGINE_ID) {
+    return fail(422, "site_engine_unsupported", `引擎不一致：模板 ${engine || "(空)"}，本 CRM ${ENGINE_ID}`);
+  }
+  if (Number(manifest.contract) !== SITE_CONTRACT) {
+    return fail(
+      422,
+      "site_contract_unsupported",
+      `数据契约不一致：模板 ${String(manifest.contract ?? "")}，本 CRM ${SITE_CONTRACT}`,
+    );
+  }
+  const signoffBy = String(manifest.signoff?.by ?? "").trim();
+  if (!signoffBy) return fail(422, "site_signoff_missing", "缺租户签收（manifest.signoff.by）");
+  const claimedArtifact = String(manifest.preview?.artifact_sha256 ?? "").trim();
+  if (!/^sha256:[0-9a-f]{64}$/i.test(claimedArtifact)) {
+    return fail(422, "site_manifest_invalid", "manifest.preview.artifact_sha256 缺失或格式不对");
+  }
+
+  // ── 2) 文件：路径、保留前缀、体积 ────────────────────────────────────
+  const files: TemplateFileInput[] = [];
+  const texts = new Map<string, string>();
+  const actual = new Map<string, { sha256: string; bytes: number }>();
+  let total = 0;
+
+  for (const item of list) {
+    const path = String(item?.path ?? "");
+    const b64 = String(item?.content_b64 ?? "");
+    if (!path || !b64) return fail(400, "site_manifest_invalid", "每个文件都要 path 与 content_b64");
+    if (path === MANIFEST_PATH) {
+      return fail(400, "site_path_rejected", "files 里不要带 manifest.json（它由 CRM 生成）");
+    }
+    if (RESERVED.some((prefix) => path.startsWith(prefix))) {
+      return fail(400, "site_path_rejected", `${path} 是平台保留路径（/_crm/*）`);
+    }
+    const problem = checkTemplatePath(path);
+    if (problem) return fail(400, "site_path_rejected", problem);
+
+    let bytes: Uint8Array;
+    try {
+      bytes = b64ToBytes(b64);
+    } catch {
+      return fail(400, "site_manifest_invalid", `${path} 的 content_b64 不是合法 base64`);
+    }
+    if (bytes.byteLength > TPL_LIMITS.fileBytes) {
+      return fail(413, "site_bundle_too_large", `${path} 超过单文件上限 ${TPL_LIMITS.fileBytes} 字节`);
+    }
+    total += bytes.byteLength;
+    if (total > TPL_LIMITS.totalBytes) {
+      return fail(413, "site_bundle_too_large", `整包超过上限 ${TPL_LIMITS.totalBytes} 字节`);
+    }
+    if (actual.has(path)) return fail(400, "site_manifest_invalid", `重复路径：${path}`);
+
+    const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+    if (!ALLOWED_EXT.has(ext)) return fail(400, "site_path_rejected", `不允许的文件类型：${path}`);
+
+    actual.set(path, { sha256: await sha256Hex(bytes), bytes: bytes.byteLength });
+    files.push({ path, body: bytes });
+    texts.set(path, new TextDecoder().decode(bytes));
+  }
+
+  if (!actual.has("index.html")) {
+    return fail(422, "site_gate_hard_failed", "模板没有 index.html", ["根路径无处可服务"]);
+  }
+
+  // ── 3) 摘要：manifest 说的必须与实际字节一致（整包拒，不留半份）────────
+  const declared = Array.isArray(manifest.files) ? manifest.files : [];
+  if (declared.length !== files.length) {
+    return fail(400, "site_manifest_invalid", `manifest.files 有 ${declared.length} 个，实际 ${files.length} 个`);
+  }
+  for (const entry of declared) {
+    const path = String(entry?.path ?? "");
+    const got = actual.get(path);
+    if (!got) return fail(400, "site_hash_mismatch", `manifest 里有 ${path}，但没交这份文件`);
+    if (String(entry?.sha256 ?? "").toLowerCase() !== got.sha256) {
+      return fail(400, "site_hash_mismatch", `${path} 的 sha256 与内容不符`);
+    }
+    if (Number(entry?.bytes ?? -1) !== got.bytes) {
+      return fail(400, "site_hash_mismatch", `${path} 的 bytes 与内容不符`);
+    }
+  }
+
+  // ── 4) 渲染：H1（未知路径）+ 预览与真实数据是否同一页（§5.1）──────────
+  const settings = await readSiteSettings(env);
+  const scope = buildScope(settings, "我的站点");
+  const artifact = await artifactShaOf(
+    [...texts.entries()].map(([path, text]) => ({ path, text })),
+    scope,
+  );
+  if (artifact.missing.length > 0) {
+    return fail(422, "site_gate_hard_failed", "模板用了当前数据里没有的字段", [
+      `未声明的路径：${artifact.missing.join("、")}`,
+      "字段清单在 GET /api/site/meta 的 capabilities 里；不能用模板自带的值补齐",
+    ]);
+  }
+  if (artifact.sha !== claimedArtifact.toLowerCase()) {
+    return fail(
+      422,
+      "site_preview_mismatch",
+      "你签收的那一版与当前数据渲染出来的不是同一页",
+      [`你看到的：${claimedArtifact}`, `现在渲染：${artifact.sha}`, "数据改动过就重新预览再交付"],
+    );
+  }
+
+  // ── 5) 入库：内容寻址 + 版本号 + 指针（`storeTemplate` 已保证幂等）──────
+  const stored = await storeTemplate(env, tenantId, {
+    files,
+    engine,
+    schemaVersion: SITE_CONTRACT,
+    studioRev: Number(manifest.studio_rev ?? 0),
+    basePackage: typeof manifest.base_package === "string" ? manifest.base_package : null,
+    preview: { engine, artifact_sha256: artifact.sha },
+    signoff: { by: signoffBy, at: String(manifest.signoff?.at ?? new Date().toISOString()) },
+    actor: `studio:${signoffBy}`,
+  });
+  if (!stored.ok) {
+    return fail(stored.code === "site_template_conflict" ? 409 : 400, stored.code, stored.message);
+  }
+
+  return {
+    ok: true,
+    template_version: stored.version,
+    sha: stored.sha,
+    engine,
+    idempotent: stored.idempotent,
+  };
+}
