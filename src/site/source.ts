@@ -28,10 +28,16 @@ export const tplPrefix = (sha: string): string => `tpl/${stripSha(sha)}/`;
 /** 包内子目录 */
 export const FILES_PREFIX = "files/";
 
-/** 契约 §4.3 的硬上限（studio 侧先拦，这里兜底） */
+/**
+ * 契约 §4.3 / `site-assets.md` §6 的硬上限（studio 侧先拦，这里兜底）。
+ *
+ * `totalBytes` 数的是**整版产物**：文本 + 素材字节。两者原来混在一起用 10 MB，
+ * 于是一个正常站点（6 张 1.5 MB 的图）会撞墙，而 studio 那边的 8 MB 只数文本
+ * —— 它不是同一个口径，别拿它当参照。素材单张 2 MB 时，32 MB 够放 15 张左右。
+ */
 export const TPL_LIMITS = {
   fileBytes: 2 << 20,
-  totalBytes: 10 << 20,
+  totalBytes: 32 << 20,
   files: 1000,
 } as const;
 
