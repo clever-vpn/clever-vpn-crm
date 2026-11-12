@@ -147,3 +147,111 @@ describe('deleteSiteAsset', () => {
     expect(await listSiteAssets(env, TENANT)).toHaveLength(1);
   });
 });
+
+/**
+ * 素材指针走完整条链：`putSiteAsset` → `deliverSite`（字节不上行）→ `publishSite`
+ * （改名 + 改写引用）→ 线上产物里是带指纹的那一份。
+ *
+ * 这条测试守的是契约 `site-assets.md` §3 的**整条**承诺，不是单个函数。
+ */
+
+/** 测试里要按契约声明"每个文件"的 sha/bytes，这里就地算一个 */
+async function shaOf(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+describe("素材指针 → 发布物化", () => {
+  it("只交 asset_id，产物里就是带指纹的图，HTML 引用已改写", async () => {
+    const { deliverSite } = await import("../../src/site/deliver");
+    const { publishSite } = await import("../../src/site/publish");
+    const { artifactShaOf } = await import("../../src/site/deliver");
+    const { buildScope, readSiteSettings } = await import("../../src/site/settings");
+    const { ENGINE_ID } = await import("../../src/site/engine.generated");
+    const { SITE_CONTRACT } = await import("../../src/site/meta");
+
+    const put = await putSiteAsset(env, TENANT, { kind: "logo", mime: "image/png", bytes: png(256) });
+    expect(put.ok).toBe(true);
+    if (!put.ok) return;
+
+    const html = '<!doctype html><img src="assets/logo.png">';
+    const scope = buildScope(await readSiteSettings(env), "我的站点");
+    const artifact = await artifactShaOf([{ path: "index.html", text: html }], scope);
+
+    const delivered = await deliverSite(env, TENANT, {
+      manifest: {
+        package: 1,
+        engine: ENGINE_ID,
+        contract: SITE_CONTRACT,
+        preview: { artifact_sha256: artifact.sha },
+        signoff: { by: "租户", at: new Date().toISOString() },
+        files: [
+          { path: "index.html", sha256: await shaOf(html), bytes: new TextEncoder().encode(html).byteLength },
+          { path: "assets/logo.png", sha256: put.value.sha256, bytes: put.value.bytes },
+        ],
+      } as never,
+      files: [
+        { path: "index.html", content_b64: btoa(html) },
+        { path: "assets/logo.png", asset_id: put.value.id },
+      ],
+    });
+    expect(delivered.ok, delivered.ok ? "" : delivered.message).toBe(true);
+    if (!delivered.ok) return;
+
+    const published = await publishSite(env, TENANT, {
+      sourceSha: delivered.sha,
+      apiBase: "https://acme.clever-panel.win",
+      idemKey: `ptr-${Date.now()}`,
+    });
+    expect(published.ok, published.ok ? "" : published.message).toBe(true);
+    if (!published.ok) return;
+
+    const prefix = `sites/${TENANT}/versions/${published.version}/public/`;
+    const listed = await SITES.list({ prefix: `${prefix}assets/` });
+    const keys = listed.objects.map((o) => o.key.slice(prefix.length));
+    const fingerprinted = keys.find((k) => /^assets\/logo\.[0-9a-f]{8}\.png$/.test(k));
+    expect(fingerprinted, keys.join(",")).toBeTruthy();
+    expect(keys).not.toContain("assets/logo.png");
+
+    const page = await (await SITES.get(`${prefix}index.html`))!.text();
+    expect(page).toContain(`src="${fingerprinted}"`);
+  });
+
+  it("引用了已删除的素材 ⇒ 422，且不会产生半个源包", async () => {
+    const { deliverSite } = await import("../../src/site/deliver");
+    const { artifactShaOf } = await import("../../src/site/deliver");
+    const { buildScope, readSiteSettings } = await import("../../src/site/settings");
+    const { ENGINE_ID } = await import("../../src/site/engine.generated");
+    const { SITE_CONTRACT } = await import("../../src/site/meta");
+
+    const put = await putSiteAsset(env, TENANT, { mime: "image/png", bytes: png(64) });
+    expect(put.ok).toBe(true);
+    if (!put.ok) return;
+    await deleteSiteAsset(env, TENANT, put.value.id);
+
+    const html = "<!doctype html><h1>x</h1>";
+    const scope = buildScope(await readSiteSettings(env), "我的站点");
+    const artifact = await artifactShaOf([{ path: "index.html", text: html }], scope);
+
+    const res = await deliverSite(env, TENANT, {
+      manifest: {
+        package: 1,
+        engine: ENGINE_ID,
+        contract: SITE_CONTRACT,
+        preview: { artifact_sha256: artifact.sha },
+        signoff: { by: "租户", at: new Date().toISOString() },
+        files: [
+          { path: "index.html", sha256: await shaOf(html), bytes: new TextEncoder().encode(html).byteLength },
+          { path: "assets/logo.png", sha256: put.value.sha256, bytes: put.value.bytes },
+        ],
+      } as never,
+      files: [
+        { path: "index.html", content_b64: btoa(html) },
+        { path: "assets/logo.png", asset_id: put.value.id },
+      ],
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("site_asset_missing");
+  });
+});

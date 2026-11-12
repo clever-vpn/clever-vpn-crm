@@ -20,6 +20,7 @@ import { ENGINE_ID } from "./engine.generated";
 import { SITE_CONTRACT } from "./meta";
 import { renderTemplate } from "./render";
 import { ALLOWED_EXT } from "./publish";
+import { getSiteAsset, readSiteAssetBytes } from "./assets";
 import { buildScope, readSiteSettings } from "./settings";
 import { TPL_LIMITS, checkSourcePath, storeSource } from "./source";
 
@@ -31,9 +32,22 @@ const enc = new TextEncoder();
 /** 平台保留前缀：模板不许占（H4），交上来就拒 */
 const RESERVED = ["_crm/"];
 
+/** 素材 MIME → 产物扩展名：指针送上来时校验“路径与内容是不是同一种东西” */
+const EXT_OF_MIME: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+};
+
 export interface DeliveryFileIn {
   path?: unknown;
   content_b64?: unknown;
+  /**
+   * 素材指针：字节在 R2 的 blob 里，**不上行**（契约 `site-assets.md` §3）。
+   * 给了它就忽略 `content_b64`；两者必居其一。
+   */
+  asset_id?: unknown;
 }
 
 export interface DeliveryManifestIn {
@@ -159,7 +173,10 @@ export async function deliverSite(
   for (const item of list) {
     const path = String(item?.path ?? "");
     const b64 = String(item?.content_b64 ?? "");
-    if (!path || !b64) return fail(400, "site_manifest_invalid", "每个文件都要 path 与 content_b64");
+    const assetId = String(item?.asset_id ?? "");
+    if (!path || (!b64 && !assetId)) {
+      return fail(400, "site_manifest_invalid", `每个文件都要 path 与 content_b64（或 asset_id）：${path || "(空)"}`);
+    }
     if (RESERVED.some((prefix) => path.startsWith(prefix))) {
       return fail(400, "site_path_rejected", `${path} 是平台保留路径（/_crm/*）`);
     }
@@ -167,10 +184,26 @@ export async function deliverSite(
     if (problem) return fail(400, "site_path_rejected", problem);
 
     let bytes: Uint8Array;
-    try {
-      bytes = b64ToBytes(b64);
-    } catch {
-      return fail(400, "site_manifest_invalid", `${path} 的 content_b64 不是合法 base64`);
+    if (assetId) {
+      // 指针：字节从 blob 取（服务端读，不经 studio），类型要与路径扩展名对得上
+      const asset = await getSiteAsset(env, tenantId, assetId);
+      if (!asset) {
+        return fail(422, "site_asset_missing", `${path} 引用的素材不存在或已被删除`);
+      }
+      const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+      const want = EXT_OF_MIME[asset.mime];
+      if (want && want !== ext && !(want === "jpg" && ext === "jpeg")) {
+        return fail(400, "site_asset_mismatch", `${path} 是 ${ext}，但素材是 ${asset.mime}`);
+      }
+      const obj = await readSiteAssetBytes(env, tenantId, assetId);
+      if (!obj) return fail(422, "site_asset_missing", `${path} 的素材字节丢了（R2 里没有）`);
+      bytes = new Uint8Array(await obj.arrayBuffer());
+    } else {
+      try {
+        bytes = b64ToBytes(b64);
+      } catch {
+        return fail(400, "site_manifest_invalid", `${path} 的 content_b64 不是合法 base64`);
+      }
     }
     if (bytes.byteLength > TPL_LIMITS.fileBytes) {
       return fail(413, "site_bundle_too_large", `${path} 超过单文件上限 ${TPL_LIMITS.fileBytes} 字节`);
