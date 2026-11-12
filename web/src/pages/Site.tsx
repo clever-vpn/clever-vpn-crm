@@ -10,6 +10,7 @@ import {
   Form,
   Input,
   Popconfirm,
+  Radio,
   Row,
   Select,
   Space,
@@ -376,24 +377,9 @@ export default function Site() {
             name: settings?.values?.site?.name ?? "",
             tagline: settings?.values?.site?.tagline ?? "",
             contact_email: settings?.values?.site?.contact_email ?? "",
-            footer_note: settings?.values?.site?.footer_note ?? "",
-            hero: {
-              title: settings?.values?.site?.hero?.title ?? "",
-              sub: settings?.values?.site?.hero?.sub ?? "",
-              layout: settings?.values?.site?.hero?.layout ?? "split",
-            },
-            layout: { shell: settings?.values?.site?.layout?.shell ?? "top" },
             theme: {
               brand: settings?.values?.site?.theme?.brand ?? "#4f46e5",
-              bg: settings?.values?.site?.theme?.bg ?? "#ffffff",
-              text: settings?.values?.site?.theme?.text ?? "#0d1626",
-            },
-            icon: {
-              mark: settings?.values?.site?.icon?.mark ?? "",
-              image: settings?.values?.site?.icon?.image ?? null,
-            },
-            download: {
-              note: settings?.values?.site?.download?.note ?? "",
+              preset: settings?.values?.site?.theme?.preset ?? "light",
             },
           },
           collections: {
@@ -425,22 +411,20 @@ export default function Site() {
           <Input placeholder="例如：快、稳、不记日志的 VPN" />
         </Form.Item>
         <Form.Item
-          label="首页大标题"
-          name={["site", "hero", "title"]}
-          rules={[{ max: 40, message: "最多 40 个字符" }]}
-          extra="首页最大那行字。留空用默认文案"
+          label="主题"
+          name={["site", "theme", "preset"]}
+          extra="整套配色一次换好，不用逐个挑颜色"
         >
-          <Input placeholder="例如：一键连上，快得像本地网络" />
+          <Radio.Group optionType="button">
+            <Radio.Button value="light">浅色</Radio.Button>
+            <Radio.Button value="dark">深色</Radio.Button>
+          </Radio.Group>
         </Form.Item>
         <Form.Item
-          label="首页副标题"
-          name={["site", "hero", "sub"]}
-          rules={[{ max: 120, message: "最多 120 个字符" }]}
-          extra="标题下面那行解释。留空则不显示"
+          label="主色"
+          name={["site", "theme", "brand"]}
+          extra="按钮与强调色；其余深浅由它自动派生。太浅会看不清白字，保存时会被拦"
         >
-          <Input placeholder="例如：一个账号，三端通用，不限速不计日志" />
-        </Form.Item>
-        <Form.Item label="主色" name={["site", "theme", "brand"]} extra="按钮与强调色（主题里还有背景色与正文色，可后续扩展）">
           <ColorPicker format="hex" disabledAlpha />
         </Form.Item>
         <Form.Item
@@ -450,14 +434,6 @@ export default function Site() {
           extra="留空则不显示"
         >
           <Input placeholder="help@example.com" />
-        </Form.Item>
-        <Form.Item
-          label="页脚版权行"
-          name={["site", "footer_note"]}
-          rules={[{ max: 80, message: "最多 80 个字符" }]}
-          extra="留空则自动生成「© 年份 站点名称」"
-        >
-          <Input placeholder="© 2026 Acme Inc." />
         </Form.Item>
 
         <Divider orientation="left" plain>
@@ -542,15 +518,6 @@ export default function Site() {
             </>
           )}
         </Form.List>
-
-        <Form.Item
-          label="下载页补充说明"
-          name={["site", "download", "note"]}
-          rules={[{ max: 120, message: "最多 120 个字符" }]}
-          extra="例如「iOS 版正在 TestFlight 内测」。留空则不显示"
-        >
-          <Input placeholder="例如：Windows 版暂时只有 64 位" />
-        </Form.Item>
 
         <Space>
           <Button type="primary" htmlType="submit" loading={busy}>

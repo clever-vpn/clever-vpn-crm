@@ -21,17 +21,12 @@ const page = (name: string): string =>
 
 type Item = { platform: string; kind: string; label: string; url: string };
 
-function render(name: string, downloads: Item[], note = "") {
+function render(name: string, downloads: Item[]) {
   const html = page(name);
   return renderTemplate(
     html,
-    buildScope(
-      {
-        values: { site: { name: "Acme VPN", download: { note } } },
-        collections: { downloads },
-      },
-      "兜底",
-    ),
+    // `contract: 7`：下载页没有"补充说明"字段了 —— 要写就写进 HTML
+    buildScope({ values: { site: { name: "Acme VPN" } }, collections: { downloads } }, "兜底"),
   );
 }
 
@@ -51,13 +46,12 @@ const ALL: Item[] = [
 
 describe("下载页：按平台分组，一个平台可以多个渠道", () => {
   it("四个平台各一条 ⇒ 四张卡都在，链接原样落到 href", () => {
-    const r = render("download.html", ALL, "Windows 版只有 64 位");
+    const r = render("download.html", ALL);
     expect(r.missing).toEqual([]);
     for (const d of ALL) {
       expect(r.html).toContain(d.label);
       expect(r.html).toContain(`href="${d.url}"`);
     }
-    expect(r.html).toContain("Windows 版只有 64 位");
   });
 
   it("同一平台两条渠道 ⇒ 那张卡里两个按钮，顺序跟录入一致", () => {

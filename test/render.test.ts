@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { renderTemplate } from "../src/site/render";
 
 const scope = {
-  site: { name: "Acme", hero: { sub: "" } },
+  site: { name: "Acme", tagline: "" },
   plans: [
     { id: "p1", name: "月付", price: "¥10.00" },
     { id: "p2", name: "年付", price: "¥100.00" },
@@ -73,7 +73,7 @@ describe("data-repeat + data-as", () => {
 
 describe("data-if", () => {
   it("空值 ⇒ 整个元素连缩进一起消失", () => {
-    const src = '<div>\n  <p data-if="site.hero.sub">{{site.hero.sub}}</p>\n  <p>x</p>\n</div>';
+    const src = '<div>\n  <p data-if="site.tagline">{{site.tagline}}</p>\n  <p>x</p>\n</div>';
     expect(renderTemplate(src, scope).html).toBe("<div>\n  <p>x</p>\n</div>");
   });
 
@@ -98,7 +98,7 @@ describe("data-if", () => {
   });
 
   it("嵌套：外层 if 为空时整块消失", () => {
-    const src = '<div data-if="site.hero.sub"><p>a</p><p>b</p></div>';
+    const src = '<div data-if="site.tagline"><p>a</p><p>b</p></div>';
     expect(renderTemplate(src, scope).html).toBe("");
   });
 });

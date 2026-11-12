@@ -191,7 +191,7 @@ export interface SitePublishResult {
 }
 
 /**
- * 站点设置 = **单行 JSON**，键就是模板里写的路径（`site.hero.title`）。
+ * 站点设置 = **单行 JSON**，键就是模板里写的路径（`site.name`）。
  * 与模板包的 `data.schema.json` 同构（standards/site-template.md §3）。
  */
 export interface SiteValues {
@@ -199,13 +199,8 @@ export interface SiteValues {
     name?: string;
     tagline?: string;
     contact_email?: string;
-    footer_note?: string;
-    hero?: { title?: string; sub?: string; layout?: string };
-    layout?: { shell?: string };
-    theme?: { brand?: string; bg?: string; text?: string };
-    icon?: { mark?: string; image?: string | null };
-    /** 只有 `note`：下载入口本身是集合（见 `SiteCollections`） */
-    download?: { note?: string };
+    /** 主色（`#rrggbb`）+ 主题（`light` / `dark`）。主题成套给，不拆成散装色值 */
+    theme?: { brand?: string; preset?: string };
   };
 }
 

@@ -270,7 +270,8 @@ describe("站点设置：单行 JSON + rev 乐观锁", () => {
 
   it("下载入口是集合：同平台可以挂多个渠道", async () => {
     const r = await saveSiteSettings(env, {
-      values: { site: { download: { note: "Windows 版只有 64 位" } } },
+      // `contract: 7`：下载页的补充说明不是设置项了（单页单处，写进 HTML）
+      values: {},
       collections: {
         downloads: [
           { platform: "windows", kind: "file", label: "64 位安装包", url: "https://dl.test/win-x64.exe" },
@@ -344,12 +345,14 @@ describe("站点设置：单行 JSON + rev 乐观锁", () => {
 });
 
 describe("发布：把设置烘焙进产物", () => {
-  it("占位符替换；没设的用兜底名与默认文案", async () => {
+  it("占位符替换；没设的用兜底名与派生版权行", async () => {
     const seed1 = await sourceOf({
       "index.html":
-        "<title>{{site.name}}</title><h1>{{site.hero.title}}</h1><footer>{{site.footer}}</footer>",
+        "<title>{{site.name}}</title><h1>{{site.tagline}}</h1><footer>{{site.footer}}</footer>",
     });
-    await saveSiteSettings(env, { values: { site: { name: "Acme VPN" } } });
+    await saveSiteSettings(env, {
+      values: { site: { name: "Acme VPN", tagline: "快、稳、不记日志" } },
+    });
 
     const r = await publishSite(env, TENANT, { sourceSha: seed1, apiBase: BASE });
     expect(r.ok).toBe(true);
@@ -358,9 +361,8 @@ describe("发布：把设置烘焙进产物", () => {
       await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
     )?.text();
     expect(html).toContain("<title>Acme VPN</title>");
-    // 标题留空 ⇒ 默认文案，首页不会出现空 h1
-    expect(html).toContain("<h1>连通世界，只需要一次点击。</h1>");
-    // 版权行没设 ⇒ 自动生成，且带当前年份
+    expect(html).toContain("<h1>快、稳、不记日志</h1>");
+    // 版权行**不再是设置项**：由站名派生（`contract: 7`）
     expect(html).toMatch(/© \d{4} Acme VPN/);
   });
 

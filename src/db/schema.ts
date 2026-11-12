@@ -1083,22 +1083,6 @@ export const siteSettings = sqliteTable("site_settings", {
   collections: text("collections").notNull().default("{}"),
   /** 乐观锁：每次写 +1。CRM 后台与 studio 都能改，`PUT` 带 `if_rev`，不匹配返 409 */
   rev: integer("rev").notNull().default(0),
-  // ── 以下 7 列是 v1 的列式字段，**已废弃**：数据搬进 `values` 后只读不再写。
-  // 删列要重建表，留到下一版（standards/site-template.md §11.3）。
-  /** @deprecated 用 `values.site.name` */
-  site_name: text("site_name").notNull().default(""),
-  /** 一句话介绍（meta description） */
-  tagline: text("tagline").notNull().default(""),
-  /** 首页大标题；空 = 用模板默认文案 */
-  hero_title: text("hero_title"),
-  /** 首页副标题；空 = 不显示 */
-  hero_sub: text("hero_sub"),
-  /** 主色 `#rrggbb`；空 = 用模板默认 */
-  color: text("color"),
-  /** 客服邮箱（页脚展示，同时作为 mailto） */
-  contact_email: text("contact_email"),
-  /** 版权行；空 = 自动生成 `© <年> <站点名>` */
-  footer_note: text("footer_note"),
   updated_at: text("updated_at").notNull().default(""),
 });
 
