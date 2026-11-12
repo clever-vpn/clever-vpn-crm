@@ -32,6 +32,7 @@ import {
   listSiteAssets,
   putSiteAsset,
   readSiteAssetBytes,
+  updateSiteAssetDescription,
 } from "./site/assets";
 import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
@@ -401,6 +402,8 @@ export default {
           const put = await putSiteAsset(env, scoped.tenantId, {
             kind: typeof body.kind === "string" ? body.kind : undefined,
             name: typeof body.name === "string" ? body.name : undefined,
+            // 一句话说明：AI 排版时靠它挑图（契约 site-assets.md §7）
+            description: typeof body.description === "string" ? body.description : undefined,
             mime: String(body.mime ?? ""),
             bytes,
           });
@@ -427,6 +430,30 @@ export default {
               "x-content-type-options": "nosniff",
             },
           });
+        }
+
+        /**
+         * 改一句话说明。只动元数据：id、字节、路径都不变，已发布的版本不受影响。
+         * 租户在素材库里补一句"这张是主界面截图"，AI 下次排版才知道该放哪。
+         */
+        if (request.method === "PATCH") {
+          let body: Record<string, unknown> = {};
+          try {
+            body = (await request.json()) as Record<string, unknown>;
+          } catch {
+            return json({ error: "invalid_body", message: "body 必须是 JSON" }, 400);
+          }
+          if (typeof body.description !== "string") {
+            return json({ error: "description_required", message: "description 必须是字符串" }, 400);
+          }
+          const edited = await updateSiteAssetDescription(
+            env,
+            scoped.tenantId,
+            id,
+            body.description,
+          );
+          if (!edited) return json({ error: "asset_not_found" }, 404);
+          return json({ ok: true, id, description: body.description.slice(0, 200) });
         }
 
         if (request.method === "DELETE") {

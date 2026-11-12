@@ -1109,6 +1109,13 @@ export const siteAssets = sqliteTable("site_assets", {
   mime: text("mime").notNull(),
   bytes: integer("bytes").notNull().default(0),
   sha256: text("sha256").notNull(),
+  /**
+   * 一句话说明这张图是什么（"深色主题的客户端主界面截图"）。
+   *
+   * 契约 `site-assets.md` §7 把它列为**必需品**：AI 只拿到 id/尺寸时无法决定排版
+   * 该放哪张。空串表示还没写。
+   */
+  description: text("description").notNull().default(""),
   created_at: text("created_at").notNull().default(""),
   /** 软删除：已发布的版本还在引用它，硬删会让线上开天窗 */
   deleted_at: text("deleted_at"),
