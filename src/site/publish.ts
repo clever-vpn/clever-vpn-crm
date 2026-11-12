@@ -128,12 +128,49 @@ export const activeKey = (tenantId: string): string => `site:${tenantId}:active`
 /** 需要做占位符替换的类型；其余（png/woff2/ico…）原样透传 */
 const isText = (key: string): boolean =>
   /[.](html|css|js|json|txt|xml|svg)$/i.test(key);
-
 const extOf = (key: string): string => {
   const base = key.slice(key.lastIndexOf("/") + 1);
   const dot = base.lastIndexOf(".");
   return dot < 0 ? "" : base.slice(dot + 1).toLowerCase();
 };
+
+/** 会被指纹改名的二进制资产类型 */
+const ASSET_EXT = new Set(["png", "jpg", "jpeg", "webp", "ico", "woff2"]);
+
+async function sha256HexOf(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** `assets/logo.webp` + `9f2c1a8b` → `assets/logo.9f2c1a8b.webp`（契约 `site-assets.md` §3） */
+export function fingerprintPath(path: string, hex8: string): string {
+  const slash = path.lastIndexOf("/");
+  const dir = path.slice(0, slash + 1);
+  const base = path.slice(slash + 1);
+  const dot = base.lastIndexOf(".");
+  return dot < 0 ? `${dir}${base}.${hex8}` : `${dir}${base.slice(0, dot)}.${hex8}${base.slice(dot)}`;
+}
+
+/**
+ * 把 `assets/` 下的二进制文件按内容改名，返回 `旧路径 → 新路径`，并原地改掉 map 的键。
+ *
+ * 为什么不改 SVG：它是文本，改名后还得改写它内部的相对引用，收益不值这个复杂度。
+ */
+async function fingerprintAssets(
+  files: Map<string, string | ArrayBuffer>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const [path, body] of [...files]) {
+    if (!path.startsWith("assets/") || !ASSET_EXT.has(extOf(path))) continue;
+    const bytes = typeof body === "string" ? new TextEncoder().encode(body) : new Uint8Array(body);
+    const next = fingerprintPath(path, (await sha256HexOf(bytes)).slice(0, 8));
+    if (next === path) continue;
+    files.delete(path);
+    files.set(next, body);
+    out.set(path, next);
+  }
+  return out;
+}
 
 /**
  * L0 闸门（**只判技术有效性**，不判"设计好不好"）。
@@ -291,7 +328,27 @@ export async function publishSite(
     rendered.set(file.path, r.html);
     texts.push({ path: file.path, text: r.html });
   }
+
+  // 指纹算在**改写之前**：`artifact_sha` 是"你签收的那一页"，与 studio 交上来
+  // 时算的必须相等（`deliverSite` 也是这么算的）。带指纹的文件名是发布细节，
+  // 不属于"签收内容"。
   const artifact = await artifactShaOf(texts, scope);
+
+  // ── 4b) 资产指纹（契约 `site-assets.md` §3）──────────────────────────
+  // `assets/` 下的二进制文件按内容改名（`logo.webp` → `logo.9f2c1a8b.webp`），
+  // 再把所有文本里的引用一起改写。两个收益：
+  //   · 换图 = 换文件名 ⇒ 旧缓存自然失效；
+  //   · 文件名带指纹 ⇒ site-serve 可以给 immutable（见 `workers/site` 的判据）。
+  // 只动二进制：SVG 是文本，改名得连带改写它内部引用，收益不值这个复杂度。
+  const renamed = await fingerprintAssets(rendered);
+  for (const entry of texts) {
+    let next = entry.text;
+    for (const [from, to] of renamed) next = next.split(from).join(to);
+    if (next !== entry.text) {
+      entry.text = next;
+      rendered.set(entry.path, next);
+    }
+  }
 
   // ── 5) 版本号：以 D1 为准（KV 只是指针，不能当计数器用）──────────────
   const maxRow = await env.DB.prepare(
