@@ -428,3 +428,70 @@ describe("发布：把设置烘焙进产物", () => {
     );
   });
 });
+
+/**
+ * 资产指纹（契约 `site-assets.md` §3）：`assets/` 下的二进制按内容改名，文本引用一起改写。
+ *
+ * 这件事做错会静默出事：
+ *   · 只改名不改引用 ⇒ 线上图片全 404；
+ *   · 只改引用不改名 ⇒ 换图后老访客永远看不到新图（文件名没变，缓存认旧的）。
+ */
+describe("资产指纹", () => {
+  const PNG_A = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const PNG_B = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9]);
+
+  async function publishWith(png: Uint8Array) {
+    const stored = await storeSource(env, [
+      { path: "index.html", body: '<!doctype html><img src="assets/logo.png">' },
+      { path: "assets/site.css", body: ".hero{background:url(assets/logo.png)}" },
+      { path: "assets/logo.png", body: png },
+    ]);
+    if (!stored.ok) throw new Error(stored.message);
+    const res = await publishSite(env, TENANT, {
+      sourceSha: stored.sha,
+      apiBase: BASE,
+      idemKey: `fp-${Date.now()}-${Math.random()}`,
+    });
+    if (!res.ok) throw new Error(res.message);
+    return res.version;
+  }
+
+  it("改名 + 改写引用 + 产物里只有改名后的那份", async () => {
+    const version = await publishWith(PNG_A);
+    const prefix = `sites/${TENANT}/versions/${version}/public/`;
+
+    const listed = await SITES.list({ prefix: `${prefix}assets/` });
+    const keys = listed.objects.map((o) => o.key.slice(prefix.length));
+    // 原路径不在了，只有带指纹的那份
+    expect(keys).not.toContain("assets/logo.png");
+    const fingerprinted = keys.find((k) => /^assets\/logo\.[0-9a-f]{8}\.png$/.test(k));
+    expect(fingerprinted, keys.join(",")).toBeTruthy();
+
+    const html = await (await SITES.get(`${prefix}index.html`))!.text();
+    expect(html).toContain(`src="${fingerprinted}"`);
+    expect(html).not.toContain('src="assets/logo.png"');
+
+    // CSS 里的 url() 也要一起改写，否则背景图 404
+    const css = await (await SITES.get(`${prefix}assets/site.css`))!.text();
+    expect(css).toContain(`url(${fingerprinted})`);
+  });
+
+  it("同一份内容重发 ⇒ 同一个指纹名；改了字节 ⇒ 名字变（缓存自然失效）", async () => {
+    const nameOf = async (version: number, prefixPath = "assets/") => {
+      const listed = await SITES.list({
+        prefix: `sites/${TENANT}/versions/${version}/public/${prefixPath}`,
+      });
+      return listed.objects
+        .map((o) => o.key)
+        .filter((k) => /\.png$/.test(k))
+        .map((k) => k.slice(k.lastIndexOf("/") + 1));
+    };
+
+    const v1 = await publishWith(PNG_A);
+    const v2 = await publishWith(PNG_A);
+    expect(await nameOf(v2)).toEqual(await nameOf(v1));
+
+    const v3 = await publishWith(PNG_B);
+    expect(await nameOf(v3)).not.toEqual(await nameOf(v1));
+  });
+});
