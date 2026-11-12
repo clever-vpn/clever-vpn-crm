@@ -218,7 +218,8 @@ export async function deliverSite(
     if (!ALLOWED_EXT.has(ext)) return fail(400, "site_path_rejected", `不允许的文件类型：${path}`);
 
     actual.set(path, { sha256: await sha256Hex(bytes), bytes: bytes.byteLength });
-    files.push({ path, body: bytes });
+    // 记下"这个文件是素材物化来的"：重置草稿时按它还原成指针（见 source.ts）
+    files.push({ path, body: bytes, ...(assetId ? { assetId } : {}) });
     texts.set(path, new TextDecoder().decode(bytes));
   }
 

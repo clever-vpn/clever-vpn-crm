@@ -45,6 +45,13 @@ export interface SourceFileInput {
   /** 包内相对路径：`index.html`、`assets/site.css`（不允许绝对路径与 `..`） */
   path: string;
   body: Uint8Array | string;
+  /**
+   * 这个文件是**素材物化**来的（原指针的 id）。
+   *
+   * 记在 R2 对象元数据里，是为了"重置草稿"能把它还原成指针：源包里存的是字节，
+   * 但草稿只认指针（契约 `site-assets.md` §1）。不记的话，重置一次租户的图就全丢了。
+   */
+  assetId?: string;
 }
 
 export interface SourceEntry {
@@ -204,7 +211,11 @@ export async function storeSource(
     if (have.has(key)) continue;
     await sites.put(key, toBytes(file.body), {
       httpMetadata: { contentType: contentTypeOf(file.path) },
-      customMetadata: { source_sha: sha },
+      customMetadata: {
+        source_sha: sha,
+        // 素材物化来的文件带上原指针：重置草稿时按它还原，图不会凭空消失
+        ...(file.assetId ? { asset_id: file.assetId } : {}),
+      },
     });
   }
 
@@ -215,17 +226,27 @@ export async function storeSource(
 export async function readSource(
   env: Env,
   sha: string,
-): Promise<{ path: string; body: ArrayBuffer }[]> {
+): Promise<{ path: string; body: ArrayBuffer; assetId?: string }[]> {
   const sites = env.SITES;
   if (!sites) return [];
   const prefix = `${tplPrefix(sha)}${FILES_PREFIX}`;
-  const listed = await sites.list({ prefix, limit: Math.min(TPL_LIMITS.files, 1000) });
-  const out: { path: string; body: ArrayBuffer }[] = [];
+  // `include: ['customMetadata']`：素材指针记在那里，少一次 head 请求
+  const listed = await sites.list({
+    prefix,
+    limit: Math.min(TPL_LIMITS.files, 1000),
+    include: ["customMetadata"],
+  });
+  const out: { path: string; body: ArrayBuffer; assetId?: string }[] = [];
   for (const object of listed.objects) {
     if (object.key.endsWith("/")) continue;
     const got = await sites.get(object.key);
     if (!got) continue;
-    out.push({ path: object.key.slice(prefix.length), body: await got.arrayBuffer() });
+    const assetId = object.customMetadata?.asset_id ?? got.customMetadata?.asset_id;
+    out.push({
+      path: object.key.slice(prefix.length),
+      body: await got.arrayBuffer(),
+      ...(assetId ? { assetId } : {}),
+    });
   }
   return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
