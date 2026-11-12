@@ -1086,6 +1086,34 @@ export const siteSettings = sqliteTable("site_settings", {
   updated_at: text("updated_at").notNull().default(""),
 });
 
+/**
+ * 租户的站点资产（logo / 内容图 / 图标原图）。**字节在 R2，这里只有元数据。**
+ *
+ * 为什么资产归 CRM 而不是 studio：studio 是通用编辑器，它的存储只是缓存（草稿可丢
+ * 可弃）；资产是租户的财产，要跨草稿、跨发布版本、跨编辑器重装活下来。而且只有
+ * CRM 知道"这一版线上站点引用了哪几张图"。
+ *
+ * 与草稿分开的第二层理由：重置草稿绝不能删掉租户的 logo。
+ *
+ * `sha256` 是内容的指纹，R2 的 key 里就带它（同内容只存一份）；但也保留 `id`，
+ * 因为模板里引用的是 `asset://<id>` —— 换图换 id 会让引用失效，换内容则不需要。
+ */
+export const siteAssets = sqliteTable("site_assets", {
+  /** `a_<12 hex>`；模板里写 `asset://<id>` */
+  id: text("id").primaryKey(),
+  tenant_id: text("tenant_id").notNull(),
+  /** `icon` | `logo` | `content`（界面分类用，不参与校验） */
+  kind: text("kind").notNull().default("content"),
+  /** 原始文件名，仅用于界面展示 */
+  name: text("name").notNull().default(""),
+  mime: text("mime").notNull(),
+  bytes: integer("bytes").notNull().default(0),
+  sha256: text("sha256").notNull(),
+  created_at: text("created_at").notNull().default(""),
+  /** 软删除：已发布的版本还在引用它，硬删会让线上开天窗 */
+  deleted_at: text("deleted_at"),
+});
+
 // ─────────────────────────────────────────────────────────────
 // 平台对接（cf-api 凭据）
 // ─────────────────────────────────────────────────────────────
