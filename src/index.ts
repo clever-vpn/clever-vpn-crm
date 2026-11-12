@@ -27,6 +27,12 @@ import { deliverSite, type DeliveryInput } from "./site/deliver";
 import { SAMPLE_PLANS_RAW, sampleDataOf } from "./site/sample";
 import { latestRelease, publishSite } from "./site/publish";
 import { storeSource } from "./site/source";
+import {
+  deleteSiteAsset,
+  listSiteAssets,
+  putSiteAsset,
+  readSiteAssetBytes,
+} from "./site/assets";
 import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
@@ -353,6 +359,83 @@ export default {
           bytes: published.bytes,
           idempotent: published.idempotent,
         });
+      }
+
+      /**
+       * 站点资产（logo / 内容图 / 图标原图）：元数据在 D1，字节在 R2。
+       *
+       * 凭据同 `/api/site/*`（`sacc_…`）：studio 与 CRM 后台用的是同一个租户身份。
+       * 租户隔离由 `tenantId` 落在每条查询里，不靠路径参数。
+       *
+       * 上传走 base64（JSON）：小文件（≤ 2 MB）、只有一个字段，不值得为 multipart
+       * 引入解析器；而且 studio 侧本来就是 canvas 生成后拿到的字节。
+       */
+      if (url.pathname === "/api/site/assets" || url.pathname.startsWith("/api/site/assets/")) {
+        const access = await verifySiteAccess(request, env, scoped.tenantId);
+        if (!access) return json({ error: "site_access_invalid" }, 401);
+
+        if (url.pathname === "/api/site/assets") {
+          if (request.method === "GET") {
+            return json({ assets: await listSiteAssets(env, scoped.tenantId) });
+          }
+          if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+
+          let body: Record<string, unknown> = {};
+          try {
+            body = (await request.json()) as Record<string, unknown>;
+          } catch {
+            return json({ error: "invalid_body", message: "body 必须是 JSON" }, 400);
+          }
+          const b64 = typeof body.content_b64 === "string" ? body.content_b64 : "";
+          if (!b64) return json({ error: "asset_empty", message: "content_b64 是空的" }, 400);
+
+          let bytes: Uint8Array;
+          try {
+            const raw = atob(b64);
+            bytes = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+          } catch {
+            return json({ error: "asset_b64_invalid", message: "content_b64 不是合法的 base64" }, 400);
+          }
+
+          const put = await putSiteAsset(env, scoped.tenantId, {
+            kind: typeof body.kind === "string" ? body.kind : undefined,
+            name: typeof body.name === "string" ? body.name : undefined,
+            mime: String(body.mime ?? ""),
+            bytes,
+          });
+          if (!put.ok) {
+            return json({ error: put.code, message: put.message }, put.code === "asset_quota_exceeded" ? 409 : 400);
+          }
+          return json(put.value, 201);
+        }
+
+        const id = decodeURIComponent(url.pathname.slice("/api/site/assets/".length));
+        if (!id || id.includes("/")) return json({ error: "asset_not_found" }, 404);
+
+        if (request.method === "GET") {
+          const obj = await readSiteAssetBytes(env, scoped.tenantId, id);
+          if (!obj) return json({ error: "asset_not_found" }, 404);
+          return new Response(obj.body, {
+            headers: {
+              "content-type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+              // key 带 id，内容不会变 —— 可以直接常年缓存
+              "cache-control": "public, max-age=31536000, immutable",
+              etag: obj.httpEtag,
+              // SVG 是**租户提供的内容**：直接打开时不许它跑脚本、不许回连
+              "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
+              "x-content-type-options": "nosniff",
+            },
+          });
+        }
+
+        if (request.method === "DELETE") {
+          const deleted = await deleteSiteAsset(env, scoped.tenantId, id);
+          if (!deleted) return json({ error: "asset_not_found" }, 404);
+          return json({ ok: true });
+        }
+
+        return json({ error: "method_not_allowed" }, 405);
       }
 
       if (url.pathname.startsWith("/api/admin")) {
