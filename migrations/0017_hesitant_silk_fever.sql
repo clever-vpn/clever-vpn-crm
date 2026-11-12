@@ -1,0 +1,1 @@
+ALTER TABLE `site_assets` ADD `description` text DEFAULT '' NOT NULL;

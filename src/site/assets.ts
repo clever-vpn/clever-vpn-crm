@@ -41,6 +41,8 @@ export interface SiteAsset {
   mime: string;
   bytes: number;
   sha256: string;
+  /** 一句话说明（给 AI 与界面看）；空串 = 还没写 */
+  description: string;
   created_at: string;
 }
 
@@ -70,13 +72,14 @@ const rowToAsset = (r: Record<string, unknown>): SiteAsset => ({
   mime: String(r.mime),
   bytes: Number(r.bytes ?? 0),
   sha256: String(r.sha256),
+  description: String(r.description ?? ""),
   created_at: String(r.created_at ?? ""),
 });
 
 /** 列出租户的资产（软删除的不列），新的在前 */
 export async function listSiteAssets(env: Env, tenantId: string): Promise<SiteAsset[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, kind, name, mime, bytes, sha256, created_at FROM site_assets
+    `SELECT id, kind, name, mime, bytes, sha256, description, created_at FROM site_assets
       WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC`,
   )
     .bind(tenantId)
@@ -91,7 +94,7 @@ export async function getSiteAsset(
   id: string,
 ): Promise<SiteAsset | null> {
   const row = await env.DB.prepare(
-    `SELECT id, kind, name, mime, bytes, sha256, created_at FROM site_assets
+    `SELECT id, kind, name, mime, bytes, sha256, description, created_at FROM site_assets
       WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL`,
   )
     .bind(tenantId, id)
@@ -117,7 +120,14 @@ export async function readSiteAssetBytes(
 export async function putSiteAsset(
   env: Env,
   tenantId: string,
-  input: { kind?: string; name?: string; mime: string; bytes: Uint8Array },
+  input: {
+    kind?: string;
+    name?: string;
+    /** 一句话说明（可空）。AI 排版时靠它挑图，契约 §7 */
+    description?: string;
+    mime: string;
+    bytes: Uint8Array;
+  },
 ): Promise<AssetResult<SiteAsset>> {
   if (!env.SITES) return fail("r2_not_configured", "没有绑定 SITES（R2）：资产无处可放");
   if (!tenantId) return fail("no_tenant", "拿不到租户 ID，不知道这份资产是谁的");
@@ -161,16 +171,42 @@ export async function putSiteAsset(
     mime,
     bytes: input.bytes.byteLength,
     sha256,
+    description: String(input.description ?? "").slice(0, 200),
     created_at: createdAt,
   };
   await env.DB.prepare(
-    `INSERT INTO site_assets (id, tenant_id, kind, name, mime, bytes, sha256, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO site_assets (id, tenant_id, kind, name, mime, bytes, sha256, description, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(asset.id, tenantId, asset.kind, asset.name, asset.mime, asset.bytes, asset.sha256, createdAt)
+    .bind(
+      asset.id,
+      tenantId,
+      asset.kind,
+      asset.name,
+      asset.mime,
+      asset.bytes,
+      asset.sha256,
+      asset.description,
+      createdAt,
+    )
     .run();
 
   return { ok: true, value: asset };
+}
+
+/** 改一句话说明（只动元数据，不碰字节与 id）。返回 `false` = 这条不存在 */
+export async function updateSiteAssetDescription(
+  env: Env,
+  tenantId: string,
+  id: string,
+  description: string,
+): Promise<boolean> {
+  const res = await env.DB.prepare(
+    `UPDATE site_assets SET description = ? WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL`,
+  )
+    .bind(String(description ?? "").slice(0, 200), tenantId, id)
+    .run();
+  return Number(res.meta?.changes ?? 0) > 0;
 }
 
 /**
