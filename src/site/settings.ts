@@ -4,6 +4,12 @@
  * 规范：`clever-vpn-docs/docs/standards/site-template.md` §3
  * 契约：`clever-vpn-docs/docs/contracts/site-crm.md` §0.1
  *
+ * **只装"身份 + 视觉"**（契约 `contract: 7`）：站点名 / 一句话介绍 / 客服邮箱 /
+ * 主色 / 主题。别的都别往里塞 —— 判据见
+ * `clever-vpn-docs/docs/standards/site-template.md` §3.2（六条）。一句话版本：
+ * 只在"多处重复 / 需要校验 / 租户能选不能描述 / 成套 / 是资产"时才配当字段；
+ * 单页单处的文案写进 HTML，结构决策交给编辑期（改 HTML 或换起点）。
+ *
  * 三条约定：
  *  1. **单行 JSON + `rev` 乐观锁**：`site_settings.values` 是唯一事实，`rev` 每写一次 +1。
  *     CRM 后台与 studio 都能改，`PUT` 带 `if_rev`，不匹配返 `409`。
@@ -34,28 +40,35 @@ interface FieldSpec {
  * 改这里时同时补 `meta.ts` 的 `LABELS`，否则表单会回退成路径本身。
  */
 export const SETTING_FIELDS: Record<string, FieldSpec> = {
+  // ── 身份：全站一份，出现在多个页面 ──
   "site.name": { kind: "text", max: 40 },
   "site.tagline": { kind: "text", max: 120 },
   "site.contact_email": { kind: "email", max: 120 },
-  "site.footer_note": { kind: "text", max: 80 },
-  "site.hero.title": { kind: "text", max: 40 },
-  "site.hero.sub": { kind: "text", max: 120 },
-  "site.hero.layout": { kind: "enum", values: ["split", "center", "stack"] },
-  "site.layout.shell": { kind: "enum", values: ["top", "side", "bare"] },
+  // ── 视觉：主色 + 成套主题 ──
   "site.theme.brand": { kind: "color" },
-  "site.theme.bg": { kind: "color" },
-  "site.theme.text": { kind: "color" },
-  "site.icon.mark": { kind: "text", max: 8 },
-  "site.icon.image": { kind: "asset", max: 200 },
-  // 下载页的说明文字（入口本身是**集合** `downloads`，见 `DownloadItem`）
-  "site.download.note": { kind: "text", max: 120 },
+  "site.theme.preset": { kind: "enum", values: ["light", "dark"] },
 };
 
-/** 首页大标题留空时的默认文案（避免首页出现空 `<h1>`） */
-export const DEFAULT_HERO_TITLE = "连通世界，只需要一次点击。";
+/**
+ * 主题 = **一组成套的颜色**，不是几个散装色值。
+ *
+ * 为什么不让租户直接选 `bg` / `text`（`contract: 6` 曾经有这个字段）：底色一改，
+ * 卡片 / 边框 / 次要文字 / 状态底色全都得跟着改，只给一个字段必然出现"深色底 +
+ * 浅灰卡片"。所以主题只能整套选，模板里 `:root.<preset>` 一次覆盖一串变量。
+ */
+export const THEME_PRESETS = ["light", "dark"] as const;
+export type ThemePreset = (typeof THEME_PRESETS)[number];
 
 /** 兜底主题色：留空会拼出非法 CSS，整份样式失效 */
 const DEFAULT_BRAND = "#4f46e5";
+/** 主色上的文字永远是白色（按钮），所以对比度按白字算 */
+const ON_BRAND = "#ffffff";
+/**
+ * 主色配白字的最低对比度。3:1 是 WCAG 对大号粗体 / 图形的最低门槛；再低就是
+ * "按钮看得见但字看不清"。低于它**拒绝保存**，因为界面上没有警告通道，
+ * 而静默接受等于让租户发布一个读不出字的按钮。
+ */
+const MIN_CONTRAST = 3;
 
 export type SiteValues = Record<string, unknown>;
 
@@ -130,7 +143,26 @@ function setPath(target: Record<string, unknown>, path: string, value: unknown) 
   if (last !== undefined) cur[last] = value;
 }
 
-/** 只做技术校验：长度、格式、枚举。不判断"这个名字好不好" */
+/** sRGB 相对亮度（WCAG 2.1 定义）—— 对比度就靠它 */
+function luminance(hex: string): number {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const channel = (v: number): number => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** 两个 `#rrggbb` 的对比度（1…21）。输入必须已通过 HEX 校验 */
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+/** 只做技术校验：长度、格式、枚举、对比度。不判断"这个名字好不好" */
 function validate(flat: Record<string, unknown>): { code: string; message: string } | null {
   for (const [path, value] of Object.entries(flat)) {
     const spec = SETTING_FIELDS[path];
@@ -161,8 +193,28 @@ function validate(flat: Record<string, unknown>): { code: string; message: strin
         message: `${path} 只能是 ${(spec.values ?? []).join(" / ")}`,
       };
     }
+    if (path === "site.theme.brand" && text && HEX.test(text)) {
+      const ratio = contrast(text, ON_BRAND);
+      if (ratio < MIN_CONTRAST) {
+        return {
+          code: "bad_contrast",
+          message: `这个色太浅了：按钮上的白字看不清（对比度 ${ratio.toFixed(1)}:1，至少要 ${MIN_CONTRAST}:1），换深一点的颜色`,
+        };
+      }
+    }
   }
   return null;
+}
+
+/**
+ * 校验一份设置值（摊平后逐项查表）。返回第一个问题，没有就是 `null`。
+ *
+ * 单独导出是因为它是**契约的判定**：测试要能直接问"这个值能不能存"，
+ * 而不必为每条规则造一个 D1。
+ */
+export function validateValues(values: unknown): { code: string; message: string } | null {
+  if (!isObj(values)) return { code: "bad_values", message: "values 必须是对象" };
+  return validate(flatten(values));
 }
 
 /**
@@ -309,8 +361,7 @@ export async function saveSiteSettings(
   }
 
   const values = trimLeaves(input.values) as SiteValues;
-  const flat = flatten(values);
-  const bad = validate(flat);
+  const bad = validateValues(values);
   if (bad) return { ok: false, code: bad.code, message: bad.message };
 
   // 集合：**没传就保持原样**（老客户端只发 settings 时不该把下载入口清空）
@@ -346,9 +397,12 @@ export async function saveSiteSettings(
 /**
  * 把设置变成**渲染作用域**：`{{site.x}}` 就在这棵树上取。
  *
- * 两件事在这里做，且只在这里做：
- *   - 空值兜默认（`hero.title` 兜文案、`theme.brand` 兜色值）
- *   - 派生值（`contact_link` / `footer`）——它们**不存库**，每次发布时算
+ * 这里只做两件事：空值兜默认、算派生值（`footer` 不存库）。
+ *
+ * `contract: 7` 起这棵树很小，这是**有意的**：`{{}}` 只留"多处重复"的值
+ * （站名 / 一句话介绍 / 客服邮箱）和"成套的视觉令牌"（主色 / 主题）。
+ * 首页大标题、副标题、下载页说明这类**单页单处**的文案直接写在 HTML 里 ——
+ * 它们本来就该由 AI / 人改，放进设置只会挡住他们。
  */
 export function buildScope(
   settings: { values: SiteValues; collections?: SiteCollections },
@@ -358,53 +412,36 @@ export function buildScope(
   const values = settings.values;
   const downloads = settings.collections?.downloads ?? [];
   const site = isObj(values.site) ? values.site : {};
-  const hero = isObj(site.hero) ? site.hero : {};
-  const layout = isObj(site.layout) ? site.layout : {};
   const theme = isObj(site.theme) ? site.theme : {};
-  const icon = isObj(site.icon) ? site.icon : {};
-  const download = isObj(site.download) ? site.download : {};
 
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
   const name = str(site.name) || fallbackName;
-  const email = str(site.contact_email);
-  const footerNote = str(site.footer_note);
+  const preset = str(theme.preset);
 
   return {
     site: {
       name,
       tagline: str(site.tagline),
-      contact_email: email,
-      footer_note: footerNote,
-      hero: {
-        title: str(hero.title) || DEFAULT_HERO_TITLE,
-        sub: str(hero.sub),
-        layout: str(hero.layout) || "split",
-      },
-      layout: { shell: str(layout.shell) || "top" },
+      contact_email: str(site.contact_email),
       theme: {
         brand: str(theme.brand) || DEFAULT_BRAND,
-        bg: str(theme.bg) || "#ffffff",
-        text: str(theme.text) || "#0d1626",
+        // 只有封闭集合里的值才算数：写错一个字母就让整站掉回亮色（模板里
+        // `:root.<preset>` 找不到类名 ⇒ 用默认那套）
+        preset: (THEME_PRESETS as readonly string[]).includes(preset) ? preset : "light",
       },
-      icon: { mark: str(icon.mark), image: str(icon.image) || null },
       // 下载入口按**平台分组**：模板写 `data-if="site.download.ios"` 决定整块
       // 出不出现，写 `data-repeat="site.download.ios"` 决定这一平台有几个按钮。
       // 空数组 = 这个平台没有入口（`data-if` 把空数组也当空，见 `render.ts`）。
-      download: {
-        note: str(download.note),
-        ...Object.fromEntries(
-          DOWNLOAD_PLATFORMS.map((p) => [
-            p,
-            downloads.filter((d) => d.platform === p),
-          ]),
-        ),
-      },
+      download: Object.fromEntries(
+        DOWNLOAD_PLATFORMS.map((p) => [p, downloads.filter((d) => d.platform === p)]),
+      ),
       // ── 派生：不存库，发布时算 ──
       //
       // 只派生**纯文本**。曾经这里有个 `contact_link`（整段 `<a>`），现在去掉了：
       // 渲染器对所有取值统一转义，值里带标签只会被转义成一堆 `&lt;a` ——
-      // 要么放开转义（XSS 口子），要么就别在数据里放标记。模板自己写 `<a href="mailto:{{site.contact_email}}">`。
-      footer: footerNote || `© ${now.getFullYear()} ${name}`,
+      // 要么放开转义（XSS 口子），要么就别在数据里放标记。模板自己写
+      // `<a href="mailto:{{site.contact_email}}">`。
+      footer: `© ${now.getFullYear()} ${name}`,
     },
   };
 }

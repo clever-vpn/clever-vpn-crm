@@ -37,7 +37,7 @@ import {
  * 只新增字段不算破坏性，但也要 +1 —— 老模板仍然能渲染，新模板需要新版才可用，
  * 所以交付时比对的是">= 本版本"里的**字段存在性**，不是数字相等。
  */
-export const SITE_CONTRACT = 6;
+export const SITE_CONTRACT = 7;
 
 export type CapabilityKind =
   | "text"
@@ -52,6 +52,13 @@ export interface CapabilityField {
   kind: CapabilityKind;
   max?: number;
   values?: readonly string[];
+  /**
+   * 与 `values` 一一对应的**人话标签**（`light` → 「浅色」）。
+   *
+   * 用途只有一个：表单里不该出现 `light` / `dark` 这种给代码看的词。
+   * 缺省时表单回退到 `values` 本身。
+   */
+  value_labels?: readonly string[];
   label: string;
 }
 
@@ -83,29 +90,21 @@ const LABELS: Record<string, string> = {
   "site.name": "站点名",
   "site.tagline": "一句话介绍",
   "site.contact_email": "客服邮箱",
-  "site.footer_note": "页脚版权行",
-  "site.hero.title": "首屏大标题",
-  "site.hero.sub": "首屏副标题",
-  "site.hero.layout": "首屏版式",
-  "site.layout.shell": "整站外壳",
   "site.theme.brand": "主题色",
-  "site.theme.bg": "背景色",
-  "site.theme.text": "正文色",
-  "site.icon.mark": "图标字",
-  "site.icon.image": "图标图片",
-  "site.download.note": "下载页补充说明",
+  "site.theme.preset": "主题",
 };
 
 /** 一条下载入口最多多少个渠道（与 `settings.ts` 的校验保持一致） */
 const MAX_DOWNLOADS = 20;
 
-/** 首页大标题留空时的默认文案 —— 与 `buildScope()` 用的是同一个常量 */
-const DEFAULT_HERO_TITLE = "连通世界，只需要一次点击。";
-
 const DEFAULTS: Record<string, string> = {
-  "site.hero.title": DEFAULT_HERO_TITLE,
   "site.theme.brand": "#4f46e5",
-  "site.theme.bg": "#ffffff",
+  "site.theme.preset": "light",
+};
+
+/** 枚举值的人话（顺序与 `SETTING_FIELDS` 里的 `values` 一致） */
+const ENUM_LABELS: Record<string, readonly string[]> = {
+  "site.theme.preset": ["浅色", "深色"],
 };
 
 const DOWNLOAD_LABELS: Record<string, string> = {
@@ -124,6 +123,7 @@ function settingsCapabilities(): Capability[] {
       kind: spec2.kind,
       ...(spec2.max !== undefined ? { max: spec2.max } : {}),
       ...(spec2.values ? { values: spec2.values } : {}),
+      ...(ENUM_LABELS[path] ? { value_labels: ENUM_LABELS[path]! } : {}),
       label: LABELS[path] ?? path,
       ...(DEFAULTS[path] ? { default: DEFAULTS[path]! } : {}),
     };
