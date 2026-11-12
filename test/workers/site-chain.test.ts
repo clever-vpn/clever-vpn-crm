@@ -225,3 +225,85 @@ describe("设置可写（设计器 → CRM）", () => {
     expect(body.collections).toEqual(before.collections);
   });
 });
+
+/**
+ * 站点资产：同一枚 `sacc_` 走 HTTP 存 / 列 / 取 / 删。
+ *
+ * 这一层要证明的是**边界**，不是"函数能跑"：没 token 不能碰、别的租户不能碰、
+ * 取回来的是字节且带正确的类型，删掉之后列表和单条都消失。
+ */
+describe("站点资产（/api/site/assets）", () => {
+  const PAYLOAD = "\x89PNG\r\n\x1a\n" + "asset-bytes";
+  const png64 = () => btoa(PAYLOAD);
+
+  const upload = (token: string, body: Record<string, unknown>) =>
+    worker.default.fetch(
+      new Request("https://t-beta.clever-panel.win/api/site/assets", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  beforeEach(async () => {
+    await testEnv.DB.prepare("DELETE FROM site_assets").run();
+    const listed = await SITES.list({ prefix: "assets/" });
+    for (const o of listed.objects) await SITES.delete(o.key);
+  });
+
+  it("上传 → 列表 → 取字节 → 删除，一条链跑通", async () => {
+    const token = await enter();
+
+    const created = await upload(token, { kind: "logo", name: "logo.png", mime: "image/png", content_b64: png64() });
+    expect(created.status).toBe(201);
+    const asset = (await created.json()) as { id: string; bytes: number; sha256: string };
+    expect(asset.id).toMatch(/^a_[0-9a-f]{12}$/);
+    expect(asset.bytes).toBe(PAYLOAD.length);
+
+    const list = (await (await siteCall("/api/site/assets", token)).json()) as {
+      assets: { id: string }[];
+    };
+    expect(list.assets.map((a) => a.id)).toEqual([asset.id]);
+
+    const fetched = await siteCall(`/api/site/assets/${asset.id}`, token);
+    expect(fetched.status).toBe(200);
+    expect(fetched.headers.get("content-type")).toBe("image/png");
+    // SVG 是租户内容：直接打开时不许跑脚本
+    expect(fetched.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(new Uint8Array(await fetched.arrayBuffer()).byteLength).toBe(PAYLOAD.length);
+
+    const deleted = await worker.default.fetch(
+      new Request(`https://t-beta.clever-panel.win/api/site/assets/${asset.id}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}` },
+      }),
+    );
+    expect(deleted.status).toBe(200);
+    expect((await siteCall(`/api/site/assets/${asset.id}`, token)).status).toBe(404);
+    expect(((await (await siteCall("/api/site/assets", token)).json()) as { assets: unknown[] }).assets).toHaveLength(0);
+  });
+
+  it("没 token 401；别的租户拿不到、也删不掉", async () => {
+    const token = await enter();
+    const created = (await (
+      await upload(token, { mime: "image/png", content_b64: png64() })
+    ).json()) as { id: string };
+
+    const bare = await worker.default.fetch(
+      new Request("https://t-beta.clever-panel.win/api/site/assets"),
+    );
+    expect(bare.status).toBe(401);
+
+    const { issueSiteAccess } = await import("../../src/site/access");
+    const foreign = (await issueSiteAccess(envOf(), "999"))!;
+    expect((await siteCall(`/api/site/assets/${created.id}`, foreign)).status).toBe(401);
+  });
+
+  it("不支持的类型被拦，且不落行", async () => {
+    const token = await enter();
+    const res = await upload(token, { mime: "application/pdf", content_b64: png64() });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("asset_mime_unsupported");
+    expect(((await (await siteCall("/api/site/assets", token)).json()) as { assets: unknown[] }).assets).toHaveLength(0);
+  });
+});
