@@ -8,8 +8,10 @@
  *  1. **零 D1**：最轻的路径不背包袱；要不要"哪个库"是 CRM 的事。
  *  2. **缓存分层**：host 60 s、版本指针 5 s、未知域负缓存 5 s；内存缓存只是优化，
  *     冷启动必然 miss 一次 KV。
- *  3. **一律 must-revalidate + ETag**：我们的资产文件名没有内容哈希，给 immutable
- *     等于"改一次 CSS，老访客一年看不到"（实测踩过）。资产加内容哈希后才谈 immutable。
+ *  3. **缓存按"文件名有没有指纹"分两档**：没指纹（`index.html`、`site.css`）一律
+ *     `must-revalidate` + ETag —— 给 immutable 等于"改一次 CSS，老访客一年看不到"
+ *     （实测踩过）；带指纹（`logo.9f2c1a8b.webp`，发布物化按 asset sha 改名）
+ *     内容永不变，给一年 immutable。判据见契约 `site-assets.md` §3。
  *
  * single / multi 两种部署跑的是**同一份代码**：它只读 KV，不区分模式。
  */
@@ -63,6 +65,21 @@ function mimeOf(path: string): string {
   const dot = path.lastIndexOf(".");
   const ext = dot === -1 ? "" : path.slice(dot + 1).toLowerCase();
   return MIME[ext] ?? "application/octet-stream";
+}
+
+/**
+ * 文件名里带内容指纹吗？`assets/logo.9f2c1a8b.webp` → true
+ *
+ * 判据是「倒数第二段是 8 位以上 hex」——发布物化会按 `asset sha256` 的前 8 位改名
+ * （契约 `site-assets.md` §3），所以同一份内容永远得到同一个文件名，可以 immutable。
+ * 只是"名字里碰巧有 hex"的文件（如 `page.beefcafe.html`）不会被误判成不可变吗？
+ * 会 —— 但那种情况下内容确实由发布流程决定，且只有一个版本目录能命中它，代价可接受。
+ */
+export function isFingerprinted(path: string): boolean {
+  const base = path.slice(path.lastIndexOf("/") + 1);
+  const parts = base.split(".");
+  if (parts.length < 3) return false;
+  return /^[0-9a-f]{8,64}$/i.test(parts[parts.length - 2]!);
 }
 
 /** 路径安全：拒绝越界与协议相对的写法 */
@@ -189,8 +206,12 @@ export default {
     const headersFor = (meta: R2Object): Headers => {
       const headers = new Headers({
         "content-type": meta.httpMetadata?.contentType ?? mimeOf(rel),
-        // 见文件头第 3 条：没有内容哈希之前，一律回源校验
-        "cache-control": "public, max-age=0, must-revalidate",
+        // 见文件头第 3 条：**没有内容哈希**的文件一律回源校验
+        // 带指纹（`logo.9f2c1a8b.webp`）的文件内容永远不会变，可以放心 immutable。
+        // 契约 `site-assets.md` §3。
+        "cache-control": isFingerprinted(rel)
+          ? "public, max-age=31536000, immutable"
+          : "public, max-age=0, must-revalidate",
         "cache-tag": `site:${map.tenant_id}`,
         "x-site-version": String(active.n),
       });
