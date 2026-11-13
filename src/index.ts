@@ -360,7 +360,14 @@ export default {
         }
         return json({
           seq: published.version,
-          public_url: apiBase.replace(/\/+$/, ""),
+          /**
+           * **站点对外地址**（契约 §6.4）：studio 拿它给租户一个「点开看线上」的链接。
+           *
+           * 来源只能是 `SITE_URL`（部署配置：自部署时就是给 site-serve 绑的那个域名）。
+           * 没配就回 `null` —— **绝不拿 CRM 自己的 origin 冒充**：那个地址打开的是后台，
+           * 不是租户的网站，做成链接就是把租户导到错的地方。
+           */
+          public_url: (env.SITE_URL ?? "").trim().replace(/\/+$/, "") || null,
           source_sha: published.sourceSha,
           artifact_sha: published.artifactSha,
           seed_sha: published.seedSha,
