@@ -1116,13 +1116,7 @@ export const siteAssets = sqliteTable("site_assets", {
    * 该放哪张。空串表示还没写。
    */
   description: text("description").notNull().default(""),
-  /**
-   * 像素宽高（0 = 没解出来）。
-   *
-   * 契约 `site-assets.md` §7 的清单要显示"1200×800"：AI 只看到"2 KB"时不知道是横图
-   * 还是竖图，排版就会放错。上传时从文件头解析（`src/site/image-size.ts`），不引
-   * 栅格化库，也不需要浏览器。
-   */
+  /** 像素宽高（0 = 没解出来）。**已不用**：尺寸改由浏览器侧读 `naturalWidth` */
   width: integer("width").notNull().default(0),
   height: integer("height").notNull().default(0),
   created_at: text("created_at").notNull().default(""),

@@ -25,16 +25,14 @@ import { buildScope, readSiteSettings, saveSiteSettings } from "./site/settings"
 import { siteSourceOf } from "./site/template-source";
 import { deliverSite, type DeliveryInput } from "./site/deliver";
 import { SAMPLE_PLANS_RAW, sampleDataOf } from "./site/sample";
-import { latestRelease, publishSite } from "./site/publish";
-import { storeSource } from "./site/source";
+import { ALLOWED_EXT, latestRelease, publishSite } from "./site/publish";
 import {
-  ASSET_LIMITS,
-  deleteSiteAsset,
-  listSiteAssets,
-  putSiteAsset,
-  readSiteAssetBytes,
-  updateSiteAssetDescription,
-} from "./site/assets";
+  TPL_LIMITS,
+  checkSourcePath,
+  contentTypeOfPath,
+  storeSource,
+} from "./site/source";
+import { checkUploadId, stagingKey, stagingPrefix } from "./site/deliver";
 import { handleStudioTicket } from "./site/studio-ticket";
 import { retryProvisioning } from "./platform/provision";
 import { runSettlement } from "./subscriptions/store";
@@ -313,6 +311,7 @@ export default {
         if (files) {
           const manifest = (body.manifest ?? {}) as Record<string, unknown>;
           const ingested = await deliverSite(env, scoped.tenantId, {
+            uploadId: typeof body.upload === "string" ? body.upload : undefined,
             manifest: {
               ...manifest,
               // 源文件直接交上来时，manifest 只剩"引擎 / 契约 / 签收 / 预览指纹"四件事
@@ -351,6 +350,14 @@ export default {
             status,
           );
         }
+        // 暂存区用完就清：一批字节只服务一次发布，留着只是让桶变脏。
+        // 失败（比如发布被 422 拒）不清 —— 租户改完再发一次还能复用，生命周期规则兜底。
+        const upload = typeof body.upload === "string" ? body.upload : "";
+        if (upload && !checkUploadId(upload) && env.SITES) {
+          const prefix = stagingPrefix(scoped.tenantId, upload);
+          const staged = await env.SITES.list({ prefix, limit: 1000 });
+          await Promise.all(staged.objects.map((o) => env.SITES!.delete(o.key)));
+        }
         return json({
           seq: published.version,
           public_url: apiBase.replace(/\/+$/, ""),
@@ -364,110 +371,54 @@ export default {
       }
 
       /**
-       * 站点资产（logo / 内容图 / 图标原图）：元数据在 D1，字节在 R2。
+       * 发布暂存区：`PUT /api/site/staging?upload=<批次>&path=<路径>`，body 就是字节。
        *
-       * 凭据同 `/api/site/*`（`sacc_…`）：studio 与 CRM 后台用的是同一个租户身份。
-       * 租户隔离由 `tenantId` 落在每条查询里，不靠路径参数。
+       * 图片是**流**，不是 base64 字符串。逐张 PUT 上来，`POST /api/site/publish`
+       * 里只用 `{ path, staged: true }` 指一下 —— 一个 32 MB 的站点包不必整个塞进
+       * 一个 JSON 里，失败也只重传那一张。
        *
-       * 上传走 base64（JSON）：小文件（≤ 2 MB）、只有一个字段，不值得为 multipart
-       * 引入解析器；而且 studio 侧本来就是 canvas 生成后拿到的字节。
+       * 2026-11-13 之前这里是一整套"素材实体"（`/api/site/assets`，带 id、软删除、
+       * 配额张数、指针存活校验）。那套东西带来的全是边角问题：悬空指针、在用不许删、
+       * 重置要还原。现在图片就是文件：路径 + 字节，跟 `site.css` 一样。
        */
-      if (url.pathname === "/api/site/assets" || url.pathname.startsWith("/api/site/assets/")) {
+      if (url.pathname === "/api/site/staging") {
+        if (request.method !== "PUT" && request.method !== "DELETE") {
+          return json({ error: "method_not_allowed" }, 405);
+        }
         const access = await verifySiteAccess(request, env, scoped.tenantId);
         if (!access) return json({ error: "site_access_invalid" }, 401);
 
-        if (url.pathname === "/api/site/assets") {
-          if (request.method === "GET") {
-            // limit 一起回：界面要显示「已用 N / 40 张」，配额只有一个权威（这里）
-            return json({
-              assets: await listSiteAssets(env, scoped.tenantId),
-              limit: ASSET_LIMITS.perTenant,
-            });
-          }
-          if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+        const uploadId = url.searchParams.get("upload") ?? "";
+        const badUpload = checkUploadId(uploadId);
+        if (badUpload) return json({ error: "site_upload_invalid", message: badUpload }, 400);
 
-          let body: Record<string, unknown> = {};
-          try {
-            body = (await request.json()) as Record<string, unknown>;
-          } catch {
-            return json({ error: "invalid_body", message: "body 必须是 JSON" }, 400);
-          }
-          const b64 = typeof body.content_b64 === "string" ? body.content_b64 : "";
-          if (!b64) return json({ error: "asset_empty", message: "content_b64 是空的" }, 400);
-
-          let bytes: Uint8Array;
-          try {
-            const raw = atob(b64);
-            bytes = new Uint8Array(raw.length);
-            for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-          } catch {
-            return json({ error: "asset_b64_invalid", message: "content_b64 不是合法的 base64" }, 400);
-          }
-
-          const put = await putSiteAsset(env, scoped.tenantId, {
-            kind: typeof body.kind === "string" ? body.kind : undefined,
-            name: typeof body.name === "string" ? body.name : undefined,
-            // 一句话说明：AI 排版时靠它挑图（契约 site-assets.md §7）
-            description: typeof body.description === "string" ? body.description : undefined,
-            mime: String(body.mime ?? ""),
-            bytes,
-          });
-          if (!put.ok) {
-            return json({ error: put.code, message: put.message }, put.code === "asset_quota_exceeded" ? 409 : 400);
-          }
-          return json(put.value, 201);
+        const path = url.searchParams.get("path") ?? "";
+        const badPath = checkSourcePath(path);
+        if (badPath) return json({ error: "site_path_rejected", message: badPath }, 400);
+        const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+        if (!ALLOWED_EXT.has(ext)) {
+          return json({ error: "site_path_rejected", message: `不允许的文件类型：${path}` }, 400);
         }
 
-        const id = decodeURIComponent(url.pathname.slice("/api/site/assets/".length));
-        if (!id || id.includes("/")) return json({ error: "asset_not_found" }, 404);
-
-        if (request.method === "GET") {
-          const obj = await readSiteAssetBytes(env, scoped.tenantId, id);
-          if (!obj) return json({ error: "asset_not_found" }, 404);
-          return new Response(obj.body, {
-            headers: {
-              "content-type": obj.httpMetadata?.contentType ?? "application/octet-stream",
-              // key 带 id，内容不会变 —— 可以直接常年缓存
-              "cache-control": "public, max-age=31536000, immutable",
-              etag: obj.httpEtag,
-              // SVG 是**租户提供的内容**：直接打开时不许它跑脚本、不许回连
-              "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
-              "x-content-type-options": "nosniff",
-            },
-          });
-        }
-
-        /**
-         * 改一句话说明。只动元数据：id、字节、路径都不变，已发布的版本不受影响。
-         * 租户在素材库里补一句"这张是主界面截图"，AI 下次排版才知道该放哪。
-         */
-        if (request.method === "PATCH") {
-          let body: Record<string, unknown> = {};
-          try {
-            body = (await request.json()) as Record<string, unknown>;
-          } catch {
-            return json({ error: "invalid_body", message: "body 必须是 JSON" }, 400);
-          }
-          if (typeof body.description !== "string") {
-            return json({ error: "description_required", message: "description 必须是字符串" }, 400);
-          }
-          const edited = await updateSiteAssetDescription(
-            env,
-            scoped.tenantId,
-            id,
-            body.description,
-          );
-          if (!edited) return json({ error: "asset_not_found" }, 404);
-          return json({ ok: true, id, description: body.description.slice(0, 200) });
-        }
-
+        const key = stagingKey(scoped.tenantId, uploadId, path);
         if (request.method === "DELETE") {
-          const deleted = await deleteSiteAsset(env, scoped.tenantId, id);
-          if (!deleted) return json({ error: "asset_not_found" }, 404);
+          await env.SITES?.delete(key);
           return json({ ok: true });
         }
 
-        return json({ error: "method_not_allowed" }, 405);
+        const declared = Number(request.headers.get("content-length") ?? 0);
+        if (declared > TPL_LIMITS.fileBytes) {
+          return json(
+            { error: "site_bundle_too_large", message: `${path} 超过单文件上限 ${TPL_LIMITS.fileBytes} 字节` },
+            413,
+          );
+        }
+        if (!request.body) return json({ error: "site_staged_empty" }, 400);
+        const obj = await env.SITES?.put(key, request.body, {
+          httpMetadata: { contentType: contentTypeOfPath(path) },
+        });
+        if (!obj) return json({ error: "r2_not_configured" }, 503);
+        return json({ ok: true, path, bytes: obj.size }, 201);
       }
 
       if (url.pathname.startsWith("/api/admin")) {

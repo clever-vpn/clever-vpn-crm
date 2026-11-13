@@ -42,14 +42,13 @@ export interface SiteSourceOut {
   sha: string;
   engine: string;
   contract: number;
-  files: SourceFileOut[];
   /**
-   * `路径 → asset id`：哪些文件是**素材物化**来的。
+   * 全部文件（文本 + 图片），`content_b64` 是字节。
    *
-   * studio 重置草稿时用它把指针还原（字节不进草稿，契约 `site-assets.md` §1）。
-   * 没有素材时这个字段不出现 —— 别让老客户端去处理一个空对象。
+   * 2026-11-13 起不再有 `assets` 映射：图片就是文件，重建草稿时按路径写回去即可，
+   * 不需要"把指针还原"这一步。
    */
-  assets?: Record<string, string>;
+  files: SourceFileOut[];
 }
 
 const b64 = (bytes: Uint8Array): string => {
@@ -64,7 +63,7 @@ const toBytes = (body: Uint8Array | string): Uint8Array =>
 /** 把一组 `{path, bytes}` 打包成对外形状，并用**发布时同一个算法**算 sha */
 async function pack(
   origin: SourceOrigin,
-  raw: { path: string; body: ArrayBuffer; assetId?: string }[],
+  raw: { path: string; body: ArrayBuffer }[],
 ): Promise<SiteSourceOut | null> {
   if (raw.length === 0) return null;
   const files = raw.map((f) => ({ path: f.path, body: new Uint8Array(f.body) }));
@@ -81,16 +80,12 @@ async function pack(
     content_b64: b64(byPath.get(entry.path) ?? new Uint8Array(0)),
   }));
 
-  const assets: Record<string, string> = {};
-  for (const f of raw) if (f.assetId) assets[f.path] = f.assetId;
-
   return {
     source: origin,
     sha,
     engine: ENGINE_ID,
     contract: SITE_CONTRACT,
     files: out,
-    ...(Object.keys(assets).length > 0 ? { assets } : {}),
   };
 }
 
