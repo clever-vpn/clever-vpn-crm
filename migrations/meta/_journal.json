@@ -127,6 +127,13 @@
       "when": 1794497562744,
       "tag": "0017_hesitant_silk_fever",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1794530718918,
+      "tag": "0018_fancy_leper_queen",
+      "breakpoints": true
     }
   ]
 }
