@@ -16,6 +16,7 @@
  */
 
 import type { Env } from "../env";
+import { imageSizeOf } from "./image-size";
 
 export const ASSET_LIMITS = {
   /** 单个文件上限。图标/logo/配图都远用不到 2 MB（相机原图请在浏览器侧先压） */
@@ -43,6 +44,9 @@ export interface SiteAsset {
   sha256: string;
   /** 一句话说明（给 AI 与界面看）；空串 = 还没写 */
   description: string;
+  /** 像素宽高；0 = 这个文件没解出尺寸（坏文件 / 不支持的格式） */
+  width: number;
+  height: number;
   created_at: string;
 }
 
@@ -73,13 +77,15 @@ const rowToAsset = (r: Record<string, unknown>): SiteAsset => ({
   bytes: Number(r.bytes ?? 0),
   sha256: String(r.sha256),
   description: String(r.description ?? ""),
+  width: Number(r.width ?? 0),
+  height: Number(r.height ?? 0),
   created_at: String(r.created_at ?? ""),
 });
 
 /** 列出租户的资产（软删除的不列），新的在前 */
 export async function listSiteAssets(env: Env, tenantId: string): Promise<SiteAsset[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, kind, name, mime, bytes, sha256, description, created_at FROM site_assets
+    `SELECT id, kind, name, mime, bytes, sha256, description, width, height, created_at FROM site_assets
       WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC`,
   )
     .bind(tenantId)
@@ -94,7 +100,7 @@ export async function getSiteAsset(
   id: string,
 ): Promise<SiteAsset | null> {
   const row = await env.DB.prepare(
-    `SELECT id, kind, name, mime, bytes, sha256, description, created_at FROM site_assets
+    `SELECT id, kind, name, mime, bytes, sha256, description, width, height, created_at FROM site_assets
       WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL`,
   )
     .bind(tenantId, id)
@@ -158,6 +164,8 @@ export async function putSiteAsset(
   const id = newId();
   const sha256 = await sha256Hex(input.bytes);
   const createdAt = new Date().toISOString();
+  // 从文件头读宽高：失败就是 0（坏文件不该让上传失败，AI 只是少一个提示）
+  const size = imageSizeOf(input.bytes, mime);
 
   await env.SITES.put(r2Key(tenantId, id, mime), input.bytes, {
     httpMetadata: { contentType: mime, cacheControl: "public, max-age=31536000, immutable" },
@@ -172,11 +180,13 @@ export async function putSiteAsset(
     bytes: input.bytes.byteLength,
     sha256,
     description: String(input.description ?? "").slice(0, 200),
+    width: size?.width ?? 0,
+    height: size?.height ?? 0,
     created_at: createdAt,
   };
   await env.DB.prepare(
-    `INSERT INTO site_assets (id, tenant_id, kind, name, mime, bytes, sha256, description, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO site_assets (id, tenant_id, kind, name, mime, bytes, sha256, description, width, height, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       asset.id,
@@ -187,6 +197,8 @@ export async function putSiteAsset(
       asset.bytes,
       asset.sha256,
       asset.description,
+      asset.width,
+      asset.height,
       createdAt,
     )
     .run();
