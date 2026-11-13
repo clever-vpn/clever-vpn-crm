@@ -195,7 +195,8 @@ p { margin: 0 0 14px; }
 .hero .lead { font-size: 17px; max-width: 46ch; margin-bottom: 0; }
 .hero .art { display: none; }
 @media (min-width: 880px) { .hero .art { display: block; } }
-.hero .art svg { width: 100%; height: auto; display: block; }
+.hero .art svg,
+.hero .art img { width: 100%; height: auto; display: block; border-radius: 18px; }
 
 /* 一排"事实"，不是编造的数字 */
 .facts { display: grid; gap: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); }

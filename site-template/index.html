@@ -13,12 +13,7 @@
     <header class="site">
       <div class="wrap bar">
         <a class="brand" href="index.html">
-          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
-            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
-                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
-            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
-          </svg>
+          <img class="mark" src="assets/logo.png" alt="" width="26" height="26" />
           <span>{{site.name}}</span>
         </a>
         <nav>
@@ -44,27 +39,8 @@
             </div>
           </div>
           <div class="art" aria-hidden="true">
-            <!-- 只有品牌色参与：换主色，插画跟着变，不需要租户找图 -->
-            <svg viewBox="0 0 360 300" fill="none">
-              <defs>
-                <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stop-color="var(--brand)" stop-opacity=".18" />
-                  <stop offset="1" stop-color="var(--brand)" stop-opacity=".02" />
-                </linearGradient>
-              </defs>
-              <rect x="26" y="24" width="308" height="252" rx="22" fill="url(#g1)" />
-              <circle cx="180" cy="150" r="82" stroke="var(--brand)" stroke-opacity=".38" stroke-width="1.5" />
-              <circle cx="180" cy="150" r="54" stroke="var(--brand)" stroke-opacity=".22" stroke-width="1.2" />
-              <ellipse cx="180" cy="150" rx="82" ry="30" stroke="var(--brand)" stroke-opacity=".22" stroke-width="1.2" />
-              <ellipse cx="180" cy="150" rx="30" ry="82" stroke="var(--brand)" stroke-opacity=".22" stroke-width="1.2" />
-              <path d="M40 232c34-46 74-46 108-20s70 22 104-16" stroke="var(--brand)" stroke-width="2"
-                    stroke-linecap="round" stroke-opacity=".55" />
-              <circle cx="180" cy="150" r="13" fill="var(--brand)" />
-              <path d="M184 143l-11 11h8l-4 12 11-13h-8l4-10Z" fill="#fff" />
-              <circle cx="40" cy="232" r="5" fill="var(--brand)" />
-              <circle cx="252" cy="196" r="5" fill="var(--brand)" stroke-opacity=".6" />
-              <circle cx="98" cy="86" r="4" fill="var(--brand)" stroke-opacity=".45" />
-            </svg>
+            <!-- 占位图：换主色不会跟变，租户可以直接替换 assets/hero.png -->
+            <img src="assets/hero.png" alt="" width="720" height="600" />
           </div>
         </div>
       </section>
