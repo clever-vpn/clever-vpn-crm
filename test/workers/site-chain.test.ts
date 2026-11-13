@@ -17,6 +17,7 @@ import { exports as rawExports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { env as testEnv } from "./apply-migrations";
+import { ASSET_LIMITS } from "../../src/site/assets";
 import { handleStudioTicket } from "../../src/site/studio-ticket";
 import type { Env } from "../../src/env";
 
@@ -262,8 +263,12 @@ describe("站点资产（/api/site/assets）", () => {
 
     const list = (await (await siteCall("/api/site/assets", token)).json()) as {
       assets: { id: string }[];
+      limit: number;
     };
     expect(list.assets.map((a) => a.id)).toEqual([asset.id]);
+    // 配额上限一起回：界面上要显示「已用 N / 40 张」，配额只有服务端这一个权威
+    expect(list.limit).toBe(ASSET_LIMITS.perTenant);
+    expect(list.limit).toBe(40);
 
     const fetched = await siteCall(`/api/site/assets/${asset.id}`, token);
     expect(fetched.status).toBe(200);
