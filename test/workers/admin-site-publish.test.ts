@@ -65,7 +65,7 @@ const hex = async (text: string): Promise<string> => {
 const PAGE = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>t</title></head><body><h1>工作室那一版</h1></body></html>';
 
 /** 走 studio 的路发布一版（`/api/site/publish` 带 files，一次完成） */
-async function publishViaStudio(): Promise<number> {
+async function publishViaStudio(): Promise<{ seq: number; public_url: string | null }> {
   (testEnv as unknown as Record<string, unknown>).APP_SECRET = "admin-site-test-key";
   const token = (await issueSiteAccess(testEnv as never, TENANT))!;
   const settings = await readSiteSettings(testEnv as never);
@@ -88,8 +88,8 @@ async function publishViaStudio(): Promise<number> {
     }),
   );
   expect(res.status, "发布应成功").toBe(200);
-  const body = (await res.json()) as { seq: number };
-  return body.seq;
+  const body = (await res.json()) as { seq: number; public_url?: string | null };
+  return { seq: body.seq, public_url: body.public_url ?? null };
 }
 
 beforeAll(async () => {
@@ -193,5 +193,31 @@ describe("回滚", () => {
     const res = await call("/api/admin/site/rollback", { method: "POST", body: { version: 99 } });
     expect(res.status).toBe(404);
     expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
+  });
+});
+
+/**
+ * `public_url` = **站点对外地址**（契约 §6.4），studio 拿它给租户一个
+ * 「点开看线上」的链接。它**不是** CRM 的 origin —— 那个地址打开的是后台。
+ */
+describe("public_url（站点对外地址）", () => {
+  const setSiteUrl = (value: string) => {
+    (testEnv as unknown as Record<string, unknown>).SITE_URL = value;
+  };
+
+  it("没配 SITE_URL ⇒ null（绝不回 CRM 自己的 origin）", async () => {
+    setSiteUrl("");
+    const body = await publishViaStudio();
+    expect(body.public_url).toBeNull();
+  });
+
+  it("配了 SITE_URL ⇒ 去掉尾斜杠后原样给出", async () => {
+    setSiteUrl("https://acme.example/");
+    try {
+      const body = await publishViaStudio();
+      expect(body.public_url).toBe("https://acme.example");
+    } finally {
+      setSiteUrl("");
+    }
   });
 });
