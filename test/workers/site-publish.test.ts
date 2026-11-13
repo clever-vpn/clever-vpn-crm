@@ -136,6 +136,42 @@ describe("发布", () => {
     ).not.toBeNull();
   });
 
+  /**
+   * 幂等的边界：**只认最新那一版**。
+   *
+   * 场景来自实测：站点改回三天前的样子再发布 —— 那是一次**新**发布，必须产生新
+   * 版本并把指针挪过去。早先按 `idem_key` 全表查，会命中旧那一行，接口回 200 +
+   * 旧 seq、指针不动 ⇒ 界面"发布成功"而线上没变。更糟的是那一版若引用了已删的
+   * 素材，草稿每次重建都会还原那个死指针，站点就此发不出去。
+   */
+  it("改回旧内容再发 ⇒ 是新版本，不是幂等命中（指针要跟着动）", async () => {
+    const first = await sourceOf({ "index.html": "<!doctype html><h1>第一版</h1>" });
+    const second = await sourceOf({ "index.html": "<!doctype html><h1>第二版</h1>" });
+
+    // studio 传的 idem_key 就是内容 sha：内容一样 ⇒ 键一样
+    const A = "sha256:content-a";
+    const B = "sha256:content-b";
+
+    const a = await publishSite(env, TENANT, { sourceSha: first, idemKey: A, apiBase: BASE });
+    const b = await publishSite(env, TENANT, { sourceSha: second, idemKey: B, apiBase: BASE });
+    expect(a).toMatchObject({ ok: true, version: 1, idempotent: false });
+    expect(b).toMatchObject({ ok: true, version: 2, idempotent: false });
+
+    // 同一份内容连发两次 ⇒ 第二次才是幂等
+    const dup = await publishSite(env, TENANT, { sourceSha: second, idemKey: B, apiBase: BASE });
+    expect(dup).toMatchObject({ ok: true, version: 2, idempotent: true });
+
+    // 退回第一版：内容虽然和 v1 一样，但要成为 v3 —— 否则线上还停在第二版
+    const back = await publishSite(env, TENANT, { sourceSha: first, idemKey: A, apiBase: BASE });
+    expect(back).toMatchObject({ ok: true, version: 3, idempotent: false });
+    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 3 });
+    expect(
+      await (
+        await SITES.get(`sites/${TENANT}/versions/3/public/index.html`)
+      )?.text(),
+    ).toContain("第一版");
+  });
+
   it("源包内容没了 ⇒ 明确报错，指针不动", async () => {
     const sha = await sourceOf();
     await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });

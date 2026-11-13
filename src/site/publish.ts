@@ -266,15 +266,22 @@ export async function publishSite(
   const sha = wanted || latest?.sourceSha || seed;
 
   // ── 2) 幂等：同键直接返回已有版本（不新增、不重写字节）────────────────
+  //
+  //   **只认最新那一版**。幂等说的是"同一个请求重复提交"，不是"内容等于历史上
+  //   某一版"：租户把站点改回三天前的样子再发布，是**一次新的发布**，该产生新
+  //   版本并把指针挪过去。早先按 `idem_key` 全表查，改回旧内容会命中旧那一行
+  //   —— 于是接口回 200 + 旧 seq、指针不动，界面上"发布成功"而线上没变；更糟的
+  //   是那一版如果引用了已删的素材（`asset_unavailable`），站点就此卡死：草稿
+  //   每次重建都还原那个死指针，怎么发都发不出去。
   const idemKey = (input.idemKey ?? "").trim();
   if (idemKey) {
     const hit = await env.DB.prepare(
       `SELECT seq, source_sha, artifact_sha, seed_sha, files, bytes FROM site_releases
-        WHERE tenant_id = ? AND idem_key = ? LIMIT 1`,
+        WHERE tenant_id = ? AND idem_key = ? ORDER BY seq DESC LIMIT 1`,
     )
       .bind(tenantId, idemKey)
       .first<Record<string, unknown>>();
-    if (hit) {
+    if (hit && (!latest || Number(hit.seq) === Number(latest.seq))) {
       return {
         ok: true,
         version: Number(hit.seq),

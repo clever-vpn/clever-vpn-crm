@@ -28,6 +28,7 @@ import { SAMPLE_PLANS_RAW, sampleDataOf } from "./site/sample";
 import { latestRelease, publishSite } from "./site/publish";
 import { storeSource } from "./site/source";
 import {
+  ASSET_LIMITS,
   deleteSiteAsset,
   listSiteAssets,
   putSiteAsset,
@@ -377,7 +378,11 @@ export default {
 
         if (url.pathname === "/api/site/assets") {
           if (request.method === "GET") {
-            return json({ assets: await listSiteAssets(env, scoped.tenantId) });
+            // limit 一起回：界面要显示「已用 N / 40 张」，配额只有一个权威（这里）
+            return json({
+              assets: await listSiteAssets(env, scoped.tenantId),
+              limit: ASSET_LIMITS.perTenant,
+            });
           }
           if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
