@@ -466,17 +466,22 @@ describe("发布：把设置烘焙进产物", () => {
 });
 
 /**
- * 资产指纹（契约 `site-assets.md` §3）：`assets/` 下的二进制按内容改名，文本引用一起改写。
+ * 图片的路径**就是 URL**（2026-11-13 起）。
  *
- * 这件事做错会静默出事：
- *   · 只改名不改引用 ⇒ 线上图片全 404；
- *   · 只改引用不改名 ⇒ 换图后老访客永远看不到新图（文件名没变，缓存认旧的）。
+ * 早先发布时会按内容把 `assets/logo.png` 改成 `assets/logo.9f2c1a8b.png` 并把
+ * HTML / CSS 里的引用一起改写。代价是"租户看到的路径"和"线上地址"不一致，发布
+ * 还要多一趟改写 —— 对一个品牌站十来张图来说不值。
+ *
+ * 现在这条要盯住两件事：
+ *   · 产物里**还是那个路径**（否则租户按路径取图会 404）；
+ *   · 文本引用**不被改动**（否则两处路径漂移，改完这一版下版就找不到了）。
+ * 缓存失效靠 `must-revalidate` + ETag（见 `workers/site`），不再靠换文件名。
  */
-describe("资产指纹", () => {
+describe("图片路径即 URL", () => {
   const PNG_A = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
   const PNG_B = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9]);
 
-  async function publishWith(png: Uint8Array) {
+  async function publishWith(png: Uint8Array): Promise<number> {
     const stored = await storeSource(env, [
       { path: "index.html", body: '<!doctype html><img src="assets/logo.png">' },
       { path: "assets/site.css", body: ".hero{background:url(assets/logo.png)}" },
@@ -486,48 +491,35 @@ describe("资产指纹", () => {
     const res = await publishSite(env, TENANT, {
       sourceSha: stored.sha,
       apiBase: BASE,
-      idemKey: `fp-${Date.now()}-${Math.random()}`,
+      idemKey: `path-${Date.now()}-${Math.random()}`,
     });
     if (!res.ok) throw new Error(res.message);
     return res.version;
   }
 
-  it("改名 + 改写引用 + 产物里只有改名后的那份", async () => {
+  it("产物里路径不变、引用不改写", async () => {
     const version = await publishWith(PNG_A);
     const prefix = `sites/${TENANT}/versions/${version}/public/`;
 
     const listed = await SITES.list({ prefix: `${prefix}assets/` });
-    const keys = listed.objects.map((o) => o.key.slice(prefix.length));
-    // 原路径不在了，只有带指纹的那份
-    expect(keys).not.toContain("assets/logo.png");
-    const fingerprinted = keys.find((k) => /^assets\/logo\.[0-9a-f]{8}\.png$/.test(k));
-    expect(fingerprinted, keys.join(",")).toBeTruthy();
+    const keys = listed.objects.map((o) => o.key.slice(prefix.length)).sort();
+    expect(keys).toEqual(["assets/logo.png", "assets/site.css"]);
 
     const html = await (await SITES.get(`${prefix}index.html`))!.text();
-    expect(html).toContain(`src="${fingerprinted}"`);
-    expect(html).not.toContain('src="assets/logo.png"');
+    expect(html).toContain('src="assets/logo.png"');
 
-    // CSS 里的 url() 也要一起改写，否则背景图 404
     const css = await (await SITES.get(`${prefix}assets/site.css`))!.text();
-    expect(css).toContain(`url(${fingerprinted})`);
+    expect(css).toContain("url(assets/logo.png)");
   });
 
-  it("同一份内容重发 ⇒ 同一个指纹名；改了字节 ⇒ 名字变（缓存自然失效）", async () => {
-    const nameOf = async (version: number, prefixPath = "assets/") => {
-      const listed = await SITES.list({
-        prefix: `sites/${TENANT}/versions/${version}/public/${prefixPath}`,
-      });
-      return listed.objects
-        .map((o) => o.key)
-        .filter((k) => /\.png$/.test(k))
-        .map((k) => k.slice(k.lastIndexOf("/") + 1));
-    };
-
+  it("改了字节 ⇒ 新版本里是**同一个路径**的新字节（靠 revalidate 生效）", async () => {
     const v1 = await publishWith(PNG_A);
-    const v2 = await publishWith(PNG_A);
-    expect(await nameOf(v2)).toEqual(await nameOf(v1));
-
-    const v3 = await publishWith(PNG_B);
-    expect(await nameOf(v3)).not.toEqual(await nameOf(v1));
+    const v2 = await publishWith(PNG_B);
+    const read = async (version: number) =>
+      new Uint8Array(
+        await (await SITES.get(`sites/${TENANT}/versions/${version}/public/assets/logo.png`))!.arrayBuffer(),
+      );
+    expect(Array.from(await read(v1))).toEqual(Array.from(PNG_A));
+    expect(Array.from(await read(v2))).toEqual(Array.from(PNG_B));
   });
 });

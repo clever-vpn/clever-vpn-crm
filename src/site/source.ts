@@ -41,17 +41,17 @@ export const TPL_LIMITS = {
   files: 1000,
 } as const;
 
+/**
+ * 源包里的一个文件。
+ *
+ * **文本和图片是同一种东西**：路径 + 字节。2026-11-13 之前素材还有独立的
+ * id 与指针（契约旧版 `site-assets.md`），那套东西带来的全是"悬空指针""在用
+ * 不许删""重置要还原"之类的边角问题 —— 而现在它们就是文件，跟 `site.css` 一样。
+ */
 export interface SourceFileInput {
   /** 包内相对路径：`index.html`、`assets/site.css`（不允许绝对路径与 `..`） */
   path: string;
   body: Uint8Array | string;
-  /**
-   * 这个文件是**素材物化**来的（原指针的 id）。
-   *
-   * 记在 R2 对象元数据里，是为了"重置草稿"能把它还原成指针：源包里存的是字节，
-   * 但草稿只认指针（契约 `site-assets.md` §1）。不记的话，重置一次租户的图就全丢了。
-   */
-  assetId?: string;
 }
 
 export interface SourceEntry {
@@ -161,7 +161,7 @@ const TEXT_EXT = new Set([
   "webmanifest",
 ]);
 
-const contentTypeOf = (path: string): string => {
+export const contentTypeOfPath = (path: string): string => {
   const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
   const map: Record<string, string> = {
     html: "text/html; charset=utf-8",
@@ -210,12 +210,8 @@ export async function storeSource(
     const key = `${prefix}${file.path}`;
     if (have.has(key)) continue;
     await sites.put(key, toBytes(file.body), {
-      httpMetadata: { contentType: contentTypeOf(file.path) },
-      customMetadata: {
-        source_sha: sha,
-        // 素材物化来的文件带上原指针：重置草稿时按它还原，图不会凭空消失
-        ...(file.assetId ? { asset_id: file.assetId } : {}),
-      },
+      httpMetadata: { contentType: contentTypeOfPath(file.path) },
+      customMetadata: { source_sha: sha },
     });
   }
 
@@ -226,26 +222,22 @@ export async function storeSource(
 export async function readSource(
   env: Env,
   sha: string,
-): Promise<{ path: string; body: ArrayBuffer; assetId?: string }[]> {
+): Promise<{ path: string; body: ArrayBuffer }[]> {
   const sites = env.SITES;
   if (!sites) return [];
   const prefix = `${tplPrefix(sha)}${FILES_PREFIX}`;
-  // `include: ['customMetadata']`：素材指针记在那里，少一次 head 请求
   const listed = await sites.list({
     prefix,
     limit: Math.min(TPL_LIMITS.files, 1000),
-    include: ["customMetadata"],
   });
-  const out: { path: string; body: ArrayBuffer; assetId?: string }[] = [];
+  const out: { path: string; body: ArrayBuffer }[] = [];
   for (const object of listed.objects) {
     if (object.key.endsWith("/")) continue;
     const got = await sites.get(object.key);
     if (!got) continue;
-    const assetId = object.customMetadata?.asset_id ?? got.customMetadata?.asset_id;
     out.push({
       path: object.key.slice(prefix.length),
       body: await got.arrayBuffer(),
-      ...(assetId ? { assetId } : {}),
     });
   }
   return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));

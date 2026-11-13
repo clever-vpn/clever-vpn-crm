@@ -17,7 +17,10 @@ import { exports as rawExports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { env as testEnv } from "./apply-migrations";
-import { ASSET_LIMITS } from "../../src/site/assets";
+import { ENGINE_ID } from "../../src/site/engine.generated";
+import { SITE_CONTRACT } from "../../src/site/meta";
+import { artifactShaOf } from "../../src/site/deliver";
+import { buildScope, readSiteSettings } from "../../src/site/settings";
 import { handleStudioTicket } from "../../src/site/studio-ticket";
 import type { Env } from "../../src/env";
 
@@ -228,87 +231,110 @@ describe("设置可写（设计器 → CRM）", () => {
 });
 
 /**
- * 站点资产：同一枚 `sacc_` 走 HTTP 存 / 列 / 取 / 删。
+ * 站点图片：**路径 + 字节**，跟 `site.css` 同一种东西。
  *
- * 这一层要证明的是**边界**，不是"函数能跑"：没 token 不能碰、别的租户不能碰、
- * 取回来的是字节且带正确的类型，删掉之后列表和单条都消失。
+ * 2026-11-13 之前这里是"素材实体"（`id` + 指针 + 软删除 + 张数配额），边角问题
+ * 一堆：悬空指针、在用不许删、重置要还原。现在只有两条要证明的事：
+ *
+ *   1. 字节能按路径暂存（`PUT /api/site/staging`），发布时只带 `{path, staged:true}`；
+ *   2. 产物里**还是那个路径**（不改名），所以"路径就是 URL"。
  */
-describe("站点资产（/api/site/assets）", () => {
-  const PAYLOAD = "\x89PNG\r\n\x1a\n" + "asset-bytes";
-  const png64 = () => btoa(PAYLOAD);
+describe("站点图片（路径 + 字节）", () => {
+  const PNG = "\x89PNG\r\n\x1a\n" + "asset-bytes";
+  const PAGE_WITH_IMG =
+    '<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>t</title></head>' +
+    '<body><h1>图</h1><img src="assets/logo.png" alt="logo"></body></html>';
+  const UPLOAD = "up0123456789abcdef";
 
-  const upload = (token: string, body: Record<string, unknown>) =>
+  const staging = (token: string, path: string, body: string, upload = UPLOAD) =>
     worker.default.fetch(
-      new Request("https://t-beta.clever-panel.win/api/site/assets", {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }),
+      new Request(
+        `https://t-beta.clever-panel.win/api/site/staging?upload=${upload}&path=${encodeURIComponent(path)}`,
+        {
+          method: "PUT",
+          headers: { authorization: `Bearer ${token}`, "content-type": "image/png" },
+          body,
+        },
+      ),
     );
 
   beforeEach(async () => {
-    await testEnv.DB.prepare("DELETE FROM site_assets").run();
-    const listed = await SITES.list({ prefix: "assets/" });
+    const listed = await SITES.list({ prefix: "staging/" });
     for (const o of listed.objects) await SITES.delete(o.key);
   });
 
-  it("上传 → 列表 → 取字节 → 删除，一条链跑通", async () => {
+  it("暂存字节 → 发布 → 产物里就是那个路径（不改名）", async () => {
     const token = await enter();
 
-    const created = await upload(token, { kind: "logo", name: "logo.png", mime: "image/png", content_b64: png64() });
-    expect(created.status).toBe(201);
-    const asset = (await created.json()) as { id: string; bytes: number; sha256: string };
-    expect(asset.id).toMatch(/^a_[0-9a-f]{12}$/);
-    expect(asset.bytes).toBe(PAYLOAD.length);
+    const staged = await staging(token, "assets/logo.png", PNG);
+    expect(staged.status).toBe(201);
+    expect(((await staged.json()) as { bytes: number }).bytes).toBe(new TextEncoder().encode(PNG).length);
 
-    const list = (await (await siteCall("/api/site/assets", token)).json()) as {
-      assets: { id: string }[];
-      limit: number;
+    const settings = await readSiteSettings(envOf());
+    const artifact = await artifactShaOf(
+      [{ path: "index.html", text: PAGE_WITH_IMG }],
+      buildScope(settings, "我的站点"),
+    );
+    const b64 = (text: string) => {
+      const bytes = new TextEncoder().encode(text);
+      let bin = "";
+      for (const byte of bytes) bin += String.fromCharCode(byte);
+      return btoa(bin);
     };
-    expect(list.assets.map((a) => a.id)).toEqual([asset.id]);
-    // 配额上限一起回：界面上要显示「已用 N / 40 张」，配额只有服务端这一个权威
-    expect(list.limit).toBe(ASSET_LIMITS.perTenant);
-    expect(list.limit).toBe(40);
+    const hexOf = async (text: string) => {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+      return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    };
 
-    const fetched = await siteCall(`/api/site/assets/${asset.id}`, token);
-    expect(fetched.status).toBe(200);
-    expect(fetched.headers.get("content-type")).toBe("image/png");
-    // SVG 是租户内容：直接打开时不许跑脚本
-    expect(fetched.headers.get("content-security-policy")).toContain("default-src 'none'");
-    expect(new Uint8Array(await fetched.arrayBuffer()).byteLength).toBe(PAYLOAD.length);
-
-    const deleted = await worker.default.fetch(
-      new Request(`https://t-beta.clever-panel.win/api/site/assets/${asset.id}`, {
-        method: "DELETE",
-        headers: { authorization: `Bearer ${token}` },
+    const res = await worker.default.fetch(
+      new Request("https://t-beta.clever-panel.win/api/site/publish", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          trigger: "studio",
+          upload: UPLOAD,
+          manifest: {
+            engine: ENGINE_ID,
+            contract: SITE_CONTRACT,
+            signoff: { by: "tenant:0", at: new Date().toISOString() },
+            preview: { artifact_sha256: artifact.sha },
+            files: [
+              { path: "index.html", sha256: await hexOf(PAGE_WITH_IMG), bytes: new TextEncoder().encode(PAGE_WITH_IMG).length },
+              { path: "assets/logo.png", sha256: await hexOf(PNG), bytes: new TextEncoder().encode(PNG).length },
+            ],
+          },
+          files: [
+            { path: "index.html", content_b64: b64(PAGE_WITH_IMG) },
+            { path: "assets/logo.png", staged: true },
+          ],
+        }),
       }),
     );
-    expect(deleted.status).toBe(200);
-    expect((await siteCall(`/api/site/assets/${asset.id}`, token)).status).toBe(404);
-    expect(((await (await siteCall("/api/site/assets", token)).json()) as { assets: unknown[] }).assets).toHaveLength(0);
+    expect(res.status, await res.clone().text()).toBe(200);
+    const { seq } = (await res.json()) as { seq: number };
+
+    // 产物里的路径与草稿一致：`assets/logo.png`，没有指纹后缀
+    const obj = await SITES.get(`sites/${TENANT}/versions/${seq}/public/assets/logo.png`);
+    expect(obj).not.toBeNull();
+    expect(new Uint8Array(await obj!.arrayBuffer()).byteLength).toBe(new TextEncoder().encode(PNG).length);
+    // 页面里的引用也没被改写
+    const html = await SITES.get(`sites/${TENANT}/versions/${seq}/public/index.html`);
+    expect(await html!.text()).toContain("assets/logo.png");
   });
 
-  it("没 token 401；别的租户拿不到、也删不掉", async () => {
+  it("暂存要凭据；坏路径 / 坏类型 / 坏批次号都被拦", async () => {
     const token = await enter();
-    const created = (await (
-      await upload(token, { mime: "image/png", content_b64: png64() })
-    ).json()) as { id: string };
 
     const bare = await worker.default.fetch(
-      new Request("https://t-beta.clever-panel.win/api/site/assets"),
+      new Request("https://t-beta.clever-panel.win/api/site/staging?upload=up0123456789abcdef&path=assets/a.png", {
+        method: "PUT",
+        body: PNG,
+      }),
     );
     expect(bare.status).toBe(401);
 
-    const { issueSiteAccess } = await import("../../src/site/access");
-    const foreign = (await issueSiteAccess(envOf(), "999"))!;
-    expect((await siteCall(`/api/site/assets/${created.id}`, foreign)).status).toBe(401);
-  });
-
-  it("不支持的类型被拦，且不落行", async () => {
-    const token = await enter();
-    const res = await upload(token, { mime: "application/pdf", content_b64: png64() });
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toBe("asset_mime_unsupported");
-    expect(((await (await siteCall("/api/site/assets", token)).json()) as { assets: unknown[] }).assets).toHaveLength(0);
+    expect((await staging(token, "../escape.png", PNG)).status).toBe(400);
+    expect((await staging(token, "assets/app.exe", PNG)).status).toBe(400);
+    expect((await staging(token, "assets/a.png", PNG, "BAD")).status).toBe(400);
   });
 });
