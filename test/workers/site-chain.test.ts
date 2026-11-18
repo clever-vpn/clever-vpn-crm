@@ -311,14 +311,18 @@ describe("站点图片（路径 + 字节）", () => {
       }),
     );
     expect(res.status, await res.clone().text()).toBe(200);
-    const { seq } = (await res.json()) as { seq: number };
+    const { seq, artifact_sha } = (await res.json()) as { seq: number; artifact_sha: string };
+
+    // 产物按内容寻址：目录名是整版 sha（发布返回值给）
+    const art = `art/${artifact_sha.replace(/^sha256:/, "")}/`;
+    expect(seq).toBeGreaterThan(0);
 
     // 产物里的路径与草稿一致：`assets/logo.png`，没有指纹后缀
-    const obj = await SITES.get(`sites/${TENANT}/versions/${seq}/public/assets/logo.png`);
+    const obj = await SITES.get(`${art}assets/logo.png`);
     expect(obj).not.toBeNull();
     expect(new Uint8Array(await obj!.arrayBuffer()).byteLength).toBe(new TextEncoder().encode(PNG).length);
     // 页面里的引用也没被改写
-    const html = await SITES.get(`sites/${TENANT}/versions/${seq}/public/index.html`);
+    const html = await SITES.get(`${art}index.html`);
     expect(await html!.text()).toContain("assets/logo.png");
   });
 

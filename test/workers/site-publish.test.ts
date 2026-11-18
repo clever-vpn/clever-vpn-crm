@@ -1,17 +1,25 @@
 /**
- * 站点发布：`post() → R2 写产物 → D1 记账 → KV 切指针`
+ * 站点发布 / 烘焙：`烘焙（写 art/<sha>/）→ D1 记账 → KV 切指针`
  *
- * 断言的重点不是"函数能跑"，而是**契约里那三条纪律真的成立**：
+ * 断言的重点不是"函数能跑"，而是**契约里那几条纪律真的成立**：
  *
- *   1. **顺序**：指针最后才切。所以发布失败时 KV 里必须还是旧值（线上不受影响）。
- *   2. **版本不可变**：每次发布是一个新 `n`，旧 `n` 的产物一个字节都不动 ——
- *      回滚才有可能。
+ *   1. **顺序**：指针最后才切。所以烘焙/发布失败时 KV 里必须还是旧值（线上不受影响）。
+ *   2. **产物按内容寻址**：`art/<sha>/` 写进去就不再改 —— 同内容只占一份，
+ *      不同内容绝不同目录（设置改了 ⇒ 新 sha）。
  *   3. **L0 闸门在服务端**：studio 可以被绕过，指针一翻就是线上，所以这里必须也拦。
+ *   4. **设置改了不产生版本**：`reprintSite()` 只换指针的 `artifact_sha`。
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
-import { activeKey, lintManifest, publishSite, siteState } from "../../src/site/publish";
+import { lintManifest } from "../../src/site/bake";
+import {
+  activeKey,
+  publishSite,
+  readPointer,
+  reprintSite,
+  siteState,
+} from "../../src/site/publish";
 import { storeSource } from "../../src/site/source";
 import {
   buildScope,
@@ -45,6 +53,14 @@ async function sourceOf(
   if (!stored.ok) throw new Error(stored.message);
   return stored.sha;
 }
+
+/** 产物目录：内容寻址（`art/<sha>/`），sha 由发布/烘焙的返回值给 */
+const artOf = (sha: string): string => `art/${sha.replace(/^sha256:/, "")}/`;
+
+const shaOf = (r: { ok: boolean; artifactSha?: string }): string => {
+  if (!r.ok || !r.artifactSha) throw new Error("发布/烘焙没有产物");
+  return r.artifactSha;
+};
 
 beforeEach(async () => {
   // 每个用例从干净状态开始：清模板、清产物、清指针、清账
@@ -97,43 +113,44 @@ describe("发布", () => {
     const result = await publishSite(env, TENANT, { sourceSha: sha, actor: "admin@test", apiBase: BASE });
     // 2 个模板文件 + 3 个平台文件（config / SDK / 支付回跳页）
     expect(result).toMatchObject({ ok: true, version: 1, files: 5 });
+    const art = artOf(shaOf(result as never));
 
-    // 平台文件随产物发布：两个站点出口（自部署 / 托管）都只是读 R2，
+    // 平台文件随产物烘焙：两个站点出口（自部署 / 托管）都只是读 R2，
     // SDK 只有这一份，不会因为出口实现不同而漂移。
-    const sdk = await SITES.get(
-      `sites/${TENANT}/versions/1/public/_crm/sdk.js`,
-    );
+    const sdk = await SITES.get(`${art}_crm/sdk.js`);
     expect(await sdk?.text()).toContain("window.SiteCrm = SiteCrm");
-    const back = await SITES.get(
-      `sites/${TENANT}/versions/1/public/_crm/return.html`,
-    );
+    const back = await SITES.get(`${art}_crm/return.html`);
     expect(await back?.text()).toContain("支付已提交");
 
-    const html = await SITES.get(
-      `sites/${TENANT}/versions/1/public/index.html`,
-    );
+    const html = await SITES.get(`${art}index.html`);
     expect(await html?.text()).toContain("Hello");
     // 子目录结构必须保留，否则 assets/app.css 会 404
-    expect(
-      await SITES.head(`sites/${TENANT}/versions/1/public/assets/app.css`),
-    ).not.toBeNull();
+    expect(await SITES.head(`${art}assets/app.css`)).not.toBeNull();
 
-    // 指针是 site-serve 读的那把 key，值形状必须是 { n }
-    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
+    // 指针 = { 设计版本, 产物 }：`site-serve` 读它，只认 artifact_sha 取文件
+    expect(await readPointer(env, TENANT)).toMatchObject({
+      templateSeq: 1,
+      artifactSha: shaOf(result as never),
+      settingsRev: 0,
+    });
   });
 
-  it("再发一版 ⇒ n=2，且第 1 版原样保留（回滚的前提）", async () => {
+  it("同内容再发一版 ⇒ 版本号 +1，但产物只有一份（内容寻址，不重复占字节）", async () => {
     const sha = await sourceOf();
-    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
-    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    const first = await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    const second = await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
 
-    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 2 });
-    expect(
-      await SITES.head(`sites/${TENANT}/versions/1/public/index.html`),
-    ).not.toBeNull();
-    expect(
-      await SITES.head(`sites/${TENANT}/versions/2/public/index.html`),
-    ).not.toBeNull();
+    expect(second).toMatchObject({ ok: true, version: 2 });
+    // 同样的源包 + 同样的设置 ⇒ 同一个 sha ⇒ 同一个目录
+    expect(shaOf(second as never)).toBe(shaOf(first as never));
+    expect(await SITES.head(`${artOf(shaOf(first as never))}index.html`)).not.toBeNull();
+    expect(await readPointer(env, TENANT)).toMatchObject({ templateSeq: 2 });
+
+    // 两版都在账上（版本号是租户看的数字，与产物去重无关）
+    const rows = await env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM site_releases",
+    ).first<{ c: number }>();
+    expect(rows?.c).toBe(2);
   });
 
   /**
@@ -164,12 +181,11 @@ describe("发布", () => {
     // 退回第一版：内容虽然和 v1 一样，但要成为 v3 —— 否则线上还停在第二版
     const back = await publishSite(env, TENANT, { sourceSha: first, idemKey: A, apiBase: BASE });
     expect(back).toMatchObject({ ok: true, version: 3, idempotent: false });
-    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 3 });
-    expect(
-      await (
-        await SITES.get(`sites/${TENANT}/versions/3/public/index.html`)
-      )?.text(),
-    ).toContain("第一版");
+    expect(await readPointer(env, TENANT)).toMatchObject({ templateSeq: 3 });
+    // 线上的字节 = 第一版（v1 那份产物原样还在，没有被 v2 覆盖过）
+    expect(await (await SITES.get(`${artOf(shaOf(back as never))}index.html`))?.text()).toContain(
+      "第一版",
+    );
   });
 
   it("源包内容没了 ⇒ 明确报错，指针不动", async () => {
@@ -182,7 +198,7 @@ describe("发布", () => {
     const again = await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
     expect(again).toMatchObject({ ok: false, code: "source_missing" });
     // 关键：线上仍是 1，不是"半成品 2"
-    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
+    expect(await readPointer(env, TENANT)).toMatchObject({ templateSeq: 1 });
   });
 
   it("L0 失败 ⇒ 不写产物、不记账、不切指针", async () => {
@@ -190,7 +206,7 @@ describe("发布", () => {
 
     const result = await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
     expect(result).toMatchObject({ ok: false, code: "l0_failed" });
-    expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
+    expect(await readPointer(env, TENANT)).toBeNull();
 
     const rows = await env.DB.prepare(
       "SELECT COUNT(*) AS c FROM site_releases",
@@ -224,17 +240,16 @@ describe("平台文件：发布时写 /_crm/config.js", () => {
   it("三个平台文件都在，config.js 写的是本次发布的 CRM 地址", async () => {
     const sha = await sourceOf();
 
-    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    const r = await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    const art = artOf(shaOf(r as never));
 
-    // 源包里没有 `_crm/`（L0 直接拒），所以这三个只能由发布写
+    // 源包里没有 `_crm/`（L0 直接拒），所以这三个只能由烘焙写
     for (const path of ["_crm/config.js", "_crm/sdk.js", "_crm/return.html"]) {
-      const file = await SITES.get(`sites/${TENANT}/versions/1/public/${path}`);
+      const file = await SITES.get(`${art}${path}`);
       expect(file, path).toBeTruthy();
     }
 
-    const body = (await (
-      await SITES.get(`sites/${TENANT}/versions/1/public/_crm/config.js`)
-    )?.text()) ?? "";
+    const body = (await (await SITES.get(`${art}_crm/config.js`))?.text()) ?? "";
     expect(body).toContain(`window.CRM_API_BASE = ${JSON.stringify(BASE)}`);
   });
 
@@ -246,11 +261,12 @@ describe("平台文件：发布时写 /_crm/config.js", () => {
       "config.js": 'window.CRM_API_BASE = "https://crm.example.com";',
     });
 
-    await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    const r = await publishSite(env, TENANT, { sourceSha: sha, apiBase: BASE });
+    const art = artOf(shaOf(r as never));
 
-    const own = await SITES.get(`sites/${TENANT}/versions/1/public/config.js`);
+    const own = await SITES.get(`${art}config.js`);
     expect((await own?.text()) ?? "").toContain("crm.example.com");
-    const platform = await SITES.get(`sites/${TENANT}/versions/1/public/_crm/config.js`);
+    const platform = await SITES.get(`${art}_crm/config.js`);
     expect((await platform?.text()) ?? "").toContain(BASE);
   });
 
@@ -258,7 +274,7 @@ describe("平台文件：发布时写 /_crm/config.js", () => {
     const sha = await sourceOf();
     const result = await publishSite(env, TENANT, { sourceSha: sha });
     expect(result).toMatchObject({ ok: false, code: "api_base_missing" });
-    expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
+    expect(await readPointer(env, TENANT)).toBeNull();
   });
 });
 
@@ -393,9 +409,7 @@ describe("发布：把设置烘焙进产物", () => {
     const r = await publishSite(env, TENANT, { sourceSha: seed1, apiBase: BASE });
     expect(r.ok).toBe(true);
 
-    const html = await (
-      await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
-    )?.text();
+    const html = await (await SITES.get(`${artOf(shaOf(r as never))}index.html`))?.text();
     expect(html).toContain("<title>Acme VPN</title>");
     expect(html).toContain("<h1>快、稳、不记日志</h1>");
     // 版权行**不再是设置项**：由站名派生（`contract: 7`）
@@ -406,7 +420,7 @@ describe("发布：把设置烘焙进产物", () => {
     const seed2 = await sourceOf({ "index.html": "<h1>{{site.nickname}}</h1>" });
     const r = await publishSite(env, TENANT, { sourceSha: seed2, apiBase: BASE });
     expect(r).toMatchObject({ ok: false, code: "template_token_unknown" });
-    expect(await HOSTS.get(activeKey(TENANT))).toBeNull();
+    expect(await readPointer(env, TENANT)).toBeNull();
   });
 
   it("主题色留空 ⇒ 回落默认色（否则 `--brand: ;` 整份 CSS 失效）", async () => {
@@ -416,10 +430,8 @@ describe("发布：把设置烘焙进产物", () => {
     });
     await saveSiteSettings(env, { values: { site: { name: "Acme" } } });
 
-    await publishSite(env, TENANT, { sourceSha: seed3, apiBase: BASE });
-    const css = await (
-      await SITES.get(`sites/${TENANT}/versions/1/public/site.css`)
-    )?.text();
+    const r = await publishSite(env, TENANT, { sourceSha: seed3, apiBase: BASE });
+    const css = await (await SITES.get(`${artOf(shaOf(r as never))}site.css`))?.text();
     expect(css).toContain("--brand: #4f46e5");
   });
 
@@ -428,23 +440,23 @@ describe("发布：把设置烘焙进产物", () => {
       "index.html":
         '<footer><a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a></footer>',
     });
-
-    await publishSite(env, TENANT, { sourceSha: seed4, apiBase: BASE });
-    let html = await (
-      await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
-    )?.text();
-    expect(html).toContain("<footer></footer>");
-
     await saveSiteSettings(env, {
       values: { site: { name: "Acme", contact_email: "help@acme.test" } },
     });
-    // 只改了设置 ⇒ 源包不变，用同一份重发（这正是 Contract 14 的主路径）
-    await publishSite(env, TENANT, { sourceSha: seed4, apiBase: BASE });
-    html = await (
-      await SITES.get(`sites/${TENANT}/versions/2/public/index.html`)
-    )?.text();
+
+    const r = await publishSite(env, TENANT, { sourceSha: seed4, apiBase: BASE });
+    const html = await (await SITES.get(`${artOf(shaOf(r as never))}index.html`))?.text();
     expect(html).toContain('href="mailto:help@acme.test"');
     expect(html).toContain("联系我们");
+
+    // 清掉邮箱再烘焙：`data-if` 判空 ⇒ 整段链接消失
+    await saveSiteSettings(env, { values: { site: { name: "Acme" } } });
+    const again = await reprintSite(env, TENANT, { apiBase: BASE });
+    expect(again).toMatchObject({ ok: true, baked: true });
+    const html2 = await (
+      await SITES.get(`${artOf((again as { artifactSha: string }).artifactSha)}index.html`)
+    )?.text();
+    expect(html2).toContain("<footer></footer>");
   });
 
   it("设置值过 HTML 转义（站点名里能放引号，不会破坏属性）", async () => {
@@ -455,10 +467,8 @@ describe("发布：把设置烘焙进产物", () => {
       values: { site: { name: '快 <script>不稳</h1>"' } },
     });
 
-    await publishSite(env, TENANT, { sourceSha: seed5, apiBase: BASE });
-    const html = await (
-      await SITES.get(`sites/${TENANT}/versions/1/public/index.html`)
-    )?.text();
+    const r = await publishSite(env, TENANT, { sourceSha: seed5, apiBase: BASE });
+    const html = await (await SITES.get(`${artOf(shaOf(r as never))}index.html`))?.text();
     expect(html).toContain(
       '<h1 title="快 &lt;script&gt;不稳&lt;/h1&gt;&quot;">快 &lt;script&gt;不稳&lt;/h1&gt;&quot;</h1>',
     );
@@ -481,7 +491,7 @@ describe("图片路径即 URL", () => {
   const PNG_A = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
   const PNG_B = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9]);
 
-  async function publishWith(png: Uint8Array): Promise<number> {
+  async function publishWith(png: Uint8Array): Promise<string> {
     const stored = await storeSource(env, [
       { path: "index.html", body: '<!doctype html><img src="assets/logo.png">' },
       { path: "assets/site.css", body: ".hero{background:url(assets/logo.png)}" },
@@ -494,12 +504,11 @@ describe("图片路径即 URL", () => {
       idemKey: `path-${Date.now()}-${Math.random()}`,
     });
     if (!res.ok) throw new Error(res.message);
-    return res.version;
+    return res.artifactSha;
   }
 
   it("产物里路径不变、引用不改写", async () => {
-    const version = await publishWith(PNG_A);
-    const prefix = `sites/${TENANT}/versions/${version}/public/`;
+    const prefix = artOf(await publishWith(PNG_A));
 
     const listed = await SITES.list({ prefix: `${prefix}assets/` });
     const keys = listed.objects.map((o) => o.key.slice(prefix.length)).sort();
@@ -512,14 +521,14 @@ describe("图片路径即 URL", () => {
     expect(css).toContain("url(assets/logo.png)");
   });
 
-  it("改了字节 ⇒ 新版本里是**同一个路径**的新字节（靠 revalidate 生效）", async () => {
-    const v1 = await publishWith(PNG_A);
-    const v2 = await publishWith(PNG_B);
-    const read = async (version: number) =>
-      new Uint8Array(
-        await (await SITES.get(`sites/${TENANT}/versions/${version}/public/assets/logo.png`))!.arrayBuffer(),
-      );
-    expect(Array.from(await read(v1))).toEqual(Array.from(PNG_A));
-    expect(Array.from(await read(v2))).toEqual(Array.from(PNG_B));
+  it("改了字节 ⇒ 新产物里是**同一个路径**的新字节（靠 revalidate 生效）", async () => {
+    const a = await publishWith(PNG_A);
+    const b = await publishWith(PNG_B);
+    // 字节变了 ⇒ 整版 sha 必须变（否则两份内容会撞进同一个 art/ 目录）
+    expect(a).not.toBe(b);
+    const read = async (sha: string) =>
+      new Uint8Array(await (await SITES.get(`${artOf(sha)}assets/logo.png`))!.arrayBuffer());
+    expect(Array.from(await read(a))).toEqual(Array.from(PNG_A));
+    expect(Array.from(await read(b))).toEqual(Array.from(PNG_B));
   });
 });

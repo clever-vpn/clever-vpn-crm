@@ -1,47 +1,32 @@
 /**
- * **发布**：站点源包 → 渲染 → 写 R2 → 记账 → **最后一步**切 KV 指针。
+ * **发布**：把「一份源包 + 当前设置」烘焙成产物，记一个版本号，**最后一步**切 KV 指针。
  *
- * 契约 `site-studio-crm.md` §0.1（Contract 14）：这是**唯一一次跨服务写**。studio
- * 只交源文件，渲染、记账、切指针全在这里 —— 设置是发布时烘焙的，studio 自己渲染会
- * 让"只改设置"发不出去。
+ * 契约 `site-studio-crm.md` §0.1（Contract 16）：
+ *
+ *   · **发布** = 设计交付：有签收、产生版本号（`site_releases` 一行）、切指针。
+ *   · **烘焙** = 用现在的设置把现在这份设计渲染一遍（`src/site/bake.ts`），不记账。
+ *
+ * 设置一改就要重烘焙（`reprintSite`），指针只换 `artifact_sha`，`template_seq` 不动
+ * —— 换一个主色不该占一个设计版本号。回滚反过来：`template_seq` 指回旧设计，
+ * 用**当前**设置重烘焙（设计回滚、身份不回滚）。
  *
  * 四条纪律：
- *  1. **渲染发生在发布时，不在请求时**：`site-serve` 只做「读指针 → 取文件」。
+ *  1. **渲染只发生在烘焙时**：`site-serve` 只做「读指针 → 取 `art/<sha>/` 的文件」。
  *  2. **顺序不可交换**：产物全量写完、发布记录插好，**最后**才切指针。任何一步失败，
  *     线上仍是上一版。
- *  3. **版本不可变**：每次发布是一个新的 `seq`；回滚 = 把指针指回旧 `seq`，
- *     不重建、不经过 studio、不计费。
- *  4. **幂等键 = 源包 sha + 设置 rev**：同内容重复提交返回**已有** `seq`。
- *     版本号是租户唯一看到的数字，双击/重试不许让它跳号。
+ *  3. **产物按内容寻址**：`art/<artifact_sha>/`，写进去就不再改 —— 于是"发布中途失败"
+ *     与"回滚时读到的半新半旧"都不可能发生。
+ *  4. **幂等键 = 渲染后的整版内容**（studio 算的 `contentSha`）：同内容重复提交返回
+ *     **已有** `seq`。版本号是租户唯一看到的数字，双击/重试不许让它跳号。
  *
  * 与 cf-api 的分工：域名/证书/KV 写穿归 cf-api；**站点产物与 active 指针归这里**。
  */
-import { SITE_LIMITS } from "./limits";
-import { renderTemplate } from "./render";
-import { FILES_PREFIX, isTextPath, readSource, seedFiles, seedSha, sourceSha, tplPrefix } from "./source";
-import { artifactShaOf } from "./deliver";
-import { RETURN_HTML, SDK_JS } from "./sdk";
-import { buildScope, readSiteSettings } from "./settings";
+import { bakeSite } from "./bake";
+import { readSiteSettings } from "./settings";
+import { seedSha } from "./source";
 
+import type { BakeResult } from "./bake";
 import type { Env } from "../env";
-
-/** 允许的扩展名：平台产出的静态资源。**没有 `.php` / `.exe` / 无扩展名可执行** */
-export const ALLOWED_EXT = new Set([
-  "html",
-  "css",
-  "js",
-  "json",
-  "txt",
-  "xml",
-  "svg",
-  "png",
-  "jpg",
-  "jpeg",
-  "webp",
-  "ico",
-  "woff2",
-  "map",
-]);
 
 export interface PublishInput {
   /**
@@ -56,7 +41,7 @@ export interface PublishInput {
   /** 谁发起的：`studio` / `crm`（只作审计） */
   trigger?: "studio" | "crm";
   /**
-   * 幂等键：`<source_sha>:<settings.rev>`。
+   * 幂等键：studio 传的 `contentSha`（渲染后的整版内容）。
    *
    * 同一个键重复发布 ⇒ 返回已有 `seq`（`idempotent: true`），不新增版本。
    * 空 = 不判幂等（后台"再发一版"这种显式动作）。
@@ -67,8 +52,8 @@ export interface PublishInput {
   /**
    * 站点调 CRM 的基址（= CRM 自己的 origin）。
    *
-   * **必须由发布方给**：`/_crm/config.js` 在发布时写死它，站点与 CRM 不同域，发上去之后
-   * 没人能改。
+   * **必须由发布方给**：`/_crm/config.js` 在烘焙时写死它，站点与 CRM 不同域，
+   * 发上去之后没人能改。
    */
   apiBase?: string;
 }
@@ -81,7 +66,7 @@ export interface PublishOk {
   bytes: number;
   /** 这次发布的源包 */
   sourceSha: string;
-  /** 渲染后的产物指纹 */
+  /** 这版产物的地址（`art/<sha>/` 的那个 sha） */
   artifactSha: string;
   /** 血缘戳：建站时那个种子 */
   seedSha: string;
@@ -106,74 +91,54 @@ const err = (code: string, message: string, issues?: string[]): PublishErr => ({
   ...(issues ? { issues } : {}),
 });
 
-/** `sites/{tenant}/versions/{n}/public/` —— 与 `workers/site/src/index.ts` 严格一致 */
-export const publicPrefix = (tenantId: string, version: number): string =>
-  `sites/${tenantId}/versions/${version}/public/`;
+/**
+ * 线上指针：**设计是哪一版 + 线上跑的是哪份产物**。
+ *
+ * 两个 sha 各管一件事，合起来才能"设计回滚、身份不回滚"：
+ *   · `template_seq` → `site_releases.seq`（哪一版设计）
+ *   · `artifact_sha` → `art/<sha>/`（哪份烘焙结果，已经带上当时的设置）
+ *
+ * `baked_at` / `settings_rev` 是给后台显示「最后烘焙 …，设置 rev N」用的 ——
+ * 不建表（D5）：它们是这次烘焙的事实，跟着指针走正好。
+ */
+export interface SitePointer {
+  templateSeq: number | null;
+  artifactSha: string;
+  bakedAt: string;
+  settingsRev: number;
+}
 
-const templatePrefix = (template: string, version: string): string =>
-  `g/templates/${template}/${version}/`;
-
-/** 指针 key：`site-serve` 读的就是它，读的是 `{ n }` */
+/** 指针 key：`site-serve` 读的就是它 */
 export const activeKey = (tenantId: string): string => `site:${tenantId}:active`;
 
-/** 需要做占位符替换的类型；其余（png/woff2/ico…）原样透传 */
-const isText = (key: string): boolean =>
-  /[.](html|css|js|json|txt|xml|svg)$/i.test(key);
-const extOf = (key: string): string => {
-  const base = key.slice(key.lastIndexOf("/") + 1);
-  const dot = base.lastIndexOf(".");
-  return dot < 0 ? "" : base.slice(dot + 1).toLowerCase();
-};
+/** 读指针；没发布过就是 `null` */
+export async function readPointer(env: Env, tenantId: string): Promise<SitePointer | null> {
+  if (!env.HOSTS) return null;
+  const raw = (await env.HOSTS.get(activeKey(tenantId), "json")) as Partial<SitePointer> | null;
+  if (!raw || !raw.artifactSha) return null;
+  return {
+    templateSeq: typeof raw.templateSeq === "number" ? raw.templateSeq : null,
+    artifactSha: raw.artifactSha,
+    bakedAt: String(raw.bakedAt ?? ""),
+    settingsRev: Number(raw.settingsRev ?? 0),
+  };
+}
 
-/**
- * L0 闸门（**只判技术有效性**，不判"设计好不好"）。
- *
- * 与 studio 侧共用同一套判据；CRM 这份是服务端最后一道，不能因为前端已经检过就跳过
- * —— studio 可以被绕过，指针一翻就是线上。
- */
-export function lintManifest(
-  files: { key: string; size: number }[],
-): string[] {
-  const issues: string[] = [];
-  if (files.length === 0) issues.push("产物为空");
-  if (files.length > SITE_LIMITS.files) {
-    issues.push(`文件数 ${files.length} 超过上限 ${SITE_LIMITS.files}`);
-  }
+/** 只写指针（**不写审计**）：重烘焙用它，因为设计版本没变 */
+async function writePointer(env: Env, tenantId: string, pointer: SitePointer): Promise<void> {
+  if (!env.HOSTS) return;
+  await env.HOSTS.put(activeKey(tenantId), JSON.stringify(pointer));
+}
 
-  let total = 0;
-  for (const f of files) {
-    total += f.size;
-    if (f.key.includes("..") || f.key.startsWith("/")) {
-      issues.push(`非法路径：${f.key}`);
-    }
-    if (f.size > SITE_LIMITS.fileBytes) {
-      issues.push(
-        `单文件超限：${f.key}（${Math.round(f.size / 1024)} KB > ${
-          SITE_LIMITS.fileBytes / 1024
-        } KB）`,
-      );
-    }
-    const ext = extOf(f.key);
-    if (!ALLOWED_EXT.has(ext)) issues.push(`不允许的文件类型：${f.key}`);
-  }
-  if (total > SITE_LIMITS.totalBytes) {
-    issues.push(
-      `总体积 ${(total / 1024 / 1024).toFixed(1)} MB 超过上限 ${
-        SITE_LIMITS.totalBytes / 1024 / 1024
-      } MB`,
-    );
-  }
-  if (!files.some((f) => f.key === "index.html")) {
-    issues.push("缺少 index.html（根路径无处可服务）");
-  }
-  return issues;
+interface ReleaseRow {
+  seq: number;
+  sourceSha: string;
+  artifactSha: string;
+  seedSha: string;
 }
 
 /** 最近一次发布（没有就是 null） */
-export async function latestRelease(
-  env: Env,
-  tenantId: string,
-): Promise<{ seq: number; sourceSha: string; artifactSha: string; seedSha: string } | null> {
+export async function latestRelease(env: Env, tenantId: string): Promise<ReleaseRow | null> {
   const row = await env.DB.prepare(
     `SELECT seq, source_sha, artifact_sha, seed_sha FROM site_releases
       WHERE tenant_id = ? ORDER BY seq DESC LIMIT 1`,
@@ -181,24 +146,45 @@ export async function latestRelease(
     .bind(tenantId)
     .first<{ seq: number; source_sha: string; artifact_sha: string; seed_sha: string }>();
   return row
-    ? { seq: Number(row.seq), sourceSha: row.source_sha, artifactSha: row.artifact_sha, seedSha: row.seed_sha }
+    ? {
+        seq: Number(row.seq),
+        sourceSha: row.source_sha,
+        artifactSha: row.artifact_sha,
+        seedSha: row.seed_sha,
+      }
+    : null;
+}
+
+/** 某一版发布记录（回滚要用它的源包重烘焙） */
+async function releaseOf(env: Env, tenantId: string, seq: number): Promise<ReleaseRow | null> {
+  const row = await env.DB.prepare(
+    `SELECT seq, source_sha, artifact_sha, seed_sha FROM site_releases
+      WHERE tenant_id = ? AND seq = ?`,
+  )
+    .bind(tenantId, seq)
+    .first<{ seq: number; source_sha: string; artifact_sha: string; seed_sha: string }>();
+  return row
+    ? {
+        seq: Number(row.seq),
+        sourceSha: row.source_sha,
+        artifactSha: row.artifact_sha,
+        seedSha: row.seed_sha,
+      }
     : null;
 }
 
 /**
  * 发布一版。
  *
- * 顺序（契约 §0.1.5）：存源包（调用方先 `storeSource`）→ 渲染 → 算 artifact_sha →
- * 写产物 → 插发布记录 → **最后**切指针。任何一步失败，线上仍是上一版，发布记录也不会
- * 多一行。
+ * 顺序：烘焙（写 `art/<sha>/`）→ 分配版本号 → 插发布记录 → **最后**切指针。
+ * 任何一步失败，线上仍是上一版，发布记录也不会多一行。
  */
 export async function publishSite(
   env: Env,
   tenantId: string,
   input: PublishInput = {},
 ): Promise<PublishResult> {
-  const sites = env.SITES;
-  if (!sites) {
+  if (!env.SITES) {
     return err("r2_not_configured", "没有绑定 SITES（R2）：站点产物无处可放。见 docs/self-host.md 的站点一节");
   }
   if (!env.HOSTS) {
@@ -206,16 +192,10 @@ export async function publishSite(
   }
   if (!tenantId) return err("no_tenant", "拿不到租户 ID，不知道往哪个前缀写");
 
-  const apiBase = (input.apiBase ?? "").trim().replace(/\/+$/, "");
-  if (!/^https?:\/\/[^/]+$/.test(apiBase)) {
-    return err("api_base_missing", "不知道该告诉站点去哪个地址调 CRM（apiBase 缺失或格式不对）");
-  }
-
   // ── 1) 这次发哪份源包：显式给的 > 上次发的 > 种子 ────────────────────
   const seed = await seedSha();
   const latest = await latestRelease(env, tenantId);
   const wanted = (input.sourceSha ?? "").trim();
-  const sourceIsSeed = wanted ? wanted === seed : !latest;
   const sha = wanted || latest?.sourceSha || seed;
 
   // ── 2) 幂等：同键直接返回已有版本（不新增、不重写字节）────────────────
@@ -223,9 +203,7 @@ export async function publishSite(
   //   **只认最新那一版**。幂等说的是"同一个请求重复提交"，不是"内容等于历史上
   //   某一版"：租户把站点改回三天前的样子再发布，是**一次新的发布**，该产生新
   //   版本并把指针挪过去。早先按 `idem_key` 全表查，改回旧内容会命中旧那一行
-  //   —— 于是接口回 200 + 旧 seq、指针不动，界面上"发布成功"而线上没变；更糟的
-  //   是那一版如果引用了已删的素材（`asset_unavailable`），站点就此卡死：草稿
-  //   每次重建都还原那个死指针，怎么发都发不出去。
+  //   —— 于是接口回 200 + 旧 seq、指针不动，界面上"发布成功"而线上没变。
   const idemKey = (input.idemKey ?? "").trim();
   if (idemKey) {
     const hit = await env.DB.prepare(
@@ -248,62 +226,17 @@ export async function publishSite(
     }
   }
 
-  // ── 3) 取源文件：种子在代码里，租户源包在 R2 ────────────────────────
-  const raw =
-    sourceIsSeed
-      ? seedFiles().map((f) => ({
-          path: f.path,
-          body:
-            typeof f.body === "string"
-              ? (new TextEncoder().encode(f.body).buffer as ArrayBuffer)
-              : (f.body.buffer.slice(0) as ArrayBuffer),
-        }))
-      : await readSource(env, sha);
-  if (raw.length === 0) {
-    return err("source_missing", `找不到源包 \`${sha}\`：内容存储被清过，或者 sha 写错了`);
-  }
-  const entries = raw.map((f) => ({ key: f.path, size: f.body.byteLength }));
-  const issues = lintManifest(entries);
-  if (issues.length > 0) return err("l0_failed", "产物没有通过发布前检查", issues);
-
-  // 品牌设置：**发布时烘焙**（site-crm.md §0.1）。读不到就用空值，绝不因此失败。
-  const settings = await readSiteSettings(env);
-  const scope = buildScope(settings, input.brandFallback ?? "我的站点");
-
-  // ── 4) 渲染 + 产物指纹（先算再写：指纹不过就别写半个站）────────────────
-  const rendered = new Map<string, string | ArrayBuffer>();
-  const texts: { path: string; text: string }[] = [];
-  for (const file of raw) {
-    if (!isTextPath(file.path)) {
-      rendered.set(file.path, file.body);
-      continue;
-    }
-    const text = new TextDecoder().decode(new Uint8Array(file.body));
-    const r = renderTemplate(text, scope);
-    if (r.missing.length > 0) {
-      return err("template_token_unknown", `模板里有未定义的占位符：${r.missing.join("、")}`, [
-        "对照 GET /api/site/meta 的 capabilities 补齐数据，或从源包里删掉这段",
-      ]);
-    }
-    rendered.set(file.path, r.html);
-    texts.push({ path: file.path, text: r.html });
+  // ── 3) 烘焙：写内容寻址的 `art/<sha>/`（设计 + 当前设置 → 字节）──────
+  const baked = await bakeSite(env, tenantId, {
+    apiBase: input.apiBase ?? "",
+    sourceSha: sha,
+    ...(input.brandFallback ? { brandFallback: input.brandFallback } : {}),
+  });
+  if (!baked.ok) {
+    return err(baked.code, baked.message, baked.issues);
   }
 
-  // 指纹算在**改写之前**：`artifact_sha` 是"你签收的那一页"，与 studio 交上来
-  // 时算的必须相等（`deliverSite` 也是这么算的）。带指纹的文件名是发布细节，
-  // 不属于"签收内容"。
-  const artifact = await artifactShaOf(texts, scope);
-
-  // ── 4b) 不再给素材改名（2026-11-13）────────────────────────────────
-  // 早先 `assets/` 下的二进制会按内容改成 `logo.9f2c1a8b.webp` 并把 HTML 里的
-  // 引用一起改写：换图能靠换名让缓存自然失效，还能给一年 immutable。
-  //
-  // 代价是租户看到的"路径"和线上 URL 不一致，发布还得改写引用、源包里还要额外
-  // 记一层映射 —— 对"一个品牌站十来张图"来说不值。现在**路径就是 URL**，
-  // 缓存靠 `must-revalidate` + ETag（见 `workers/site`）：换图后第一次访问回源
-  // 校验一次，之后照常 304。
-  // `isFingerprinted()` 仍然留着：老版本目录里的指纹文件还要按 immutable 发。
-  // ── 5) 版本号：以 D1 为准（KV 只是指针，不能当计数器用）──────────────
+  // ── 4) 版本号：以 D1 为准（KV 只是指针，不能当计数器用）──────────────
   const maxRow = await env.DB.prepare(
     `SELECT COALESCE(MAX(seq), 0) AS n FROM site_releases WHERE tenant_id = ?`,
   )
@@ -311,38 +244,7 @@ export async function publishSite(
     .first<{ n: number }>();
   const version = Number(maxRow?.n ?? 0) + 1;
 
-  // ── 6) 写产物（先写 R2，失败就什么都没有）──────────────────────────
-  const target = publicPrefix(tenantId, version);
-  let bytes = 0;
-  for (const [path, body] of rendered) {
-    await sites.put(`${target}${path}`, body, {
-      httpMetadata: { contentType: isTextPath(path) ? "text/plain; charset=utf-8" : undefined },
-      customMetadata: { source_sha: sha },
-    });
-    bytes += typeof body === "string" ? body.length : body.byteLength;
-  }
-
-  // 6b) **平台文件**：SDK 与支付回跳页，每次发布都写进产物（理由见 docs/site-storage.md）
-  const platform: Array<[string, string, string]> = [
-    // 三个平台文件一次写全：源包里没有 `_crm/`（L0 直接拒），所以"哪些文件是
-    // 平台的"只有一条规则，不存在"某个平台文件其实由租户管"的例外。
-    [
-      "_crm/config.js",
-      `// 由 CRM 在发布时写入（不要手改；换域名请重新发布）\nwindow.CRM_API_BASE = ${JSON.stringify(apiBase)};\n`,
-      "text/javascript; charset=utf-8",
-    ],
-    ["_crm/sdk.js", SDK_JS, "text/javascript; charset=utf-8"],
-    ["_crm/return.html", RETURN_HTML, "text/html; charset=utf-8"],
-  ];
-  for (const [rel, body, type] of platform) {
-    await sites.put(`${target}${rel}`, body, {
-      httpMetadata: { contentType: type, cacheControl: "public, max-age=300" },
-      customMetadata: { platform: "1" },
-    });
-    bytes += body.length;
-  }
-
-  // ── 7) 记账。seq 唯一索引会挡住并发发布撞号 ────────────────────────
+  // ── 5) 记账。seq 唯一索引会挡住并发发布撞号 ────────────────────────
   try {
     await env.DB.prepare(
       `INSERT INTO site_releases
@@ -353,10 +255,10 @@ export async function publishSite(
         tenantId,
         version,
         sha,
-        artifact.sha,
+        baked.artifactSha,
         seed,
-        rendered.size + platform.length,
-        bytes,
+        baked.files,
+        baked.bytes,
         idemKey,
         input.actor ?? input.trigger ?? null,
         new Date().toISOString(),
@@ -366,16 +268,22 @@ export async function publishSite(
     return err("version_conflict", "有人同时在发布，请重试");
   }
 
-  // ── 8) **最后一步**：切指针（site-serve 的指针缓存 5 s，最多 5 秒生效）──
-  await switchPointer(env, tenantId, version, "publish", input.actor ?? input.trigger ?? null);
+  // ── 6) **最后一步**：切指针（site-serve 的指针缓存 5 s，最多 5 秒生效）──
+  await switchPointer(
+    env,
+    tenantId,
+    { templateSeq: version, artifactSha: baked.artifactSha, bakedAt: new Date().toISOString(), settingsRev: baked.settingsRev },
+    "publish",
+    input.actor ?? input.trigger ?? null,
+  );
 
   return {
     ok: true,
     version,
-    files: rendered.size + platform.length,
-    bytes,
+    files: baked.files,
+    bytes: baked.bytes,
     sourceSha: sha,
-    artifactSha: artifact.sha,
+    artifactSha: baked.artifactSha,
     seedSha: seed,
     idempotent: false,
   };
@@ -390,28 +298,123 @@ export async function publishSite(
 export async function switchPointer(
   env: Env,
   tenantId: string,
-  toN: number,
+  next: SitePointer,
   reason: "publish" | "rollback",
   actor: string | null,
 ): Promise<void> {
-  const before = env.HOSTS
-    ? ((await env.HOSTS.get(activeKey(tenantId), "json")) as { n?: number } | null)
-    : null;
-  const from = before?.n ?? null;
+  const before = await readPointer(env, tenantId);
   await env.DB.prepare(
     `INSERT INTO site_pointer_log (tenant_id, from_n, to_n, reason, created_by, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
   )
-    .bind(tenantId, from, toN, reason, actor, new Date().toISOString())
+    .bind(
+      tenantId,
+      before?.templateSeq ?? null,
+      next.templateSeq,
+      reason,
+      actor,
+      new Date().toISOString(),
+    )
     .run();
-  if (env.HOSTS) await env.HOSTS.put(activeKey(tenantId), JSON.stringify({ n: toN }));
+  await writePointer(env, tenantId, next);
+}
+
+export type ReprintResult =
+  | {
+      ok: true;
+      /** 这次真的重烘焙了吗（从没发布过 = false：没有线上设计可烘） */
+      baked: boolean;
+      artifactSha: string | null;
+      bakedAt: string | null;
+      settingsRev: number;
+    }
+  | { ok: false; code: string; message: string; issues?: string[] };
+
+/**
+ * **重烘焙**：用**现在的设置**把**线上那一份设计**重新渲染一遍。
+ *
+ * 触发点：保存设置之后（`PUT /api/site/settings` 与后台同一件事）。设计版本不动
+ * —— 换颜色不是发新版；线上指针只换 `artifact_sha`，`site-serve` 5 秒内就换成新的。
+ *
+ * 还没发布过 ⇒ 什么都不做（没有线上设计可烘）：第一次发布才产生 v1。
+ */
+export async function reprintSite(
+  env: Env,
+  tenantId: string,
+  input: { apiBase: string; brandFallback?: string },
+): Promise<ReprintResult> {
+  const baked0 = await readSiteSettings(env);
+  const pointer = await readPointer(env, tenantId);
+  if (!pointer || pointer.templateSeq === null) {
+    return { ok: true, baked: false, artifactSha: null, bakedAt: null, settingsRev: baked0.rev };
+  }
+  const release = await releaseOf(env, tenantId, pointer.templateSeq);
+  if (!release) {
+    return {
+      ok: false,
+      code: "template_missing",
+      message: `线上指的是第 ${pointer.templateSeq} 版，但发布记录里没有它（数据库被清过？）`,
+    };
+  }
+
+  const baked = await bakeSite(env, tenantId, {
+    apiBase: input.apiBase,
+    sourceSha: release.sourceSha,
+    ...(input.brandFallback ? { brandFallback: input.brandFallback } : {}),
+  });
+  if (!baked.ok) {
+    // 设置已经存下了，但渲染不出来：指针不动，线上继续服务上一份产物。
+    // 调用方要把这句话如实告诉租户（"设置已保存，但线上没换"）。
+    return { ok: false, code: baked.code, message: baked.message, ...(baked.issues ? { issues: baked.issues } : {}) };
+  }
+
+  const bakedAt = new Date().toISOString();
+  await writePointer(env, tenantId, {
+    templateSeq: pointer.templateSeq,
+    artifactSha: baked.artifactSha,
+    bakedAt,
+    settingsRev: baked.settingsRev,
+  });
+  return { ok: true, baked: true, artifactSha: baked.artifactSha, bakedAt, settingsRev: baked.settingsRev };
+}
+
+/** 回滚：设计回到 `seq`，但用**当前**设置重烘焙（身份不回滚） */
+export async function rollbackSite(
+  env: Env,
+  tenantId: string,
+  seq: number,
+  input: { apiBase: string; actor: string | null; brandFallback?: string },
+): Promise<ReprintResult> {
+  if (!env.HOSTS) return { ok: false, code: "kv_not_configured", message: "没有绑定 HOSTS（KV）" };
+  const release = await releaseOf(env, tenantId, seq);
+  if (!release) {
+    return { ok: false, code: "unknown_version", message: `没有 ${seq} 这一版` };
+  }
+  const baked = await bakeSite(env, tenantId, {
+    apiBase: input.apiBase,
+    sourceSha: release.sourceSha,
+    ...(input.brandFallback ? { brandFallback: input.brandFallback } : {}),
+  });
+  if (!baked.ok) return baked;
+
+  const bakedAt = new Date().toISOString();
+  await switchPointer(
+    env,
+    tenantId,
+    { templateSeq: seq, artifactSha: baked.artifactSha, bakedAt, settingsRev: baked.settingsRev },
+    "rollback",
+    input.actor,
+  );
+  return { ok: true, baked: true, artifactSha: baked.artifactSha, bakedAt, settingsRev: baked.settingsRev };
 }
 
 export interface SiteState {
-  /** 当前线上版本；从未发布过是 null */
+  /** 当前线上设计版本；从未发布过是 null */
   active: number | null;
   /** 源包从哪来：`release:v7` = 线上那一版；`seed` = 还没发布过 */
   sourceFrom: string;
+  /** 线上正在服务的那份产物（`art/<sha>/`）+ 它是什么时候、用哪版设置烘出来的 */
+  live: { artifactSha: string; bakedAt: string; settingsRev: number } | null;
   /** 最近若干版，最新在前 */
   releases: {
     seq: number;
@@ -424,9 +427,7 @@ export interface SiteState {
 }
 
 export async function siteState(env: Env, tenantId: string): Promise<SiteState> {
-  const pointer = env.HOSTS
-    ? ((await env.HOSTS.get(activeKey(tenantId), "json")) as { n?: number } | null)
-    : null;
+  const pointer = await readPointer(env, tenantId);
 
   const rows = await env.DB.prepare(
     `SELECT seq, source_sha, artifact_sha, files, bytes, created_at
@@ -442,10 +443,17 @@ export async function siteState(env: Env, tenantId: string): Promise<SiteState> 
       created_at: string;
     }>();
 
-  const active = pointer?.n ?? null;
+  const active = pointer?.templateSeq ?? null;
   return {
     active,
     sourceFrom: active ? `release:v${active}` : "seed",
+    live: pointer
+      ? {
+          artifactSha: pointer.artifactSha,
+          bakedAt: pointer.bakedAt,
+          settingsRev: pointer.settingsRev,
+        }
+      : null,
     releases: rows.results ?? [],
   };
 }

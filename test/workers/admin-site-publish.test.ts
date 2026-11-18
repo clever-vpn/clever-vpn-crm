@@ -15,7 +15,7 @@ import { env as testEnv } from "./apply-migrations";
 import { ENGINE_ID } from "../../src/site/engine.generated";
 import { SITE_CONTRACT } from "../../src/site/meta";
 import { artifactShaOf } from "../../src/site/deliver";
-import { activeKey } from "../../src/site/publish";
+import { activeKey, readPointer } from "../../src/site/publish";
 import { buildScope, readSiteSettings } from "../../src/site/settings";
 import { issueSiteAccess } from "../../src/site/access";
 import { seedSha } from "../../src/site/source";
@@ -62,14 +62,17 @@ const hex = async (text: string): Promise<string> => {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 };
 
-const PAGE = '<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>t</title></head><body><h1>工作室那一版</h1></body></html>';
+/** 一页模板：标题参数化（回滚用例要两版不同设计），正文里放站名占位符 */
+const pageOf = (title: string): string =>
+  `<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>t</title></head><body><h1>${title}</h1><p>{{site.name}}</p></body></html>`;
+const PAGE = pageOf("工作室那一版");
 
 /** 走 studio 的路发布一版（`/api/site/publish` 带 files，一次完成） */
-async function publishViaStudio(): Promise<{ seq: number; public_url: string | null }> {
+async function publishViaStudio(page: string = PAGE): Promise<{ seq: number; public_url: string | null }> {
   (testEnv as unknown as Record<string, unknown>).APP_SECRET = "admin-site-test-key";
   const token = (await issueSiteAccess(testEnv as never, TENANT))!;
   const settings = await readSiteSettings(testEnv as never);
-  const artifact = await artifactShaOf([{ path: "index.html", text: PAGE }], buildScope(settings, "我的站点"));
+  const artifact = await artifactShaOf([{ path: "index.html", text: page }], buildScope(settings, "我的站点"));
   const res = await worker.default.fetch(
     new Request(`${BASE}/api/site/publish`, {
       method: "POST",
@@ -81,9 +84,11 @@ async function publishViaStudio(): Promise<{ seq: number; public_url: string | n
           contract: SITE_CONTRACT,
           signoff: { by: "tenant:0", at: new Date().toISOString() },
           preview: { artifact_sha256: artifact.sha },
-          files: [{ path: "index.html", sha256: await hex(PAGE), bytes: new TextEncoder().encode(PAGE).byteLength }],
+          files: [
+            { path: "index.html", sha256: await hex(page), bytes: new TextEncoder().encode(page).byteLength },
+          ],
         },
-        files: [{ path: "index.html", content_b64: b64(PAGE) }],
+        files: [{ path: "index.html", content_b64: b64(page) }],
       }),
     }),
   );
@@ -155,17 +160,19 @@ describe("后台发布", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; version: number };
     expect(body).toMatchObject({ ok: true, version: 1 });
-    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
+    expect(await readPointer(testEnv, TENANT)).toMatchObject({ templateSeq: 1 });
   });
 
   it("studio 发过之后，后台再发用的仍是**租户那份源包**（不退回种子）", async () => {
     await publishViaStudio();
     const res = await call("/api/admin/site/publish", { method: "POST", body: {} });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { version: number; sourceSha: string };
+    const body = (await res.json()) as { version: number; sourceSha: string; artifactSha: string };
     expect(body.version).toBe(2);
 
-    const html = await SITES.get(`sites/${TENANT}/versions/2/public/index.html`);
+    // 产物按内容寻址：key 用这次发布返回的 artifactSha
+    const art = `art/${body.artifactSha.replace(/^sha256:/, "")}/`;
+    const html = await SITES.get(`${art}index.html`);
     expect(await html?.text()).toContain("工作室那一版");
   });
 });
@@ -177,7 +184,7 @@ describe("回滚", () => {
 
     const res = await call("/api/admin/site/rollback", { method: "POST", body: { version: 1 } });
     expect(res.status).toBe(200);
-    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
+    expect(await readPointer(testEnv, TENANT)).toMatchObject({ templateSeq: 1 });
 
     const count = await testEnv.DB.prepare("SELECT COUNT(*) AS c FROM site_releases").first<{ c: number }>();
     expect(count?.c).toBe(2); // 没有新增
@@ -192,7 +199,7 @@ describe("回滚", () => {
     await publishViaStudio();
     const res = await call("/api/admin/site/rollback", { method: "POST", body: { version: 99 } });
     expect(res.status).toBe(404);
-    expect(await HOSTS.get(activeKey(TENANT), "json")).toEqual({ n: 1 });
+    expect(await readPointer(testEnv, TENANT)).toMatchObject({ templateSeq: 1 });
   });
 });
 
@@ -219,5 +226,86 @@ describe("public_url（站点对外地址）", () => {
     } finally {
       setSiteUrl("");
     }
+  });
+});
+
+/** 版本表行数（"设置改了不新增行"就是看它） */
+async function releaseCount(): Promise<number> {
+  const row = await testEnv.DB.prepare("SELECT COUNT(*) AS c FROM site_releases").first<{ c: number }>();
+  return Number(row?.c ?? 0);
+}
+
+const artOf = (sha: string): string => `art/${sha.replace(/^sha256:/, "")}/`;
+
+/**
+ * **烘焙 ≠ 发布**（Contract 16 / D3–D5）。
+ *
+ *   · 设置 = 租户事实：改了要立刻生效，但**不该占一个设计版本号**；
+ *   · 回滚 = 设计回滚、身份不回滚：旧设计 + 现在的品牌。
+ */
+describe("烘焙 ≠ 发布", () => {
+  it("发布后改设置 ⇒ 线上产物换掉，但版本表不新增行、设计版本不动", async () => {
+    await publishViaStudio();
+    const before = await readPointer(testEnv, TENANT);
+    const countBefore = await releaseCount();
+
+    const res = await call("/api/admin/site/settings", {
+      method: "PUT",
+      body: { values: { site: { name: "新名字" } } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      live: { artifactSha: string; settingsRev: number } | null;
+      bake_error?: { message: string };
+    };
+    expect(body.bake_error).toBeUndefined();
+    expect(body.live).toMatchObject({ settingsRev: 1 });
+    expect(body.live!.artifactSha).not.toBe(before!.artifactSha);
+
+    const after = await readPointer(testEnv, TENANT);
+    expect(after).toMatchObject({ templateSeq: 1, settingsRev: 1 });
+    expect(after!.artifactSha).toBe(body.live!.artifactSha);
+
+    // 版本表一行没多
+    expect(await releaseCount()).toBe(countBefore);
+
+    // 线上那份字节里已经是新名字（site-serve 读的是同一个 art/<sha>/）
+    const html = await (await SITES.get(`${artOf(after!.artifactSha)}index.html`))?.text();
+    expect(html).toContain("新名字");
+  });
+
+  it("还没发布过 ⇒ 保存设置不烘焙也不报错（第一次发布才产生 v1）", async () => {
+    const res = await call("/api/admin/site/settings", {
+      method: "PUT",
+      body: { values: { site: { name: "还没上线" } } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { live: unknown };
+    expect(body.live).toBeNull();
+    expect(await readPointer(testEnv, TENANT)).toBeNull();
+  });
+
+  it("回滚 ⇒ 设计回到旧版，品牌名仍是当前值（身份不回滚）", async () => {
+    await publishViaStudio(pageOf("旧版设计")); // v1
+    await publishViaStudio(pageOf("新版设计")); // v2
+
+    // 先把品牌名改掉（这会自动重烘焙 v2 的设计）
+    await call("/api/admin/site/settings", {
+      method: "PUT",
+      body: { values: { site: { name: "品牌名" } } },
+    });
+    expect(await releaseCount()).toBe(2);
+
+    const res = await call("/api/admin/site/rollback", { method: "POST", body: { version: 1 } });
+    expect(res.status).toBe(200);
+
+    const pointer = await readPointer(testEnv, TENANT);
+    expect(pointer).toMatchObject({ templateSeq: 1 });
+    // 回滚也**不产生新版本**
+    expect(await releaseCount()).toBe(2);
+
+    const html = await (await SITES.get(`${artOf(pointer!.artifactSha)}index.html`))?.text();
+    expect(html).toContain("旧版设计"); // 设计回去了
+    expect(html).toContain("品牌名"); // 身份没回退
   });
 });

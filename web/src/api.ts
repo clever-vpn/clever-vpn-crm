@@ -170,8 +170,20 @@ export interface SiteVersion {
   created_at: string;
 }
 
+/** 线上正在跑的产物 + 它是什么时候、用哪版设置烘出来的 */
+export interface SiteLive {
+  artifactSha: string;
+  bakedAt: string;
+  settingsRev: number;
+}
+
 export interface SiteStateView {
   active: number | null;
+  /**
+   * 线上正在服务的**产物**（`art/<sha>/`）。设计与产物是两件事：保存设置只换产物、
+   * 不换版本号（契约 `site-studio-crm.md` §0.1.3）。
+   */
+  live?: SiteLive | null;
   versions: SiteVersion[];
   /** 模板是否已在 R2；false 时发布必然失败，页面要提前提示 */
   templateReady: boolean;
@@ -305,7 +317,12 @@ export const api = {
     values: SiteValues;
     collections?: SiteCollections;
   }) =>
-    call<{ ok: true } & SiteSettingsView>("PUT", "/site/settings", input),
+    call<
+      { ok: true } & SiteSettingsView & {
+          live?: SiteLive | null;
+          bake_error?: { code: string; message: string; issues?: string[] };
+        }
+    >("PUT", "/site/settings", input),
   siteDomain: () => call<SiteDomainView>("GET", "/site/domain"),
   siteRollback: (version: number) =>
     call<{ ok: true; active: number }>("POST", "/site/rollback", { version }),

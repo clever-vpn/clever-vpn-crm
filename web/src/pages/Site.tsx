@@ -206,8 +206,17 @@ export default function Site() {
         },
       });
       setSettings({ ...res, updatedAt: null });
-      message.success("已保存。要让线上生效，还需要点「发布」重新发布一次");
-      setTab("publish");
+      if (res.bake_error) {
+        // 设置存下了，但渲染不出来：线上仍是上一份产物。必须说清，不能报"成功"。
+        message.warning(`设置已保存，但线上没换：${res.bake_error.message}`);
+      } else if (res.live) {
+        message.success(
+          `已保存，几秒内自动生效（设置 rev ${res.live.settingsRev}，不产生新版本）`,
+        );
+      } else {
+        message.success("已保存。站点还没发布过，第一次发布后才会生成线上产物");
+      }
+      await load();
     } catch (e) {
       message.error(e instanceof ApiError ? e.message : "保存失败");
     } finally {
@@ -395,6 +404,20 @@ export default function Site() {
 
   const settingsTab = (
     <Card>
+      {/*
+        设置是**租户事实**：保存即由 CRM 重烘焙，线上几秒内变，但**不产生版本号**。
+        这行状态说的是"线上现在跑的哪份产物"，不是"哪一版设计"。
+      */}
+      {state?.live ? (
+        <Typography.Paragraph type="secondary">
+          线上正在用 {fmtTime(state.live.bakedAt)} 烘焙的产物（设置 rev{" "}
+          {state.live.settingsRev}）。保存后会立刻重新烘焙一次，几秒内生效。
+        </Typography.Paragraph>
+      ) : (
+        <Typography.Paragraph type="secondary">
+          站点还没发布过：保存设置不会烘焙，第一次发布后才产生线上产物。
+        </Typography.Paragraph>
+      )}
       <Form
         form={form}
         layout="vertical"
@@ -550,7 +573,7 @@ export default function Site() {
             保存
           </Button>
           <Typography.Text type="secondary">
-            保存后线上不会立刻变，需要重新发布
+            保存即自动重新烘焙，几秒内线上生效（不产生新版本）
           </Typography.Text>
         </Space>
       </Form>

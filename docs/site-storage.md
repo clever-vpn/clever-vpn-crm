@@ -20,17 +20,20 @@ g/templates/<模板>/<版本>/…           全局模板（公共模板），一
 tpl/<sha256>/…                        租户模板包的**内容寻址**存储（studio 交付）
   files/<包内路径>                    包里的静态文件
   manifest.json                       包清单（契约 site-studio-crm.md §4.1）
-sites/<租户>/versions/<n>/public/…    已发布的产物，按版本隔离
+art/<artifact_sha>/…                产物，**内容寻址**（渲染后的全部文件 + 素材 + _crm/*）
 ```
 
-- **模板**由 `npm run site:template:upload` 上传（`scripts/upload-site-template.mjs`），
-  现在固定是 `g/templates/basic/v1/`。
-- **产物**由发布写入：把模板整体复制到 `sites/<租户>/versions/<n>/public/`，
-  复制时做两件事（**只在发布时做，运行时不改**）：
-  - 写三个平台文件 `_crm/{config,sdk,return.html}`（`config.js` 里是本次发布的
+- **起点（种子）**是 `site-template/` 编译进 Worker 的 `src/site/seed.generated.ts`
+   （`npm run seed:gen` / `seed:check`），**不经过 R2**：它只在"这个租户还没有源包"时
+   被读一次。`g/templates/` 与 `npm run site:template:upload` 是 Contract 14 之前的
+   遗留路径，已不被读取。
+- **产物**由**烘焙**写入 `art/<artifact_sha>/`（内容寻址）：把源包整体渲染一遍再写，
+  写的时候做两件事（**只在烘焙时做，运行时不改**）：
+  - 写三个平台文件 `_crm/{config,sdk,return.html}`（`config.js` 里是本次烘焙的
     `window.CRM_API_BASE`；源包里**没有** `_crm/`，出现了 L0 直接拒）
-  - 所有文本产物做 `{{site.*}}` 占位符替换（品牌设置烘焙，见下）
-- **版本不可变**：写完就不再改。回滚 = 把指针指回旧 `n`，**不重建、不删除旧版本**。
+  - 所有文本产物做 `{{site.*}}` 占位符替换（品牌设置，见下）
+- **产物不可变**：目录名就是整版内容的 sha，写完就不再改（同内容只占一份，不同内容
+  绝不同目录）。发布、保存设置、回滚**都只是重新烘焙 + 换指针**，没有"原地覆盖"。
 
 ### 1.1 `tpl/<sha>/`：模板版本（内容寻址）
 
@@ -63,23 +66,27 @@ created_at`），当前指针是 `site_settings.template_version`（与数据设
 
 ```
 host:<hostname>        { tenant_id, slot, shard, status }   写：cf-api
-site:<tenant>:active   { n }                                写：本仓发布
+site:<tenant>:active   { template_seq, artifact_sha,         写：本仓发布 / 烘焙 / 回滚
+                         baked_at, settings_rev }
 ```
 
-- `site-serve` 先读 `host:*` 拿到租户，再读 `site:*:active` 拿到版本号，最后拼
-  R2 key `sites/<租户>/versions/<n>/public/<路径>`。
+- `site-serve` 先读 `host:*` 拿到租户，再读 `site:*:active` 拿到 `artifact_sha`，
+  最后拼 R2 key `art/<artifact_sha>/<路径>`（`template_seq` 只用于展示与排障）。
+- **为什么是两个字段**：`template_seq` 回答"线上是哪一版设计"，`artifact_sha` 回答
+  "线上跑的是哪份字节"。换主色只换后者（不占版本号）；回滚设计只换前者 + 重烘焙。
 - **键前缀即所有权**：本仓只写 `site:*`，绝不写 `host:*`（那是 cf-api 的）。
 - 指针缓存 5 秒 ⇒ 发布后最多 5 秒生效。
 
 ## 3. 版本号的权威在 D1，不在 KV
 
-`site_versions(seq UNIQUE, template, template_version, files, bytes, created_by, created_at)`。
+`site_releases(tenant_id, seq, source_sha, artifact_sha, seed_sha, files, bytes, idem_key, created_by, created_at)`，
+`seq` 在租户内唯一（发布记录 append-only）。
 
 - `seq` 是 `MAX(seq)+1`，唯一索引挡住并发撞号（撞了就返回 `version_conflict`）
-- 回滚前校验"这个 `n` 真实存在过"，防止指针指向从未发布的版本（那会 404 且难排查）
+- 回滚前校验"这个 `seq` 真实存在过"，防止指针指向从未发布的版本（那会 404 且难排查）
 - 保留策略未实现（契约 `site-studio-crm.md` §9.3 定的是最近 30 版 + blob mark-and-sweep）
 
-## 4. 品牌设置：发布时烘焙
+## 4. 设置：烘焙进产物（保存即重烘焙）
 
 `site_settings`（本仓 D1，**单行 JSON**）：`values`（键就是模板里写的路径）+
 `collections`（下载入口）+ `rev`（乐观锁）。字段清单只有一份，住

@@ -19,7 +19,7 @@
 import { ENGINE_ID } from "./engine.generated";
 import { SITE_CONTRACT } from "./meta";
 import { renderTemplate } from "./render";
-import { ALLOWED_EXT } from "./publish";
+import { ALLOWED_EXT } from "./bake";
 import { buildScope, readSiteSettings } from "./settings";
 import { SITE_LIMITS } from "./limits";
 import { checkSourcePath, storeSource } from "./source";

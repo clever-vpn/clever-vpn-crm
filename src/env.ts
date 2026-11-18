@@ -10,9 +10,12 @@ export interface Env {
   /** multi 专用：`host:* → { tenant_id, slot, shard, status }`；也存站点指针 `site:<id>:active` */
   HOSTS?: KVNamespace;
   /**
-   * 站点产物（R2）。键布局：`g/templates/<模板>/<版本>/…` 与
-   * `sites/<租户>/versions/<n>/public/…`，与 `workers/site`（site-serve）严格一致。
-   * 未绑定时站点功能整体不可用（发布返回 `r2_not_configured`），其余功能不受影响。
+   * 站点存储（R2）。三个前缀：
+   *   `tpl/<sha>/`          租户源包（内容寻址）
+   *   `art/<artifact_sha>/` 产物（内容寻址，site-serve 只读这里）
+   *   `staging/<租户>/<批次>/` 发布前的字节暂存（用完即清）
+   * 与 `workers/site`（site-serve）严格一致。未绑定时站点功能整体不可用
+   * （发布返回 `r2_not_configured`），其余功能不受影响。
    */
   SITES?: R2Bucket;
   /** 静态资源（web/dist，含管理后台 SPA） */

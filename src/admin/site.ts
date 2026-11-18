@@ -9,7 +9,7 @@
  * **不在这里做的事**：域名绑定（cf-api）、站点编辑（site-studio）、
  * 模板上传（构建期由 `npm run site:template:upload` 做）。
  */
-import { latestRelease, publishSite, siteState, switchPointer } from "../site/publish";
+import { latestRelease, publishSite, reprintSite, rollbackSite, siteState } from "../site/publish";
 import { readSiteSettings, saveSiteSettings } from "../site/settings";
 
 import type { Env } from "../env";
@@ -23,6 +23,16 @@ function json(body: unknown, status = 200): Response {
 
 const fail = (status: number, error: string, message?: string) =>
   json(message ? { error, message } : { error }, status);
+
+/**
+ * 站点调 CRM 的地址：`SITE_API_BASE` 配了就用它，否则就是这次请求的 origin。
+ *
+ * 它会被写进 `/_crm/config.js`（产物的一部分），所以必须是**租户站点能访问到**的
+ * 地址，不能拿 studio 的 origin 冒充。
+ */
+function apiBaseOf(env: Env, request: Request): string {
+  return (env.SITE_API_BASE ?? "").trim() || new URL(request.url).origin;
+}
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {
   try {
@@ -67,7 +77,25 @@ export async function handleAdminSite(
       collections: body.collections,
     });
     if (result.ok) {
-      return json({ ok: true, ...result.settings });
+      /**
+       * **保存设置 = 自动重烘焙**（契约 §0.1 / D3）：设计版本不变，只换线上产物。
+       * 失败也要如实回："设置存了，但线上没换" —— 悄悄成功比失败更糟。
+       */
+      const baked = await reprintSite(env, tenantId, {
+        apiBase: apiBaseOf(env, request),
+      });
+      return json({
+        ok: true,
+        ...result.settings,
+        // 从没发布过 ⇒ 没有线上设计可烘：不报错，也没有 live
+        live:
+          baked.ok && baked.baked
+            ? { artifactSha: baked.artifactSha, bakedAt: baked.bakedAt, settingsRev: baked.settingsRev }
+            : null,
+        ...(baked.ok
+          ? {}
+          : { bake_error: { code: baked.code, message: baked.message, issues: baked.issues ?? [] } }),
+      });
     }
     // 乐观锁冲突是 409，其余是 400：前端据此决定"提示重试"还是"指出哪个字段"
     return json(
@@ -131,17 +159,20 @@ export async function handleAdminSite(
     if (n <= 0) return fail(400, "bad_version", "需要 version（正整数）");
     if (!env.HOSTS) return fail(500, "kv_not_configured", "没有绑定 HOSTS（KV）");
 
-    // 只能回滚到**真实存在过**的版本，不能凭空指一个 n
-    const row = await env.DB.prepare(
-      `SELECT seq FROM site_releases WHERE tenant_id = ? AND seq = ?`,
-    )
-      .bind(tenantId, n)
-      .first<{ seq: number }>();
-    if (!row) return fail(404, "unknown_version", `没有 ${n} 这一版`);
-
-    // 回滚**不产生新版本**，所以"线上变过"这件事只能靠审计表记下来（契约 §0.1.3）
-    await switchPointer(env, tenantId, n, "rollback", actor);
-    return json({ ok: true, active: n });
+    /**
+     * 回滚 = **设计回滚、身份不回滚**：把 `template_seq` 指回第 n 版，然后用
+     * **当前设置**重新烘焙一次 —— 所以线上品牌名/配色仍是现在这套，只有页面
+     * 结构退回旧版。**不产生新版本**（`site_releases` 不增行），只写指针审计。
+     */
+    const result = await rollbackSite(env, tenantId, n, {
+      apiBase: apiBaseOf(env, request),
+      actor,
+    });
+    if (!result.ok) {
+      const status = result.code === "unknown_version" ? 404 : 422;
+      return json({ error: result.code, message: result.message, ...(result.issues ? { issues: result.issues } : {}) }, status);
+    }
+    return json({ ok: true, active: n, live: result.artifactSha, bakedAt: result.bakedAt });
   }
 
   return null;
