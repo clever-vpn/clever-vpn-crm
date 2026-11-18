@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-29
 Status: **`deprecated`**（一次性审核记录，留作追溯；权威是契约正文，**不要照这篇实现**）
-审查对象：`clever-vpn-docs` 的 `docs/contracts/services/crm/app.md`（审查时 `Contract: 21`，现为 `25`）
+审查对象：`clever-vpn-docs` 的 `docs/contracts/services/crm/clients.md`（审查时 `Contract: 21`，现为 `25`）
 当时结论：**M1–M12 已全部落地，契约升到 `Contract: 22`**；B25 移交 `ui-rules.md` §8
 
 > **2026-11-08 迁入本仓**（原 `clever-vpn-docs/docs/design/contract-review.md`）。
