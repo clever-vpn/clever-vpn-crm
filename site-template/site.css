@@ -93,7 +93,8 @@ a:hover {
 /* ── 顶栏 ── */
 header.site {
   position: sticky; top: 0; z-index: 20;
-  background: rgba(255, 255, 255, 0.86);
+  /* 跟着底色走（不能写死白色）：深色主题下白底 + 浅色字等于看不见 */
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
   backdrop-filter: saturate(180%) blur(12px);
   border-bottom: 1px solid var(--border);
 }
