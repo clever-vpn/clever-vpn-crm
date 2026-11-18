@@ -54,7 +54,7 @@
 
 ## 托管形态
 
-同一份代码（release 里的 `crm-worker.mjs`）由 [clever-vpn-crm-saas](../clever-vpn-crm-saas)
+同一份代码（release 里的 `crm-worker.mjs`）由 [`clever-vpn-crm-saas`](https://github.com/clever-vpn/clever-vpn-crm-saas)
 上传到 Workers for Platforms 的 dispatch namespace，每个租户一个 user Worker + 一个 D1。
 托管侧不含任何业务代码，详见该仓库 README。
 
