@@ -2,7 +2,7 @@
 
 > Last updated: 2026-10-26 — 只描述**现在能配出来的**；规划中的放在 §10。
 > 设计取舍与"为什么不做什么"见 [`promotion.md`](promotion.md)；接口字段见
-> `clever-vpn-docs/docs/contracts/app-crm.md` §2.9。
+> `clever-vpn-docs/docs/contracts/services/app-crm.md` §2.9。
 
 这本手册面向**租户运营**：先按你要达成的目标找到场景，照着"设置"那几行填，就能配出来。
 每个场景都写明「用什么 / 怎么设 / 用户看到什么 / 注意什么」。
