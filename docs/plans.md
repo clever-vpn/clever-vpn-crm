@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-24
 
-> 权威契约在 [`clever-vpn-docs` `app-crm.md` §2.4.7 / §2.4.8](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/app-crm.md)。
+> 权威契约在 [`clever-vpn-docs` `app-crm.md` §2.4.7 / §2.4.8](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/crm/app.md)。
 > 本文只讲**本仓库怎么实现**，不复制契约正文。
 > 实体定义（客户 / 订单 / 订阅 / 退款）见 [`domain.md`](domain.md)。
 

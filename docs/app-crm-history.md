@@ -1,14 +1,14 @@
 # App ⇄ CRM 契约 · 设计期演进记录
 
 Last updated: 2026-10-29
-Status: **`deprecated`**（设计期历史，留作考古；权威是契约正文 `clever-vpn-docs/docs/contracts/services/app-crm.md`）
+Status: **`deprecated`**（设计期历史，留作考古；权威是契约正文 `clever-vpn-docs/docs/contracts/services/crm/app.md`）
 
 > **2026-11-08 迁入本仓**（原 `clever-vpn-docs/docs/design/app-crm-history.md`）。
 > 理由：它记的是这两个仓在设计期的取舍，只在本仓有用。
 
 Last updated: 2026-10-31
 
-> **这份文件不随契约发布。** 契约本身（`clever-vpn-docs/docs/contracts/services/app-crm.md`）只描述
+> **这份文件不随契约发布。** 契约本身（`clever-vpn-docs/docs/contracts/services/crm/app.md`）只描述
 > "现在是什么"，这里记"当初为什么这样、又改过什么"。读者是维护者，不是租户或用户。
 >
 > 为什么不放进契约：CRM 与 App 都还没发布，v1–v22 从未对外存在过。把这些写进对外文档会让人
