@@ -32,7 +32,7 @@ import {
   type SiteStateView,
   type SiteSettingsView,
   type SiteValues,
-  type SiteVersion,
+  type SiteRelease,
 } from "../api";
 import {
   effectiveInitialValues,
@@ -292,15 +292,17 @@ export default function Site() {
   }
 
   const active = state?.active ?? null;
-  const templateReady = state?.templateReady ?? false;
   /**
    * **后台只能"重发"已经存在的设计**（`active` = 线上那一版设计）。没有就是
    * "从没在设计器里发布过"—— 此时后台不允许发布：种子只是设计器里的起点，
    * 发上去也只是一份通用模板，不是租户的站。新站点必须走设计器。
    */
   const canPublish = active !== null;
-  const versions = state?.versions ?? [];
-  const published = versions.find((v) => v.seq === active) ?? null;
+  const releases = state?.releases ?? [];
+  const published = releases.find((v) => v.seq === active) ?? null;
+  const live = state?.live ?? null;
+  /** 源包从哪来：`release:vN` = 设计器交付的那一版；`seed` = 还没发布过 */
+  const sourceFrom = state?.sourceFrom ?? '';
 
   const columns = [
     {
@@ -318,9 +320,9 @@ export default function Site() {
     },
     {
       title: "发布内容",
-      dataIndex: "template",
-      render: (t: string, row: SiteVersion) =>
-        `${t} ${row.template_version}（${row.files} 个文件 / ${fmtBytes(row.bytes)}）`,
+      key: "content",
+      render: (_: unknown, row: SiteRelease) =>
+        `${row.files} 个文件 / ${fmtBytes(row.bytes)}`,
     },
     {
       title: "发布时间",
@@ -330,7 +332,7 @@ export default function Site() {
     {
       title: "操作",
       key: "op",
-      render: (_: unknown, row: SiteVersion) =>
+      render: (_: unknown, row: SiteRelease) =>
         row.seq === active ? (
           <Typography.Text type="secondary">正在服务</Typography.Text>
         ) : (
@@ -380,8 +382,8 @@ export default function Site() {
               style={{ marginTop: 12, marginBottom: 0 }}
             >
               {published
-                ? `发布于 ${fmtTime(published.created_at)}。改完设置要再点一次「发布站点」才会生效。`
-                : "点下面的「发布站点」，把当前内容生成静态文件并发到线上。"}
+                ? `设计发布于 ${fmtTime(published.created_at)}。改设置会自动重烘焙（只换产物，版本号不变）。`
+                : "还没有发布过：新站点要先在设计器里发布一版。"}
             </Typography.Paragraph>
           </Card>
         </Col>
@@ -389,7 +391,7 @@ export default function Site() {
           <Card>
             <Statistic
               title="历史版本"
-              value={versions.length}
+              value={releases.length}
               loading={loading}
               suffix="个"
             />
@@ -445,12 +447,17 @@ export default function Site() {
         }
       >
         <Descriptions column={1} size="small">
-          <Descriptions.Item label="模板">
-            {state?.templateVersion
-              ? `设计器交付的 ${state.templateVersion}`
-              : templateReady
-                ? "公共模板 basic v1（你还没在设计器里改过）"
-                : "未上传"}
+          <Descriptions.Item label="内容来源">
+            {sourceFrom === "seed"
+              ? "起点模板（还没在设计器里发布过）"
+              : sourceFrom
+                ? `设计器交付的第 ${sourceFrom.replace("release:v", "")} 版`
+                : "—"}
+          </Descriptions.Item>
+          <Descriptions.Item label="线上产物">
+            {live
+              ? `烘焙于 ${fmtTime(live.bakedAt)} · 设置 rev ${live.settingsRev}`
+              : "还没有产物"}
           </Descriptions.Item>
           <Descriptions.Item label="生效时间">
             切指针后约 5 秒（site-serve 有 5 秒指针缓存）
@@ -466,7 +473,7 @@ export default function Site() {
           rowKey="seq"
           size="small"
           loading={loading}
-          dataSource={versions}
+          dataSource={releases}
           columns={columns}
           pagination={false}
           locale={{ emptyText: "还没有发布过" }}

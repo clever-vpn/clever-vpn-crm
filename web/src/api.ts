@@ -160,11 +160,17 @@ export interface Quote {
   expires_at: string | null;
 }
 
-/** 站点发布状态：`active` 是**线上正在服务**的版本号，null = 从未发布 */
-export interface SiteVersion {
+/**
+ * 发布记录（`site_releases`，append-only）。
+ *
+ * 与 `src/site/publish.ts` 的 `SiteState.releases` 逐字段一致 —— 那边是唯一权威形状，
+ * 这里只做类型镜像。**镜像不同步 `typecheck` 照样过**（它只检查我们这边自洽），
+ * 所以界面对不对得上只有浏览器能抓：`clever-vpn-site-studio/e2e/panel.spec.ts`。
+ */
+export interface SiteRelease {
   seq: number;
-  template: string;
-  template_version: string;
+  source_sha: string;
+  artifact_sha: string;
   files: number;
   bytes: number;
   created_at: string;
@@ -179,18 +185,15 @@ export interface SiteLive {
 
 export interface SiteStateView {
   active: number | null;
+  /** 源包从哪来：`release:v7` = 线上那一版；`seed` = 还没在设计器里发布过 */
+  sourceFrom: string;
   /**
    * 线上正在服务的**产物**（`art/<sha>/`）。设计与产物是两件事：保存设置只换产物、
    * 不换版本号（契约 `site-studio-crm.md` §0.1.3）。
    */
   live?: SiteLive | null;
-  versions: SiteVersion[];
-  /** 模板是否已在 R2；false 时发布必然失败，页面要提前提示 */
-  templateReady: boolean;
-  /** 发布时会用哪一份模板：`studio:v2`（设计器交付）或 `public:basic@v1` */
-  templateSource: string;
-  /** 租户在设计器里交付的版本号；从没交付过是 null */
-  templateVersion: string | null;
+  /** 最近若干版，最新在前 */
+  releases: SiteRelease[];
 }
 
 export interface SitePublishResult {
@@ -198,8 +201,12 @@ export interface SitePublishResult {
   version: number;
   files: number;
   bytes: number;
-  template: string;
-  templateVersion: string;
+  /** 这次发布的源包 / 渲染后的产物 / 血缘种子 */
+  sourceSha: string;
+  artifactSha: string;
+  seedSha: string;
+  /** 同内容重复发布 ⇒ true（返回的是已有版本） */
+  idempotent: boolean;
 }
 
 /**
