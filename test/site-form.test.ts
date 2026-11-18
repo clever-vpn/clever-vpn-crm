@@ -88,10 +88,17 @@ describe("回填", () => {
 });
 
 describe("配色建议", () => {
-  it("只填五个颜色令牌，不动 preset（底盘是另一个决定）", () => {
+  /**
+   * 应用一套方案 = `preset` + 主色 + 强调色，**中性三色不写**。
+   *
+   * 写进去的后果很具体：方案里的底色是"浅色白底"，租户之后把主题切成深色，
+   * 底色还是白 —— 看上去就像切换没生效。中性三色必须继续跟随主题。
+   */
+  it("只写 preset + 主色 + 强调色，中性三色保持跟随主题", () => {
     const palette: SitePalette = {
       id: "x",
       label: "X",
+      preset: "dark",
       colors: {
         primary: "#111111",
         accent: "#222222",
@@ -103,8 +110,9 @@ describe("配色建议", () => {
     const patch = palettePatch(palette) as {
       site: { theme: { color: Record<string, string>; preset?: string } };
     };
-    expect(Object.keys(patch.site.theme.color).sort()).toEqual([...COLOR_TOKENS].sort());
+    expect(Object.keys(patch.site.theme.color).sort()).toEqual(["accent", "primary"]);
     expect(patch.site.theme.color.primary).toBe("#111111");
-    expect(patch.site.theme).not.toHaveProperty("preset");
+    expect(patch.site.theme.preset).toBe("dark");
+    expect(Object.keys(patch.site.theme.color)).not.toContain("background");
   });
 });

@@ -27,10 +27,12 @@ export interface SiteCapability {
   items?: { max?: number };
 }
 
-/** 成套配色建议：`{id, label, colors:{primary,…}}`，**不落库** */
+/** 成套配色建议：`{id, label, preset, colors}`，**不落库** */
 export interface SitePalette {
   id: string;
   label: string;
+  /** 这套方案属于浅色还是深色底盘 */
+  preset: string;
   colors: Record<string, string>;
 }
 
@@ -180,13 +182,22 @@ export function effectiveInitialValues(
 /**
  * 选一套配色 ⇒ 交给 antd 的 `setFieldsValue` 补丁。
  *
- * 只写五个颜色令牌：`preset`（深浅底盘）是另一件事，不该被配色方案悄悄改掉。
+ * **只写 `preset` + 主色 + 强调色**：中性三色（底色 / 卡片 / 正文）由 preset 决定，
+ * 保持"跟随主题"，不写进库 —— 否则租户之后换深浅主题时，那三色不会跟着变。
+ * 想逐个调色的人走"高级"。
  */
 export function palettePatch(palette: SitePalette): Record<string, unknown> {
   const color: Record<string, string> = {};
-  for (const token of COLOR_TOKENS) {
+  for (const token of ["primary", "accent"] as const) {
     const value = palette.colors[token];
     if (value) color[token] = value;
   }
-  return { site: { theme: { color } } };
+  return {
+    site: {
+      theme: {
+        ...(palette.preset ? { preset: palette.preset } : {}),
+        color,
+      },
+    },
+  };
 }

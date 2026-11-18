@@ -28,6 +28,7 @@ import {
   type SiteCollections,
   type SiteDomainView,
   type SiteMeta,
+  type SitePalette,
   type SiteStateView,
   type SiteSettingsView,
   type SiteValues,
@@ -89,6 +90,8 @@ export default function Site() {
   const [tab, setTab] = useState("publish");
   /** 选中的配色建议（只用来高亮，不是被保存的字段） */
   const [paletteId, setPaletteId] = useState<string | null>(null);
+  /** 展开「高级：逐个调色」 */
+  const [advanced, setAdvanced] = useState(false);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -117,6 +120,12 @@ export default function Site() {
 
   /** 字段清单（由 CRM 的 capabilities 生成，见 `web/src/site-fields.ts`） */
   const fields = meta ? formFields(meta.capabilities) : [];
+  /**
+   * 五个颜色令牌收进「高级」：默认路径是**选一套配色方案**，不是让租户逐个挑颜色。
+   * 逐个调色仍然在，只是要主动展开（评审时别把这条改回去）。
+   */
+  const colorFields = fields.filter((f) => f.path.startsWith("site.theme.color."));
+  const baseFields = fields.filter((f) => !f.path.startsWith("site.theme.color."));
 
   /**
    * 拿到设置 / 契约之后回填表单。
@@ -193,6 +202,28 @@ export default function Site() {
     } catch (e) {
       message.error(e instanceof ApiError ? e.message : "回滚失败");
     }
+  }
+
+  /**
+   * 应用一套配色：写 `preset` + 主色 + 强调色，并**标成"动过"**。
+   *
+   * 为什么不用 `setFieldsValue`：它只改值、不标 touched，而保存时"只提交动过的字段"
+   * 正是靠 touched 判的 —— 用 setFieldsValue 会出现"点了方案、保存后什么也没存"。
+   */
+  function applyPalette(palette: SitePalette) {
+    setPaletteId(palette.id);
+    const patch = palettePatch(palette) as {
+      site: { theme: { preset?: string; color?: Record<string, string> } };
+    };
+    const theme = patch.site.theme;
+    const fields: { name: (string | number)[]; value: string; touched: true }[] = [];
+    if (theme.preset) {
+      fields.push({ name: ["site", "theme", "preset"], value: theme.preset, touched: true });
+    }
+    for (const [token, value] of Object.entries(theme.color ?? {})) {
+      fields.push({ name: ["site", "theme", "color", token], value, touched: true });
+    }
+    form.setFields(fields);
   }
 
   async function saveSettings(raw: unknown) {
@@ -458,11 +489,11 @@ export default function Site() {
         onFinish={saveSettings}
         style={{ maxWidth: 560 }}
       >
-        {/* 配色建议：只往五个颜色令牌里填值，本身不是字段（不落库） */}
+        {/* 配色方案：写 preset + 主色 + 强调色，本身不是字段（不落库） */}
         {meta && meta.palettes.length > 0 && (
           <Form.Item
             label="配色方案"
-            extra="换一套现成的五个颜色；下面每一项仍然可以单独改"
+            extra="从现成的几套里挑一套。想逐个调色，展开下面的「高级」"
           >
             <Space wrap>
               {meta.palettes.map((p) => (
@@ -470,10 +501,7 @@ export default function Site() {
                   key={p.id}
                   size="small"
                   type={paletteId === p.id ? "primary" : "default"}
-                  onClick={() => {
-                    setPaletteId(p.id);
-                    form.setFieldsValue(palettePatch(p));
-                  }}
+                  onClick={() => applyPalette(p)}
                 >
                   <span
                     style={{
@@ -492,7 +520,7 @@ export default function Site() {
           </Form.Item>
         )}
 
-        {fields.map((f) => (
+        {baseFields.map((f) => (
           <Form.Item
             key={f.path}
             label={f.label}
@@ -518,6 +546,34 @@ export default function Site() {
             )}
           </Form.Item>
         ))}
+
+        {colorFields.length > 0 && (
+          <>
+            <Divider orientation="left" plain>
+              高级
+            </Divider>
+            <Button
+              type="link"
+              size="small"
+              style={{ paddingLeft: 0, marginBottom: 8 }}
+              onClick={() => setAdvanced((v) => !v)}
+            >
+              {advanced ? "收起颜色微调" : "逐个调色（一般不需要）"}
+            </Button>
+            {advanced &&
+              colorFields.map((f) => (
+                <Form.Item
+                  key={f.path}
+                  label={f.label}
+                  name={f.name}
+                  extra={f.hint}
+                  getValueFromEvent={colorEvent}
+                >
+                  <ColorPicker format="hex" disabledAlpha showText />
+                </Form.Item>
+              ))}
+          </>
+        )}
 
         <Divider orientation="left" plain>
           下载入口

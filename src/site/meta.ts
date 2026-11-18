@@ -30,6 +30,7 @@ import { SDK_VERSION } from "./sdk";
 import {
   DEFAULT_COLORS,
   DOWNLOAD_KINDS,
+  PRESET_COLORS,
   DOWNLOAD_PLATFORMS,
   SETTING_FIELDS,
   THEME_COLORS,
@@ -224,10 +225,17 @@ function derivedCapabilities(): Capability[] {
   return [{ path: "site.footer", kind: "text", label: "页脚版权行（自动）", derived: true }];
 }
 
-/** 一套配色建议：五个令牌的值，**不落库**（存的是色值，不是方案名） */
+/**
+ * 一套配色建议，**不落库**（存的是色值，不是方案名）。
+ *
+ * `preset` 与 `colors` 里的中性三色是**同一套**：应用一套方案 = 写 `preset` +
+ * `primary` + `accent`，中性三色保持"跟随主题"（不写进库）—— 这样租户之后换深浅，
+ * 底色/卡片色/正文色还会跟着变，不会被方案钉死。
+ */
 export interface Palette {
   id: string;
   label: string;
+  preset: "light" | "dark";
   colors: Record<(typeof THEME_COLORS)[number], string>;
 }
 
@@ -238,28 +246,24 @@ export interface Palette {
  * 互不打架的颜色是不现实的；给几套现成的，他只需要选"像不像我"。
  */
 const PALETTES: readonly Palette[] = [
-  { id: "indigo", label: "靛蓝", colors: { ...DEFAULT_COLORS } },
+  { id: "indigo", label: "靛蓝", preset: "light", colors: { ...PRESET_COLORS.light } },
   {
     id: "ocean",
     label: "海洋",
-    colors: {
-      primary: "#0369a1",
-      accent: "#0891b2",
-      background: "#f8fafc",
-      surface: "#ffffff",
-      text: "#0f172a",
-    },
+    preset: "light",
+    colors: { ...PRESET_COLORS.light, primary: "#0369a1", accent: "#0891b2" },
   },
   {
     id: "forest",
     label: "森林",
-    colors: {
-      primary: "#047857",
-      accent: "#0d9488",
-      background: "#f7faf7",
-      surface: "#ffffff",
-      text: "#111827",
-    },
+    preset: "light",
+    colors: { ...PRESET_COLORS.light, primary: "#047857", accent: "#0d9488" },
+  },
+  {
+    id: "midnight",
+    label: "夜色",
+    preset: "dark",
+    colors: { ...PRESET_COLORS.dark },
   },
 ];
 
