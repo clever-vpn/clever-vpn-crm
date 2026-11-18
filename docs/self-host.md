@@ -12,7 +12,9 @@
 
 - Cloudflare 账号（免费即可）
 - 一个域名（可以稍后再配；先用 `*.workers.dev` 也能跑）
-- 一个 **cf-api 租户 API Token**（`cv_api_…`）——CRM 用它调平台接口
+- 一个 **cf-api 租户 API Token**（`cv_api_…`）——CRM 用它调平台接口。
+  **前提固定：所有部署（托管与自部署）都连我们的 cf-api 平台**；平台侧负责租户身份、
+  计量与对账，studio 也是靠它判租户（`verify-tenant`）。不接平台不是支持的一种部署方式。
 - 一个 **site-studio 地址**（`STUDIO_SITE_URL`）——**要做站点就必须接**（见下）
 
 > **站点功能需要 studio，自部署也一样。** studio 不区分自部署/托管：它只认
@@ -56,7 +58,7 @@ Variables（明文）：
 |---|---|---|
 | `CRM_TENANT_ID` | ✅ | 你在 cf-api 的租户 ID。**为空则 deploy 工作流整体跳过** |
 | `CLOUDFLARE_ACCOUNT_ID` | ✅ | Cloudflare 账号 ID |
-| `CF_API_BASE` | – | 默认 `https://api.clever-vpn.org`，自建平台时改这里 |
+| `CF_API_BASE` | – | 默认 `https://api.clever-vpn.org`（我们的平台）。**部署前提就是接这个平台**；只有预发 / 灰度才改 |
 | `D1_NAME` | – | 默认 `clever-vpn-crm` |
 | `WORKER_NAME` | – | 默认 `clever-vpn-crm` |
 | `EMAIL_FROM` | – | 发信人地址（如 `noreply@your-domain.com`，域名需验证）；**与传输一起才算"邮件就绪"** |
