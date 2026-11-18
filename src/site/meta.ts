@@ -1,19 +1,21 @@
 /**
  * `GET /api/site/meta` —— 平台对外的**数据契约**。
  *
- * 契约：`clever-vpn-docs/docs/contracts/site-studio-crm.md` §4.2 / §4.4（v8）
+ * 契约：`clever-vpn-docs/docs/contracts/services/crm/site-studio.md` §3 / §4.4（v15）
  * 标准：`clever-vpn-docs/docs/standards/site-template.md` §3
  *
  * 一句话：**字段清单只有一份，就住在这里。** 模板（studio 产出的那包静态文件）
  * 只**引用**这些路径，不声明、不扩展；AI 也不能新增字段。
  *
- * 三个字段：
+ * 五个字段：
  *
  * | 字段 | 是什么 | 谁用它 |
  * |---|---|---|
  * | `contract` | 数据契约版本（字段增删改语义才 +1） | 交付时协商：模板引用的字段在不在 |
  * | `engine` | 渲染引擎 = `render.ts` 的 sha256 前 16 位（`engine.generated.ts`） | 预览与发布必须同一份 |
- * | `capabilities` | 字段路径 + kind + 上限 + 标签 | studio 的规则注入、设置面板表单 |
+ * | `capabilities` | 字段路径 + kind + 上限 + 标签 + 提示 | studio 的规则注入、两个设置表单 |
+ * | `palettes` | 成套配色建议（**不落库**） | 表单"一键填五个色" |
+ * | `limits` | 体积上限（**唯一口径 = 整版字节**） | studio 的闸门 / 上传、CRM 的源包与产物校验 |
  *
  * **故意不含**：套餐、订阅、订单、登录态（`plans` / `orders` / `subscription` / `me`）。
  * 那是运行期数据，只能经 `window.SiteCrm` 取，不能变成可填字段 —— 否则谁都能
@@ -23,11 +25,14 @@
  */
 
 import { ENGINE_ID } from "./engine.generated";
+import { SITE_LIMITS } from "./limits";
 import { SDK_VERSION } from "./sdk";
 import {
+  DEFAULT_COLORS,
   DOWNLOAD_KINDS,
   DOWNLOAD_PLATFORMS,
   SETTING_FIELDS,
+  THEME_COLORS,
 } from "./settings";
 
 /**
@@ -37,7 +42,7 @@ import {
  * 只新增字段不算破坏性，但也要 +1 —— 老模板仍然能渲染，新模板需要新版才可用，
  * 所以交付时比对的是">= 本版本"里的**字段存在性**，不是数字相等。
  */
-export const SITE_CONTRACT = 7;
+export const SITE_CONTRACT = 8;
 
 export type CapabilityKind =
   | "text"
@@ -67,6 +72,13 @@ export interface Capability extends CapabilityField {
   /** 留空时用这个（只对文本类有意义） */
   default?: string;
   /**
+   * 表单里那句**人话说明**（"用在浏览器标签页标题和页脚版权行"）。
+   *
+   * 放这里而不是各自的表单里：CRM 后台与 studio 面板是两张表单、一份清单，
+   * 说明写在代码里就必然一边有一边没有。
+   */
+  hint?: string;
+  /**
    * **派生值**：渲染时由引擎算出来，不存在库里、也不能填。
    *
    * 模板可以引用（`{{site.footer}}`），设置表单必须跳过（否则租户会看到一个
@@ -88,18 +100,50 @@ export interface Capability extends CapabilityField {
  */
 const LABELS: Record<string, string> = {
   "site.name": "站点名",
-  "site.tagline": "一句话介绍",
+  "site.legal_name": "法务主体",
   "site.contact_email": "客服邮箱",
-  "site.theme.brand": "主题色",
+  "site.hero.title": "首屏标题",
+  "site.hero.sub": "首屏副标题",
+  "site.tagline": "一句话介绍",
   "site.theme.preset": "主题",
+  "site.theme.color.primary": "主色",
+  "site.theme.color.accent": "强调色",
+  "site.theme.color.background": "底色",
+  "site.theme.color.surface": "卡片色",
+  "site.theme.color.text": "正文色",
+};
+
+/**
+ * 表单里那句说明。**为什么一句话要由服务端给**：同一份清单要喂两个表单
+ * （CRM 后台、studio 面板），说明留在各自的组件里就等于两份措辞，迟早不一致。
+ */
+const HINTS: Record<string, string> = {
+  "site.name": "浏览器标签页、页头与页脚都用它；短一点更好看",
+  "site.legal_name": "页脚署名用，要跟工商登记一致；留空就用站点名",
+  "site.contact_email": "页脚与下载页的『联系我们』；留空则不显示入口",
+  "site.hero.title": "首页第一屏的大标题",
+  "site.hero.sub": "大标题下面那句话，说清「是什么、给谁用」",
+  "site.tagline": "只用于搜索引擎摘要与分享卡片，不进首屏",
+  "site.theme.preset": "整套中性色（底色 / 卡片 / 边框）一次换好",
+  "site.theme.color.primary": "按钮与强调用的品牌色；太浅会看不清白字，保存时会被拦",
+  "site.theme.color.accent": "次要强调色（标签、标记、图表）",
+  "site.theme.color.background": "页面底色",
+  "site.theme.color.surface": "卡片 / 弹层底色，通常比底色浅或深一档",
+  "site.theme.color.text": "正文文字颜色，要和底色形成足够对比",
 };
 
 /** 一条下载入口最多多少个渠道（与 `settings.ts` 的校验保持一致） */
 const MAX_DOWNLOADS = 20;
 
+/**
+ * 空值兜底：与 `settings.ts` 的 `DEFAULT_COLORS` 同值。
+ *
+ * 这边是"表单上显示什么"，那边是"真的没填时渲染什么"—— 两处必须一致
+ * （`test/site-settings-fields.test.ts` 对过）。
+ */
 const DEFAULTS: Record<string, string> = {
-  "site.theme.brand": "#4f46e5",
   "site.theme.preset": "light",
+  ...Object.fromEntries(THEME_COLORS.map((key) => [`site.theme.color.${key}`, DEFAULT_COLORS[key]])),
 };
 
 /** 枚举值的人话（顺序与 `SETTING_FIELDS` 里的 `values` 一致） */
@@ -126,6 +170,7 @@ function settingsCapabilities(): Capability[] {
       ...(ENUM_LABELS[path] ? { value_labels: ENUM_LABELS[path]! } : {}),
       label: LABELS[path] ?? path,
       ...(DEFAULTS[path] ? { default: DEFAULTS[path]! } : {}),
+      ...(HINTS[path] ? { hint: HINTS[path]! } : {}),
     };
   });
 }
@@ -167,13 +212,59 @@ function collectionCapabilities(): Capability[] {
  * 清单。漏声明 = 把一份**合法**模板判成 `unknown_path`（`{{site.footer}}` 就是这么
  * 被拦的）。
  *
- * 只有 `site.footer` 一项：`contact_link` 曾经也派生过，后来去掉了 —— 渲染器对
- * 所有取值统一转义，值里带 `<a>` 只会变成 `&lt;a`。模板自己写
- * `<a href="mailto:{{site.contact_email}}">`。
+ * 两项：
+ *
+ *   · `site.footer` —— `© <年> <法务主体或站名>`。`contact_link` 曾经也派生过，后来
+ *     去掉了：渲染器对所有取值统一转义，值里带 `<a>` 只会变成 `&lt;a`。
+ *   · `site.theme.brand` —— `contract: 8` 把主色改名为 `site.theme.color.primary`，
+ *     旧路径留成派生别名（值就是 primary）。已发布的模板里还有 `{{site.theme.brand}}`，
+ *     删掉就等于让所有老站点下次发布会 `unknown_path` 直接失败。
  */
 function derivedCapabilities(): Capability[] {
-  return [{ path: "site.footer", kind: "text", label: "页脚版权行（自动）", derived: true }];
+  return [
+    { path: "site.footer", kind: "text", label: "页脚版权行（自动）", derived: true },
+    { path: "site.theme.brand", kind: "color", label: "主色（旧路径别名）", derived: true },
+  ];
 }
+
+/** 一套配色建议：五个令牌的值，**不落库**（存的是色值，不是方案名） */
+export interface Palette {
+  id: string;
+  label: string;
+  colors: Record<(typeof THEME_COLORS)[number], string>;
+}
+
+/**
+ * 成套配色建议。表单拿它当"一键填五个色"，租户改哪个色都不影响这里。
+ *
+ * 为什么要有：五个令牌是**一套**（标准 §3.2 判据 4），让非技术租户从零挑五个
+ * 互不打架的颜色是不现实的；给几套现成的，他只需要选"像不像我"。
+ */
+const PALETTES: readonly Palette[] = [
+  { id: "indigo", label: "靛蓝", colors: { ...DEFAULT_COLORS } },
+  {
+    id: "ocean",
+    label: "海洋",
+    colors: {
+      primary: "#0369a1",
+      accent: "#0891b2",
+      background: "#f8fafc",
+      surface: "#ffffff",
+      text: "#0f172a",
+    },
+  },
+  {
+    id: "forest",
+    label: "森林",
+    colors: {
+      primary: "#047857",
+      accent: "#0d9488",
+      background: "#f7faf7",
+      surface: "#ffffff",
+      text: "#111827",
+    },
+  },
+];
 
 /** 全部可引用路径。顺序稳定（设置字段 → 集合 → 派生值）。 */
 export function siteCapabilities(): Capability[] {
@@ -186,6 +277,15 @@ export interface SiteMeta {
   /** 平台 SDK 的版本（`/_crm/sdk.js` 里的 `SiteCrm.version`）—— 预览与线上对账用 */
   sdk_version: string;
   capabilities: Capability[];
+  /** 成套配色建议：表单用，**不落库** */
+  palettes: Palette[];
+  /**
+   * 体积上限：**唯一口径 = 整版字节**（文本 + 素材）。
+   *
+   * 放在这里而不是各自写常量：studio 的闸门/上传与 CRM 的源包/产物校验必须同一个数，
+   * 分开写就是几份会漂移的常量（标准 `site-template.md` §9）。
+   */
+  limits: typeof SITE_LIMITS;
 }
 
 /** 端点的响应体。纯函数 —— 没有 env、没有 DB，所以永远不会有"500 因为库挂了" */
@@ -197,5 +297,7 @@ export function siteMeta(): SiteMeta {
     // studio 预览用它证明"预览与线上是同一份 SDK"（site-crm.md §3.1）。
     sdk_version: SDK_VERSION,
     capabilities: siteCapabilities(),
+    palettes: [...PALETTES],
+    limits: SITE_LIMITS,
   };
 }

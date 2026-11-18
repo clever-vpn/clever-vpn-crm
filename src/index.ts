@@ -26,8 +26,8 @@ import { siteSourceOf } from "./site/template-source";
 import { deliverSite, type DeliveryInput } from "./site/deliver";
 import { SAMPLE_PLANS_RAW, sampleDataOf } from "./site/sample";
 import { ALLOWED_EXT, latestRelease, publishSite } from "./site/publish";
+import { SITE_LIMITS } from "./site/limits";
 import {
-  TPL_LIMITS,
   checkSourcePath,
   contentTypeOfPath,
   storeSource,
@@ -414,9 +414,9 @@ export default {
         }
 
         const declared = Number(request.headers.get("content-length") ?? 0);
-        if (declared > TPL_LIMITS.fileBytes) {
+        if (declared > SITE_LIMITS.fileBytes) {
           return json(
-            { error: "site_bundle_too_large", message: `${path} 超过单文件上限 ${TPL_LIMITS.fileBytes} 字节` },
+            { error: "site_bundle_too_large", message: `${path} 超过单文件上限 ${SITE_LIMITS.fileBytes} 字节` },
             413,
           );
         }

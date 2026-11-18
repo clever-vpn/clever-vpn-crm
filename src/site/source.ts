@@ -20,6 +20,7 @@
  */
 
 import type { Env } from "../env";
+import { SITE_LIMITS } from "./limits";
 import { SEED_BINARY, SEED_FILES } from "./seed.generated";
 
 /** R2 里源包的前缀：`tpl/<sha-hex>/`（契约 §9） */
@@ -27,19 +28,6 @@ export const tplPrefix = (sha: string): string => `tpl/${stripSha(sha)}/`;
 
 /** 包内子目录 */
 export const FILES_PREFIX = "files/";
-
-/**
- * 契约 §4.3 / `site-assets.md` §6 的硬上限（studio 侧先拦，这里兜底）。
- *
- * `totalBytes` 数的是**整版产物**：文本 + 素材字节。两者原来混在一起用 10 MB，
- * 于是一个正常站点（6 张 1.5 MB 的图）会撞墙，而 studio 那边的 8 MB 只数文本
- * —— 它不是同一个口径，别拿它当参照。素材单张 2 MB 时，32 MB 够放 15 张左右。
- */
-export const TPL_LIMITS = {
-  fileBytes: 2 << 20,
-  totalBytes: 32 << 20,
-  files: 1000,
-} as const;
 
 /**
  * 源包里的一个文件。
@@ -117,8 +105,8 @@ export async function describeFiles(
   files: SourceFileInput[],
 ): Promise<SourceResult<{ entries: SourceEntry[]; totalBytes: number }>> {
   if (files.length === 0) return err("site_manifest_invalid", "源包为空");
-  if (files.length > TPL_LIMITS.files) {
-    return err("site_bundle_too_large", `文件数 ${files.length} 超过上限 ${TPL_LIMITS.files}`);
+  if (files.length > SITE_LIMITS.files) {
+    return err("site_bundle_too_large", `文件数 ${files.length} 超过上限 ${SITE_LIMITS.files}`);
   }
 
   const seen = new Set<string>();
@@ -132,15 +120,15 @@ export async function describeFiles(
     seen.add(file.path);
 
     const bytes = toBytes(file.body);
-    if (bytes.byteLength > TPL_LIMITS.fileBytes) {
+    if (bytes.byteLength > SITE_LIMITS.fileBytes) {
       return err(
         "site_bundle_too_large",
-        `${file.path} 有 ${bytes.byteLength} 字节，超过单文件上限 ${TPL_LIMITS.fileBytes}`,
+        `${file.path} 有 ${bytes.byteLength} 字节，超过单文件上限 ${SITE_LIMITS.fileBytes}`,
       );
     }
     totalBytes += bytes.byteLength;
-    if (totalBytes > TPL_LIMITS.totalBytes) {
-      return err("site_bundle_too_large", `整包超过上限 ${TPL_LIMITS.totalBytes} 字节`);
+    if (totalBytes > SITE_LIMITS.totalBytes) {
+      return err("site_bundle_too_large", `整包超过上限 ${SITE_LIMITS.totalBytes} 字节`);
     }
     entries.push({ path: file.path, sha256: await sha256Hex(bytes), bytes: bytes.byteLength });
   }
@@ -228,7 +216,7 @@ export async function readSource(
   const prefix = `${tplPrefix(sha)}${FILES_PREFIX}`;
   const listed = await sites.list({
     prefix,
-    limit: Math.min(TPL_LIMITS.files, 1000),
+    limit: Math.min(SITE_LIMITS.files, 1000),
   });
   const out: { path: string; body: ArrayBuffer }[] = [];
   for (const object of listed.objects) {

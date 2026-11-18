@@ -192,16 +192,26 @@ export interface SitePublishResult {
 
 /**
  * 站点设置 = **单行 JSON**，键就是模板里写的路径（`site.name`）。
- * 与模板包的 `data.schema.json` 同构（standards/site-template.md §3）。
+ *
+ * 形状**不在这里声明**：字段清单的唯一权威是 CRM 的 `/api/site/meta`
+ * （`capabilities`，标准 `site-template.md` §3）。手写一份镜像就是第二份清单 ——
+ * 它和真清单不同步时，`typecheck` 照样过。
  */
-export interface SiteValues {
-  site?: {
-    name?: string;
-    tagline?: string;
-    contact_email?: string;
-    /** 主色（`#rrggbb`）+ 主题（`light` / `dark`）。主题成套给，不拆成散装色值 */
-    theme?: { brand?: string; preset?: string };
-  };
+export type SiteValues = Record<string, unknown>;
+
+/** `/api/site/meta` 的一条能力（表单按它生成，见 `site-fields.ts`） */
+export type SiteCapability = import("./site-fields").SiteCapability;
+export type SitePalette = import("./site-fields").SitePalette;
+
+export interface SiteMeta {
+  contract: number;
+  engine: string;
+  sdk_version: string;
+  capabilities: SiteCapability[];
+  /** 成套配色建议：只给表单用，**不落库** */
+  palettes: SitePalette[];
+  /** 体积上限（整版字节）：studio 与 CRM 同一个口径 */
+  limits: { fileBytes: number; totalBytes: number; files: number };
 }
 
 /** 一条下载入口：platform / kind 是封闭集合（与后端校验一致） */
@@ -282,6 +292,12 @@ export const api = {
    */
   studioTicket: () =>
     call<{ url: string }>("POST", "/api/studio/ticket", { aud: "site-studio" }, true),
+  /**
+   * 数据契约（字段清单 / 配色建议 / 体积上限）。
+   *
+   * **不在 `/api/admin` 下**：它是公开端点，不带租户数据，所以走 `absolute`。
+   */
+  siteMeta: () => call<SiteMeta>("GET", "/api/site/meta", undefined, true),
   siteSettings: () => call<{ settings: SiteSettingsView }>("GET", "/site/settings"),
   /** `collections` 不传就不动（只改设置时别把下载入口清空） */
   saveSiteSettings: (input: {

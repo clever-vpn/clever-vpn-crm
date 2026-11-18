@@ -1,6 +1,6 @@
 # 站点存储布局（R2 + KV）
 
-Last updated: 2026-11-10
+Last updated: 2026-11-18
 Status: `as-built`（本仓内部实现说明，**不是跨仓契约**）
 
 > 写这份东西的是 `src/site/publish.ts`，读它的是 `workers/site/src/index.ts`
@@ -81,27 +81,35 @@ site:<tenant>:active   { n }                                写：本仓发布
 
 ## 4. 品牌设置：发布时烘焙
 
-`site_settings`（本仓 D1，单行）：`site_name` / `tagline` / `color` / `contact_email`
-/ `footer_note`。
+`site_settings`（本仓 D1，**单行 JSON**）：`values`（键就是模板里写的路径）+
+`collections`（下载入口）+ `rev`（乐观锁）。字段清单只有一份，住
+`src/site/settings.ts` 的 `SETTING_FIELDS`，对外形态是 `/api/site/meta` 的
+`capabilities`（契约 `site.md` `contract: 8`、标准 `site-template.md` §3）。
 
-发布的替换表只有六个槽，**多一个都要先改契约**：
-
-| 槽 | 来源 | 说明 |
+| 路径 | 上限 | 说明 |
 |---|---|---|
-| `{{site.name}}` | `site_name`，空则用兜底名 | 转义后写入 |
-| `{{site.tagline}}` | `tagline` | 转义 |
-| `{{site.hero_title}}` | `hero_title`，空则用默认文案 | 转义 |
-| `{{site.hero_sub}}` | `hero_sub` | 转义；空 ⇒ 空串（模板用 `:empty` 隐藏） |
-| `{{site.color}}` | `color`（`#rrggbb`） | 不转义，需已校验 |
-| `{{site.contact}}` | `contact_email` | 转义 |
-| `{{site.contact_link}}` | `contact_email` | **整段 `<a>`**；没配就渲染空串（避免空的 `mailto:`） |
-| `{{site.footer}}` | `footer_note`，空则 `© <年> <站点名>` | 转义 |
+| `site.name` | 24 | 站名 |
+| `site.legal_name` | 40 | 法务主体（页脚署名优先用它） |
+| `site.contact_email` | 120 | 客服邮箱 |
+| `site.hero.title` / `site.hero.sub` | 24 / 60 | 首屏大标题与副标题 |
+| `site.tagline` | 120 | **只做 SEO / 分享卡片**，不进首屏 |
+| `site.theme.preset` | `light` / `dark` | 中性色底盘 |
+| `site.theme.color.{primary,accent,background,surface,text}` | `#rrggbb` | 品牌色令牌（一套五个） |
 
-> **空值必须回落到可用默认**：`{{site.color}}` 留空会让 `--brand: ;` 变成非法 CSS，
-> 整份样式失效 —— 所以它回落到 `#3b82f6`，而不是空串。
+**派生值**（渲染时算，不存库、不可填）：`site.footer` = `© <年> <legal_name 或 name>`；
+`site.theme.brand` = `primary`（`contract: 7` 的旧路径别名，留着只为已发布模板里的
+`{{site.theme.brand}}` 不变成 `unknown_path`）。
+
+校验：格式 / 枚举 / 上限，外加 `primary` 与白字的对比度 ≥ 3:1（`bad_contrast`）。
+空值不写进库，渲染时由 `buildScope()` 兜默认（`DEFAULT_COLORS`）—— 留空会让
+`--brand: ;` 变成非法 CSS，整份样式失效。
 
 产物里若残留**未定义**的 `{{site.xxx}}` ⇒ 发布直接失败（`template_token_unknown`），
 不让它漏到线上。
+
+**体积上限**：唯一口径是**整版字节**（文本 + 素材）
+`{fileBytes: 2 MB, totalBytes: 32 MB, files: 200}`，唯一出处 `src/site/limits.ts`，
+对外是 `/api/site/meta` 的 `limits`（studio 读同一份，不各自维护常量）。
 
 ## 5. 域名
 

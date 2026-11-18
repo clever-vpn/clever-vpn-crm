@@ -16,6 +16,7 @@
  *
  * 与 cf-api 的分工：域名/证书/KV 写穿归 cf-api；**站点产物与 active 指针归这里**。
  */
+import { SITE_LIMITS } from "./limits";
 import { renderTemplate } from "./render";
 import { FILES_PREFIX, isTextPath, readSource, seedFiles, seedSha, sourceSha, tplPrefix } from "./source";
 import { artifactShaOf } from "./deliver";
@@ -23,16 +24,6 @@ import { RETURN_HTML, SDK_JS } from "./sdk";
 import { buildScope, readSiteSettings } from "./settings";
 
 import type { Env } from "../env";
-
-/** 与 `clever-vpn-app/scripts/check-web.mjs` 的 `LIMITS` 同源；改这里就是改契约 */
-export const SITE_LIMITS = {
-  /** 单个产物文件 */
-  fileBytes: 1 << 20,
-  /** 一版产物总大小 */
-  totalBytes: 8 << 20,
-  /** 一版最多几个文件 */
-  files: 200,
-} as const;
 
 /** 允许的扩展名：平台产出的静态资源。**没有 `.php` / `.exe` / 无扩展名可执行** */
 export const ALLOWED_EXT = new Set([

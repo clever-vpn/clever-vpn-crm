@@ -13,7 +13,7 @@
  * `:root.dark` 只在选了深色主题时生效。
  */
 :root {
-  --brand: {{site.theme.brand}};
+  --brand: {{site.theme.color.primary}};
   --brand-ink: color-mix(in srgb, var(--brand) 78%, #0b1020);
   --brand-soft: color-mix(in srgb, var(--brand) 12%, var(--surface));
   --brand-line: color-mix(in srgb, var(--brand) 28%, var(--surface));

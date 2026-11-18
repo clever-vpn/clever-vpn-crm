@@ -10,7 +10,6 @@ import {
   Form,
   Input,
   Popconfirm,
-  Radio,
   Row,
   Select,
   Space,
@@ -28,18 +27,21 @@ import {
   type DownloadItem,
   type SiteCollections,
   type SiteDomainView,
+  type SiteMeta,
   type SiteStateView,
   type SiteSettingsView,
   type SiteValues,
   type SiteVersion,
 } from "../api";
+import { formFields, initialValues, palettePatch } from "../site-fields";
 
 /**
  * 网站：三个页签，一屏一件事。
  *
  *   发布   → 主按钮是「打开设计器」（改内容的正路）；「发布站点」是次要动作
  *            （改完设置要重新发布时用）
- *   站点设置 → 名称 / 介绍 / 主色 / 客服邮箱 / 页脚，**发布后才生效**
+ *   站点设置 → 由 CRM 的 capabilities 生成（`src/site/meta.ts` 那份清单），
+ *            **保存不等于发布**：品牌值是发布时烘焙进静态文件的
  *   域名   → **只有 SaaS（multi）模式才有**；自部署由租户自己在 Cloudflare 挂
  *
  * 三条刻意的取舍（评审时别改回去）：
@@ -57,6 +59,10 @@ const fmtBytes = (n: number): string =>
       ? `${(n / 1024).toFixed(1)} KB`
       : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
+/** `ColorPicker` 给的是 Color 对象；存库只要 `#rrggbb` */
+const colorEvent = (c: string | { toHexString: () => string }): string =>
+  typeof c === "string" ? c : c.toHexString();
+
 const fmtTime = (iso: string): string => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
@@ -67,22 +73,28 @@ const fmtTime = (iso: string): string => {
 export default function Site() {
   const [state, setState] = useState<SiteStateView | null>(null);
   const [settings, setSettings] = useState<SiteSettingsView | null>(null);
+  const [meta, setMeta] = useState<SiteMeta | null>(null);
   const [domain, setDomain] = useState<SiteDomainView | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [issues, setIssues] = useState<string[]>([]);
   const [tab, setTab] = useState("publish");
+  /** 选中的配色建议（只用来高亮，不是被保存的字段） */
+  const [paletteId, setPaletteId] = useState<string | null>(null);
+  const [form] = Form.useForm();
 
   const load = useCallback(async () => {
     try {
-      const [s, st, d] = await Promise.all([
+      const [s, st, d, m] = await Promise.all([
         api.site(),
         api.siteSettings(),
         api.siteDomain(),
+        api.siteMeta(),
       ]);
       setState(s);
       setSettings(st.settings);
       setDomain(d);
+      setMeta(m);
     } catch (e) {
       message.error(e instanceof ApiError ? e.message : "读不到站点状态");
     } finally {
@@ -93,6 +105,28 @@ export default function Site() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /** 字段清单（由 CRM 的 capabilities 生成，见 `web/src/site-fields.ts`） */
+  const fields = meta ? formFields(meta.capabilities) : [];
+
+  /**
+   * 拿到设置 / 契约之后回填表单。
+   *
+   * 用 `initialValues` 这个纯函数而不是直接 `settings.values`：库里可能还留着已经
+   * 删掉的路径，原样回填会被后端判 `unknown_field`（保存失败但说不清哪一项）。
+   */
+  useEffect(() => {
+    if (!meta || !settings) return;
+    form.setFieldsValue({
+      ...initialValues(fields, settings.values),
+      // 下载入口仍是一小块专用表单（集合不是单值），值也在同一个 Form 里，
+      // 这样"设置 + 集合"一次保存、一个 `rev`
+      collections: {
+        downloads: settings.collections.downloads.map((d) => ({ ...d })),
+      },
+    });
+    // `fields` 由 meta 派生，跟着 meta 变；不放进依赖是为了避免每次渲染重算一份
+  }, [meta, settings, form]);
 
   async function publish() {
     setBusy(true);
@@ -154,26 +188,17 @@ export default function Site() {
 
   async function saveSettings(raw: unknown) {
     setBusy(true);
-    // 表单里 settings 与集合在一个 `Form` 下（一次保存、一个 rev），
-    // 提交时再拆成两段：`values` 走设置校验，`collections` 走集合校验。
-    const form = raw as SiteValues & { collections?: SiteCollections };
-    const { collections: rawCollections, ...values } = form;
+    // 表单里设置与集合在一个 `Form` 下（一次保存、一个 rev），提交时拆成两段：
+    // `values` 走设置校验，`collections` 走集合校验。
+    //
+    // `values` 里的键**全部来自 capabilities**（表单只渲染清单里的字段），所以不会
+    // 把库里那些已经删掉的路径（比如 `contract: 7` 的 `site.theme.brand`）带上。
+    const submitted = raw as SiteValues & { collections?: SiteCollections };
+    const { collections: rawCollections, ...values } = submitted;
     try {
-      const picked = values.site?.theme?.brand as
-        | string
-        | { toHexString?: () => string }
-        | undefined;
-      const brand =
-        typeof picked === "string" ? picked : (picked?.toHexString?.() ?? "");
       const res = await api.saveSiteSettings({
         if_rev: settings?.rev ?? 0,
-        values: {
-          ...values,
-          site: {
-            ...(values.site ?? {}),
-            theme: { ...(values.site?.theme ?? {}), brand },
-          },
-        },
+        values,
         collections: {
           downloads: (rawCollections?.downloads ?? []).filter(
             (d: DownloadItem) => d?.url,
@@ -371,70 +396,71 @@ export default function Site() {
   const settingsTab = (
     <Card>
       <Form
+        form={form}
         layout="vertical"
-        initialValues={{
-          site: {
-            name: settings?.values?.site?.name ?? "",
-            tagline: settings?.values?.site?.tagline ?? "",
-            contact_email: settings?.values?.site?.contact_email ?? "",
-            theme: {
-              brand: settings?.values?.site?.theme?.brand ?? "#4f46e5",
-              preset: settings?.values?.site?.theme?.preset ?? "light",
-            },
-          },
-          collections: {
-            downloads: (settings?.collections?.downloads ?? []).map((d) => ({
-              platform: d.platform,
-              kind: d.kind,
-              label: d.label,
-              url: d.url,
-            })),
-          },
-        }}
         onFinish={saveSettings}
         style={{ maxWidth: 560 }}
       >
-        <Form.Item
-          label="站点名称"
-          name={["site", "name"]}
-          rules={[{ max: 40, message: "最多 40 个字符" }]}
-          extra="用在浏览器标签页标题和页脚版权行"
-        >
-          <Input placeholder="例如：Acme VPN" />
-        </Form.Item>
-        <Form.Item
-          label="一句话介绍"
-          name={["site", "tagline"]}
-          rules={[{ max: 120, message: "最多 120 个字符" }]}
-          extra="用在搜索引擎摘要里（meta description）"
-        >
-          <Input placeholder="例如：快、稳、不记日志的 VPN" />
-        </Form.Item>
-        <Form.Item
-          label="主题"
-          name={["site", "theme", "preset"]}
-          extra="整套配色一次换好，不用逐个挑颜色"
-        >
-          <Radio.Group optionType="button">
-            <Radio.Button value="light">浅色</Radio.Button>
-            <Radio.Button value="dark">深色</Radio.Button>
-          </Radio.Group>
-        </Form.Item>
-        <Form.Item
-          label="主色"
-          name={["site", "theme", "brand"]}
-          extra="按钮与强调色；其余深浅由它自动派生。太浅会看不清白字，保存时会被拦"
-        >
-          <ColorPicker format="hex" disabledAlpha />
-        </Form.Item>
-        <Form.Item
-          label="客服邮箱"
-          name={["site", "contact_email"]}
-          rules={[{ type: "email", message: "邮箱格式不对" }]}
-          extra="留空则不显示"
-        >
-          <Input placeholder="help@example.com" />
-        </Form.Item>
+        {/* 配色建议：只往五个颜色令牌里填值，本身不是字段（不落库） */}
+        {meta && meta.palettes.length > 0 && (
+          <Form.Item
+            label="配色方案"
+            extra="换一套现成的五个颜色；下面每一项仍然可以单独改"
+          >
+            <Space wrap>
+              {meta.palettes.map((p) => (
+                <Button
+                  key={p.id}
+                  size="small"
+                  type={paletteId === p.id ? "primary" : "default"}
+                  onClick={() => {
+                    setPaletteId(p.id);
+                    form.setFieldsValue(palettePatch(p));
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 10,
+                      height: 10,
+                      borderRadius: 2,
+                      marginRight: 6,
+                      background: p.colors.primary,
+                    }}
+                  />
+                  {p.label}
+                </Button>
+              ))}
+            </Space>
+          </Form.Item>
+        )}
+
+        {fields.map((f) => (
+          <Form.Item
+            key={f.path}
+            label={f.label}
+            name={f.name}
+            extra={f.hint}
+            rules={[
+              ...(f.max ? [{ max: f.max, message: `最多 ${f.max} 个字符` }] : []),
+              ...(f.control === "email"
+                ? [{ type: "email" as const, message: "邮箱格式不对" }]
+                : []),
+            ]}
+            getValueFromEvent={f.control === "color" ? colorEvent : undefined}
+          >
+            {f.control === "color" ? (
+              <ColorPicker format="hex" disabledAlpha showText />
+            ) : f.control === "select" ? (
+              <Select options={f.options} />
+            ) : (
+              <Input
+                type={f.control === "email" ? "email" : "text"}
+                maxLength={f.max}
+              />
+            )}
+          </Form.Item>
+        ))}
 
         <Divider orientation="left" plain>
           下载入口

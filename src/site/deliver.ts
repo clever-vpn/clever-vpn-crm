@@ -21,7 +21,8 @@ import { SITE_CONTRACT } from "./meta";
 import { renderTemplate } from "./render";
 import { ALLOWED_EXT } from "./publish";
 import { buildScope, readSiteSettings } from "./settings";
-import { TPL_LIMITS, checkSourcePath, storeSource } from "./source";
+import { SITE_LIMITS } from "./limits";
+import { checkSourcePath, storeSource } from "./source";
 
 import type { SourceFileInput } from "./source";
 import type { Env } from "../env";
@@ -214,12 +215,12 @@ export async function deliverSite(
         return fail(400, "site_manifest_invalid", `${path} 的 content_b64 不是合法 base64`);
       }
     }
-    if (bytes.byteLength > TPL_LIMITS.fileBytes) {
-      return fail(413, "site_bundle_too_large", `${path} 超过单文件上限 ${TPL_LIMITS.fileBytes} 字节`);
+    if (bytes.byteLength > SITE_LIMITS.fileBytes) {
+      return fail(413, "site_bundle_too_large", `${path} 超过单文件上限 ${SITE_LIMITS.fileBytes} 字节`);
     }
     total += bytes.byteLength;
-    if (total > TPL_LIMITS.totalBytes) {
-      return fail(413, "site_bundle_too_large", `整包超过上限 ${TPL_LIMITS.totalBytes} 字节`);
+    if (total > SITE_LIMITS.totalBytes) {
+      return fail(413, "site_bundle_too_large", `整包超过上限 ${SITE_LIMITS.totalBytes} 字节`);
     }
     if (actual.has(path)) return fail(400, "site_manifest_invalid", `重复路径：${path}`);
 

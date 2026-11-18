@@ -81,10 +81,10 @@ describe("L0 闸门（服务端那一份）", () => {
     expect(issues.some((i) => i.includes("不允许的文件类型"))).toBe(true);
   });
 
-  it("单文件超 1 MB ⇒ 拦", () => {
+  it("单文件超 2 MB ⇒ 拦（整版口径，与 meta.limits 同一个数）", () => {
     const issues = lintManifest([
       { key: "index.html", size: 10 },
-      { key: "big.png", size: 2 << 20 },
+      { key: "big.png", size: (2 << 20) + 1 },
     ]);
     expect(issues.some((i) => i.includes("单文件超限"))).toBe(true);
   });
@@ -265,13 +265,13 @@ describe("平台文件：发布时写 /_crm/config.js", () => {
 describe("站点设置：单行 JSON + rev 乐观锁", () => {
   it("校验：色值、邮箱、长度、未知字段", async () => {
     expect(
-      await saveSiteSettings(env, { values: { site: { theme: { brand: "red" } } } }),
+      await saveSiteSettings(env, { values: { site: { theme: { color: { primary: "red" } } } } }),
     ).toMatchObject({ ok: false, code: "bad_color" });
     expect(
       await saveSiteSettings(env, { values: { site: { contact_email: "nope" } } }),
     ).toMatchObject({ ok: false, code: "bad_email" });
     expect(
-      await saveSiteSettings(env, { values: { site: { name: "x".repeat(41) } } }),
+      await saveSiteSettings(env, { values: { site: { name: "x".repeat(25) } } }),
     ).toMatchObject({ ok: false, code: "too_long" });
     expect(
       await saveSiteSettings(env, { values: { site: { nickname: "x" } } }),
