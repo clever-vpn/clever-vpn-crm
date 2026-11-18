@@ -115,6 +115,17 @@ export function getPath(source: unknown, path: string): unknown {
   return cur;
 }
 
+/** 按 `.` 写值（自动建中间层）；表单回填与"只提交动过的字段"都用它 */
+export function setPath(target: Record<string, unknown>, name: readonly string[], value: unknown): void {
+  let cur: Record<string, unknown> = target;
+  for (const key of name.slice(0, -1)) {
+    if (typeof cur[key] !== "object" || cur[key] === null) cur[key] = {};
+    cur = cur[key] as Record<string, unknown>;
+  }
+  const last = name[name.length - 1]!;
+  cur[last] = value;
+}
+
 /**
  * 表单初始值：**只从清单里的字段取**。
  *
@@ -140,6 +151,28 @@ export function initialValues(
       cur = cur[key] as Record<string, unknown>;
     }
     cur[field.name[last]!] = value;
+  }
+  return out;
+}
+
+/**
+ * 回填：存过的用存的，没存的用**当前生效值**（`scope`），再没有才用契约默认值。
+ *
+ * 为什么颜色要用 `scope`：`site.theme.color.background` 这类"留空 = 跟随主题"的字段，
+ * 空的时候库里确实没有值，但页面上有一个**正在生效**的颜色（深色主题是深蓝底）。
+ * 直接显示默认值会让租户以为自己的站是白底。注意：显示的生效值**不算存过** ——
+ * 保存时只写动过的字段（否则选一次深色主题再保存，就会把白底钉死）。
+ */
+export function effectiveInitialValues(
+  fields: readonly FormField[],
+  values: Record<string, unknown>,
+  scope: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  const out = initialValues(fields, values);
+  for (const field of fields) {
+    if (getPath(out, field.path) !== undefined) continue;
+    const effective = getPath(scope, field.path);
+    if (typeof effective === "string" && effective) setPath(out, field.name, effective);
   }
   return out;
 }

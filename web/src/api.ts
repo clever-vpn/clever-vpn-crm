@@ -310,7 +310,9 @@ export const api = {
    * **不在 `/api/admin` 下**：它是公开端点，不带租户数据，所以走 `absolute`。
    */
   siteMeta: () => call<SiteMeta>("GET", "/api/site/meta", undefined, true),
-  siteSettings: () => call<{ settings: SiteSettingsView }>("GET", "/site/settings"),
+  /** `scope` 是**当前生效**的渲染作用域（颜色留空时是跟随主题的值） */
+  siteSettings: () =>
+    call<{ settings: SiteSettingsView; scope?: Record<string, unknown> }>("GET", "/site/settings"),
   /** `collections` 不传就不动（只改设置时别把下载入口清空） */
   saveSiteSettings: (input: {
     if_rev?: number;
@@ -321,6 +323,8 @@ export const api = {
       { ok: true } & SiteSettingsView & {
           live?: SiteLive | null;
           bake_error?: { code: string; message: string; issues?: string[] };
+          /** S2：设了值但这版模板没用到（改了不会生效） */
+          unused_settings?: string[];
         }
     >("PUT", "/site/settings", input),
   siteDomain: () => call<SiteDomainView>("GET", "/site/domain"),

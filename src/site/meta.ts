@@ -127,23 +127,25 @@ const HINTS: Record<string, string> = {
   "site.theme.preset": "整套中性色（底色 / 卡片 / 边框）一次换好",
   "site.theme.color.primary": "按钮与强调用的品牌色；太浅会看不清白字，保存时会被拦",
   "site.theme.color.accent": "次要强调色（标签、标记、图表）",
-  "site.theme.color.background": "页面底色",
-  "site.theme.color.surface": "卡片 / 弹层底色，通常比底色浅或深一档",
-  "site.theme.color.text": "正文文字颜色，要和底色形成足够对比",
+  "site.theme.color.background": "页面底色；留空则跟随主题（浅色白底 / 深色深蓝底）",
+  "site.theme.color.surface": "卡片 / 弹层底色；留空则跟随主题",
+  "site.theme.color.text": "正文文字颜色；留空则跟随主题，自定义时要和底色对比足够",
 };
 
 /** 一条下载入口最多多少个渠道（与 `settings.ts` 的校验保持一致） */
 const MAX_DOWNLOADS = 20;
 
 /**
- * 空值兜底：与 `settings.ts` 的 `DEFAULT_COLORS` 同值。
+ * 表单里显示的默认值。
  *
- * 这边是"表单上显示什么"，那边是"真的没填时渲染什么"—— 两处必须一致
- * （`test/site-settings-fields.test.ts` 对过）。
+ * 只给 `primary` / `accent`：这两个在深浅两套主题里含义相同，给个值方便租户上手。
+ * **另外三个刻意不给** —— 它们的"空"含义是**跟随主题**（浅色 / 深色各一套），
+ * 任意一个固定值都会让选了深色主题的站花屏。表单里留空、提示"跟随主题"才是对的。
  */
 const DEFAULTS: Record<string, string> = {
   "site.theme.preset": "light",
-  ...Object.fromEntries(THEME_COLORS.map((key) => [`site.theme.color.${key}`, DEFAULT_COLORS[key]])),
+  "site.theme.color.primary": DEFAULT_COLORS.primary,
+  "site.theme.color.accent": DEFAULT_COLORS.accent,
 };
 
 /** 枚举值的人话（顺序与 `SETTING_FIELDS` 里的 `values` 一致） */

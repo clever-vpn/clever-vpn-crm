@@ -33,7 +33,13 @@ import {
   type SiteValues,
   type SiteVersion,
 } from "../api";
-import { formFields, initialValues, palettePatch } from "../site-fields";
+import {
+  effectiveInitialValues,
+  formFields,
+  getPath,
+  palettePatch,
+  setPath,
+} from "../site-fields";
 
 /**
  * 网站：三个页签，一屏一件事。
@@ -73,6 +79,8 @@ const fmtTime = (iso: string): string => {
 export default function Site() {
   const [state, setState] = useState<SiteStateView | null>(null);
   const [settings, setSettings] = useState<SiteSettingsView | null>(null);
+  /** 当前**生效**的渲染作用域：颜色留空时是跟随主题的那一套（表单回填用） */
+  const [scope, setScope] = useState<Record<string, unknown> | null>(null);
   const [meta, setMeta] = useState<SiteMeta | null>(null);
   const [domain, setDomain] = useState<SiteDomainView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,6 +101,7 @@ export default function Site() {
       ]);
       setState(s);
       setSettings(st.settings);
+      setScope(st.scope ?? null);
       setDomain(d);
       setMeta(m);
     } catch (e) {
@@ -118,7 +127,7 @@ export default function Site() {
   useEffect(() => {
     if (!meta || !settings) return;
     form.setFieldsValue({
-      ...initialValues(fields, settings.values),
+      ...effectiveInitialValues(fields, settings.values, scope),
       // 下载入口仍是一小块专用表单（集合不是单值），值也在同一个 Form 里，
       // 这样"设置 + 集合"一次保存、一个 `rev`
       collections: {
@@ -126,7 +135,7 @@ export default function Site() {
       },
     });
     // `fields` 由 meta 派生，跟着 meta 变；不放进依赖是为了避免每次渲染重算一份
-  }, [meta, settings, form]);
+  }, [meta, settings, scope, form]);
 
   async function publish() {
     setBusy(true);
@@ -194,7 +203,21 @@ export default function Site() {
     // `values` 里的键**全部来自 capabilities**（表单只渲染清单里的字段），所以不会
     // 把库里那些已经删掉的路径（比如 `contract: 7` 的 `site.theme.brand`）带上。
     const submitted = raw as SiteValues & { collections?: SiteCollections };
-    const { collections: rawCollections, ...values } = submitted;
+    const { collections: rawCollections, ...formValues } = submitted;
+    /**
+     * **只提交动过的字段**（合并到已存的值上）。
+     *
+     * 为什么不能整份提：表单里那些"留空 = 跟随主题"的项（底色 / 卡片色 / 正文色）
+     * 会显示当前生效值（深色主题是深蓝底），整份提交等于把某一套主题的颜色钉死，
+     * 之后换主题就不生效了。没动过的字段保持"没存过"。
+     */
+    const values: Record<string, unknown> = JSON.parse(
+      JSON.stringify(settings?.values ?? {}),
+    ) as Record<string, unknown>;
+    for (const field of fields) {
+      if (!form.isFieldTouched(field.name)) continue;
+      setPath(values, field.name, getPath(formValues, field.path) ?? "");
+    }
     try {
       const res = await api.saveSiteSettings({
         if_rev: settings?.rev ?? 0,
@@ -206,6 +229,17 @@ export default function Site() {
         },
       });
       setSettings({ ...res, updatedAt: null });
+      const unused = Array.isArray(res.unused_settings) ? res.unused_settings : [];
+      if (unused.length > 0) {
+        // S2：设了值但当前模板没用到 —— 菜单里说人话，别甩路径
+        const label = (path: string) =>
+          meta?.capabilities.find((c) => c.path === path)?.label ?? path;
+        message.warning(
+          `当前模板没用上这些设置，改了不会生效：${unused.slice(0, 3).map(label).join("、")}${
+            unused.length > 3 ? ` 等 ${unused.length} 项` : ""
+          }`,
+        );
+      }
       if (res.bake_error) {
         // 设置存下了，但渲染不出来：线上仍是上一份产物。必须说清，不能报"成功"。
         message.warning(`设置已保存，但线上没换：${res.bake_error.message}`);

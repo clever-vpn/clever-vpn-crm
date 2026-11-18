@@ -24,7 +24,7 @@ import { SITE_LIMITS } from "./limits";
 import { isTextPath, readSource, seedFiles, seedSha } from "./source";
 import { RETURN_HTML, SDK_JS } from "./sdk";
 import { renderTemplate } from "./render";
-import { buildScope, readSiteSettings } from "./settings";
+import { buildScope, readSiteSettings, setValues } from "./settings";
 
 import type { Env } from "../env";
 
@@ -85,6 +85,14 @@ export type BakeResult =
       bytes: number;
       /** 烘焙用的设置版本（界面上"设置 rev N"就是它） */
       settingsRev: number;
+      /**
+       * **S2**：设了值、但这份模板没用到（也看不出通过派生值用到）的路径。
+       *
+       * 判据只有一条：`site_settings.values` 里非空的路径，源包里既没有 `{{它}}`
+       * 也没有 `data-repeat` / `data-if` 用它 —— 那就是"改了也不会变"。
+       * 派生值算消费：`{{site.footer}}` 用到了站名与法务主体。
+       */
+      unusedSettings: string[];
     }
   | { ok: false; code: string; message: string; issues?: string[] };
 
@@ -193,7 +201,54 @@ export async function bakeSite(
     files: rendered.length,
     bytes,
     settingsRev: settings.rev,
+    unusedSettings: unusedOf(raw, settings.values),
   };
+}
+
+type BakeBody = string | Uint8Array | ArrayBuffer;
+
+/** 源包里出现过的数据路径（`{{x}}`、`data-repeat`、`data-if`）。只看文本文件 */
+function referencedPaths(files: { path: string; body: BakeBody }[]): Set<string> {
+  const out = new Set<string>();
+  const token = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
+  const attr = /\bdata-(?:repeat|if)\s*=\s*"([^"]*)"/g;
+  for (const file of files) {
+    if (!isTextPath(file.path)) continue;
+    const text =
+      typeof file.body === "string"
+        ? file.body
+        : new TextDecoder().decode(
+            file.body instanceof ArrayBuffer ? new Uint8Array(file.body) : file.body,
+          );
+    for (const m of text.matchAll(token)) {
+      if (m[1]?.startsWith("site.")) out.add(m[1]);
+    }
+    for (const m of text.matchAll(attr)) {
+      const path = (m[1] ?? "").trim();
+      if (path.startsWith("site.")) out.add(path);
+    }
+  }
+  return out;
+}
+
+/**
+ * S2：设了值但产物没用到。
+ *
+ * 只从**设了值的路径**出发（没填的字段当然不会出现在产物里，那不是问题）。
+ * 派生值算消费：`{{site.footer}}` 内部用到 `site.name` / `site.legal_name`，
+ * 模板不需要也不应该直接引用那两个 —— 否则页脚就会变成两个地方各写一段。
+ */
+export function unusedOf(
+  files: { path: string; body: BakeBody }[],
+  values: Record<string, unknown>,
+): string[] {
+  const refs = referencedPaths(files);
+  const footer = refs.has("site.footer");
+  return Object.keys(setValues(values)).filter((path) => {
+    if (refs.has(path)) return false;
+    if (footer && (path === "site.name" || path === "site.legal_name")) return false;
+    return true;
+  });
 }
 
 /** 允许的扩展名：平台产出的静态资源。**没有 `.php` / `.exe` / 无扩展名可执行** */

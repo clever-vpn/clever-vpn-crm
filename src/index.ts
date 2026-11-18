@@ -227,7 +227,7 @@ export default {
                 ? { artifactSha: baked.artifactSha, bakedAt: baked.bakedAt, settingsRev: baked.settingsRev }
                 : null,
             ...(baked.ok
-              ? {}
+              ? { unused_settings: baked.unusedSettings }
               : { bake_error: { code: baked.code, message: baked.message, issues: baked.issues ?? [] } }),
           });
         }
@@ -389,6 +389,8 @@ export default {
           files: published.files,
           bytes: published.bytes,
           idempotent: published.idempotent,
+          // S2：设了值但模板没用到（studio 拿它进签收清单 / 设置面板提示）
+          unused_settings: published.unusedSettings,
         });
       }
 

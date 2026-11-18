@@ -86,18 +86,34 @@ export const THEME_COLORS = ["primary", "accent", "background", "surface", "text
 export type ThemeColor = (typeof THEME_COLORS)[number];
 
 /**
- * 空值兜底：留空会拼出非法 CSS，整份样式失效。
+ * **每个主题的中性色底盘**：某个颜色令牌没填时用它。
  *
- * 与 `meta.ts` 的 `DEFAULTS` 同值 —— 那边是"表单上显示什么"，这边是"真的没填时渲染
- * 什么"。两边必须一致，测试里对过。
+ * 为什么按主题分开：`preset` 是"浅色还是深色"的整套中性色。如果所有主题共用一组
+ * 兜底值，选了深色主题但没单独挑颜色的站会得到"白底 + 深色边框"的花屏。所以
+ * "没填"的含义是**跟随主题**，不是"用某个固定色"。
+ *
+ * 表单把没填的项显示成什么见 `meta.ts` 的 `DEFAULTS`（只给 primary / accent ——
+ * 这两个在深浅两套里含义相同；另外三个留空才是正确的默认）。
  */
-export const DEFAULT_COLORS: Record<ThemeColor, string> = {
-  primary: "#4f46e5",
-  accent: "#0ea5e9",
-  background: "#ffffff",
-  surface: "#ffffff",
-  text: "#0d1626",
+export const PRESET_COLORS: Record<ThemePreset, Record<ThemeColor, string>> = {
+  light: {
+    primary: "#4f46e5",
+    accent: "#0ea5e9",
+    background: "#ffffff",
+    surface: "#ffffff",
+    text: "#0d1626",
+  },
+  dark: {
+    primary: "#6366f1",
+    accent: "#22d3ee",
+    background: "#0b1020",
+    surface: "#141d31",
+    text: "#e8eefc",
+  },
 };
+
+/** 浅色底盘（配色建议 `palettes` 与测试拿它当基准） */
+export const DEFAULT_COLORS: Record<ThemeColor, string> = PRESET_COLORS.light;
 
 /** 主色上的文字永远是白色（按钮），所以对比度按白字算 */
 const ON_PRIMARY = "#ffffff";
@@ -255,6 +271,21 @@ function validate(flat: Record<string, unknown>): { code: string; message: strin
 export function validateValues(values: unknown): { code: string; message: string } | null {
   if (!isObj(values)) return { code: "bad_values", message: "values 必须是对象" };
   return validate(flatten(values));
+}
+
+/**
+ * 「设了值」的路径 → 文本值（空串不算设了）。
+ *
+ * 给 S2 用：判断"这个设置到底有没有被模板消费"必须从**设了值的路径**出发，
+ * 而不是从 schema 出发 —— 没填的字段当然不会出现在产物里。
+ */
+export function setValues(values: SiteValues): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [path, value] of Object.entries(flatten(values))) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (text) out[path] = text;
+  }
+  return out;
 }
 
 /**
@@ -457,11 +488,16 @@ export function buildScope(
   const name = str(site.name) || fallbackName;
   const legalName = str(site.legal_name);
   const hero = isObj(site.hero) ? site.hero : {};
-  const preset = str(theme.preset);
+  // 只有封闭集合里的值才算数：写错一个字母就让整站掉回亮色（模板里
+  // `:root.<preset>` 找不到类名 ⇒ 用默认那套）
+  const preset: ThemePreset = (THEME_PRESETS as readonly string[]).includes(str(theme.preset))
+    ? (str(theme.preset) as ThemePreset)
+    : "light";
   const color = isObj(theme.color) ? theme.color : {};
-  // 五个令牌各自兜底：留空会拼出非法 CSS，整份样式失效
+  // 五个令牌各自兜底：**空的含义是"跟随主题"**（见 PRESET_COLORS）。
+  // 不能留空串 —— `--bg: ;` 是非法 CSS，整份样式会失效。
   const colors = Object.fromEntries(
-    THEME_COLORS.map((key) => [key, str(color[key]) || DEFAULT_COLORS[key]]),
+    THEME_COLORS.map((key) => [key, str(color[key]) || PRESET_COLORS[preset][key]]),
   ) as Record<ThemeColor, string>;
 
   return {
@@ -469,16 +505,16 @@ export function buildScope(
       name,
       legal_name: legalName,
       hero: {
-        title: str(hero.title),
+        // 没填就回落到站名：首屏大标题空着 = 页面上一个空洞，比"重复站名"更糟
+        title: str(hero.title) || name,
+        // 副标题留空就是留空：模板用 `data-if` 把整段收起来
         sub: str(hero.sub),
       },
       // 只做 SEO / 分享：模板里的 `<meta name="description">` 与 og 卡片读它，首屏不读
       tagline: str(site.tagline),
       contact_email: str(site.contact_email),
       theme: {
-        // 只有封闭集合里的值才算数：写错一个字母就让整站掉回亮色（模板里
-        // `:root.<preset>` 找不到类名 ⇒ 用默认那套）
-        preset: (THEME_PRESETS as readonly string[]).includes(preset) ? preset : "light",
+        preset,
         color: colors,
       },
       // 下载入口按**平台分组**：模板写 `data-if="site.download.ios"` 决定整块

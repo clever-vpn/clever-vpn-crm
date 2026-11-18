@@ -14,6 +14,7 @@ import { SITE_LIMITS } from "../src/site/limits";
 import { siteCapabilities, siteMeta } from "../src/site/meta";
 import {
   DEFAULT_COLORS,
+  PRESET_COLORS,
   SETTING_FIELDS,
   THEME_COLORS,
   THEME_PRESETS,
@@ -82,10 +83,16 @@ describe("字段清单：租户事实", () => {
     }
   });
 
-  it("五个颜色令牌都有默认值，且与 buildScope 的兜底一致", () => {
-    for (const token of THEME_COLORS) {
+  it("只有主色/强调色给表单默认值；另外三个是「留空 = 跟随主题」", () => {
+    // 固定一个默认值会让选了深色主题的站花屏（白底 + 深色边框），所以底色 /
+    // 卡片色 / 正文色刻意没有 default —— 它们的空值由 buildScope 按 preset 兜。
+    for (const token of ["primary", "accent"] as const) {
       const cap = siteCapabilities().find((c) => c.path === `site.theme.color.${token}`);
       expect(cap?.default, `${token} 缺 default`).toBe(DEFAULT_COLORS[token]);
+    }
+    for (const token of ["background", "surface", "text"] as const) {
+      const cap = siteCapabilities().find((c) => c.path === `site.theme.color.${token}`);
+      expect(cap?.default, `${token} 不该有 default`).toBeUndefined();
     }
   });
 });
@@ -161,10 +168,36 @@ describe("渲染作用域", () => {
     expect((scope.site as { theme: { preset: string } }).theme.preset).toBe("dark");
   });
 
-  it("五个颜色令牌：没填就用默认值", () => {
-    const scope = buildScope({ values: {} }, "兜底");
-    const color = (scope.site as { theme: { color: Record<string, string> } }).theme.color;
-    expect(color).toEqual(DEFAULT_COLORS);
+  it("五个颜色令牌：没填就跟随主题（浅色一套 / 深色一套）", () => {
+    const light = buildScope({ values: {} }, "兜底");
+    expect((light.site as { theme: { color: Record<string, string> } }).theme.color).toEqual(
+      PRESET_COLORS.light,
+    );
+    const dark = buildScope({ values: { site: { theme: { preset: "dark" } } } }, "兜底");
+    expect((dark.site as { theme: { color: Record<string, string> } }).theme.color).toEqual(
+      PRESET_COLORS.dark,
+    );
+    // 显式设了就以设的为准（两种主题下都是）
+    const custom = buildScope(
+      { values: { site: { theme: { preset: "dark", color: { background: "#123456" } } } } },
+      "兜底",
+    );
+    expect(
+      (custom.site as { theme: { color: Record<string, string> } }).theme.color.background,
+    ).toBe("#123456");
+  });
+
+  it("首屏标题没填就回落到站名（不留空洞）", () => {
+    const fallback = buildScope({ values: { site: { name: "Acme" } } }, "兜底");
+    expect((fallback.site as { hero: { title: string } }).hero.title).toBe("Acme");
+    const set = buildScope(
+      { values: { site: { name: "Acme", hero: { title: "快", sub: "一键连" } } } },
+      "兜底",
+    );
+    expect((set.site as { hero: { title: string; sub: string } }).hero).toEqual({
+      title: "快",
+      sub: "一键连",
+    });
   });
 
   it("作用域里没有旧路径 brand（只有 theme.color.primary）", () => {

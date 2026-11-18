@@ -10,7 +10,7 @@
  * 模板上传（构建期由 `npm run site:template:upload` 做）。
  */
 import { latestRelease, publishSite, reprintSite, rollbackSite, siteState } from "../site/publish";
-import { readSiteSettings, saveSiteSettings } from "../site/settings";
+import { buildScope, readSiteSettings, saveSiteSettings } from "../site/settings";
 
 import type { Env } from "../env";
 
@@ -61,7 +61,10 @@ export async function handleAdminSite(
 
   // ── 品牌设置：发布时烘焙进产物，改完要重新发布才生效 ──
   if (method === "GET" && path === "/site/settings") {
-    return json({ settings: await readSiteSettings(env) });
+    const settings = await readSiteSettings(env);
+    // `scope` = 现在**真正生效**的值（颜色留空时它是跟随主题的那一套）。表单用它
+    // 回填"没存过但看得见"的项，见 `web/src/site-fields.ts` 的 effectiveInitialValues。
+    return json({ settings, scope: buildScope(settings, "我的站点") });
   }
 
   if (method === "PUT" && path === "/site/settings") {
@@ -93,7 +96,7 @@ export async function handleAdminSite(
             ? { artifactSha: baked.artifactSha, bakedAt: baked.bakedAt, settingsRev: baked.settingsRev }
             : null,
         ...(baked.ok
-          ? {}
+          ? { unused_settings: baked.unusedSettings }
           : { bake_error: { code: baked.code, message: baked.message, issues: baked.issues ?? [] } }),
       });
     }

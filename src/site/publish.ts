@@ -68,6 +68,8 @@ export interface PublishOk {
   sourceSha: string;
   /** 这版产物的地址（`art/<sha>/` 的那个 sha） */
   artifactSha: string;
+  /** S2：设了值但这份模板没用到（见 `bake.ts` 的 `unusedOf`） */
+  unusedSettings: string[];
   /** 血缘戳：建站时那个种子 */
   seedSha: string;
   /** 同内容重复发布 ⇒ true（返回的是已有版本） */
@@ -221,6 +223,8 @@ export async function publishSite(
         sourceSha: String(hit.source_sha),
         artifactSha: String(hit.artifact_sha),
         seedSha: String(hit.seed_sha),
+        // 幂等命中没重新烘焙：S2 是"这次渲染"的结论，这里不猜（空 = 不提示）
+        unusedSettings: [],
         idempotent: true,
       };
     }
@@ -285,6 +289,7 @@ export async function publishSite(
     sourceSha: sha,
     artifactSha: baked.artifactSha,
     seedSha: seed,
+    unusedSettings: baked.unusedSettings,
     idempotent: false,
   };
 }
@@ -327,6 +332,8 @@ export type ReprintResult =
       artifactSha: string | null;
       bakedAt: string | null;
       settingsRev: number;
+      /** S2：设了值但模板没用到（没烘焙时为空） */
+      unusedSettings: string[];
     }
   | { ok: false; code: string; message: string; issues?: string[] };
 
@@ -346,7 +353,14 @@ export async function reprintSite(
   const baked0 = await readSiteSettings(env);
   const pointer = await readPointer(env, tenantId);
   if (!pointer || pointer.templateSeq === null) {
-    return { ok: true, baked: false, artifactSha: null, bakedAt: null, settingsRev: baked0.rev };
+    return {
+      ok: true,
+      baked: false,
+      artifactSha: null,
+      bakedAt: null,
+      settingsRev: baked0.rev,
+      unusedSettings: [],
+    };
   }
   const release = await releaseOf(env, tenantId, pointer.templateSeq);
   if (!release) {
@@ -375,7 +389,14 @@ export async function reprintSite(
     bakedAt,
     settingsRev: baked.settingsRev,
   });
-  return { ok: true, baked: true, artifactSha: baked.artifactSha, bakedAt, settingsRev: baked.settingsRev };
+  return {
+    ok: true,
+    baked: true,
+    artifactSha: baked.artifactSha,
+    bakedAt,
+    settingsRev: baked.settingsRev,
+    unusedSettings: baked.unusedSettings,
+  };
 }
 
 /** 回滚：设计回到 `seq`，但用**当前**设置重烘焙（身份不回滚） */
@@ -405,7 +426,14 @@ export async function rollbackSite(
     "rollback",
     input.actor,
   );
-  return { ok: true, baked: true, artifactSha: baked.artifactSha, bakedAt, settingsRev: baked.settingsRev };
+  return {
+    ok: true,
+    baked: true,
+    artifactSha: baked.artifactSha,
+    bakedAt,
+    settingsRev: baked.settingsRev,
+    unusedSettings: baked.unusedSettings,
+  };
 }
 
 export interface SiteState {
