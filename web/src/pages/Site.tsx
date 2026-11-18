@@ -279,7 +279,9 @@ export default function Site() {
           `已保存，几秒内自动生效（设置 rev ${res.live.settingsRev}，不产生新版本）`,
         );
       } else {
-        message.success("已保存。站点还没发布过，第一次发布后才会生成线上产物");
+        message.info(
+          "已保存。站点还没发布过 —— 保存设置不会上线，请先在设计器里发布第一版",
+        );
       }
       await load();
     } catch (e) {
@@ -291,6 +293,12 @@ export default function Site() {
 
   const active = state?.active ?? null;
   const templateReady = state?.templateReady ?? false;
+  /**
+   * **后台只能"重发"已经存在的设计**（`active` = 线上那一版设计）。没有就是
+   * "从没在设计器里发布过"—— 此时后台不允许发布：种子只是设计器里的起点，
+   * 发上去也只是一份通用模板，不是租户的站。新站点必须走设计器。
+   */
+  const canPublish = active !== null;
   const versions = state?.versions ?? [];
   const published = versions.find((v) => v.seq === active) ?? null;
 
@@ -395,12 +403,12 @@ export default function Site() {
         </Col>
       </Row>
 
-      {!templateReady && !loading && (
+      {!canPublish && !loading && (
         <Alert
-          type="warning"
+          type="info"
           showIcon
-          message="模板还没上传到 R2"
-          description="现在点发布会失败。先在服务器上执行 npm run site:template:upload（把仓库里的 site-template/ 传成 g/templates/basic/v1/）。"
+          message="还没有站点：先在设计器里发布第一版"
+          description="后台的「发布站点」只负责重发你在设计器里做过的站点。种子（起点模板）不会直接上线 —— 点右上角「打开设计器」改一版并发布，之后这里才有东西可发。"
         />
       )}
 
@@ -428,9 +436,9 @@ export default function Site() {
             okText="发布"
             cancelText="取消"
             onConfirm={publish}
-            disabled={busy || !templateReady}
+            disabled={busy || !canPublish}
           >
-            <Button loading={busy} disabled={!templateReady}>
+            <Button loading={busy} disabled={!canPublish}>
               发布站点
             </Button>
           </Popconfirm>
@@ -480,7 +488,7 @@ export default function Site() {
         </Typography.Paragraph>
       ) : (
         <Typography.Paragraph type="secondary">
-          站点还没发布过：保存设置不会烘焙，第一次发布后才产生线上产物。
+          站点还没发布过：保存设置<strong>不会上线</strong>（种子不发布）。请先在设计器里发布第一版。
         </Typography.Paragraph>
       )}
       <Form

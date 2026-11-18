@@ -155,12 +155,19 @@ describe("后台站点状态", () => {
 });
 
 describe("后台发布", () => {
-  it("从没发布过 ⇒ 能发（用种子）", async () => {
+  /**
+   * **种子不是可发布的内容**（2026-11-18 定）：它只是设计器里的起点。
+   * 后台点「发布站点」只能重发**租户设计过的模板**；没有模板就明确拒绝，
+   * 让新站点必须走「打开设计器 → 发布」这一步。
+   */
+  it("从没发布过（只有种子）⇒ 拒绝，不写产物、不切指针", async () => {
     const res = await call("/api/admin/site/publish", { method: "POST", body: {} });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; version: number };
-    expect(body).toMatchObject({ ok: true, version: 1 });
-    expect(await readPointer(testEnv, TENANT)).toMatchObject({ templateSeq: 1 });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe("no_template");
+    expect(body.message).toContain("设计器");
+    expect(await readPointer(testEnv, TENANT)).toBeNull();
+    expect(await releaseCount()).toBe(0);
   });
 
   it("studio 发过之后，后台再发用的仍是**租户那份源包**（不退回种子）", async () => {

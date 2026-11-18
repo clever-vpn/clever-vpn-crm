@@ -194,11 +194,25 @@ export async function publishSite(
   }
   if (!tenantId) return err("no_tenant", "拿不到租户 ID，不知道往哪个前缀写");
 
-  // ── 1) 这次发哪份源包：显式给的 > 上次发的 > 种子 ────────────────────
+  // ── 1) 这次发哪份源包：显式给的 > 上次发的 ──────────────────────────
   const seed = await seedSha();
   const latest = await latestRelease(env, tenantId);
   const wanted = (input.sourceSha ?? "").trim();
-  const sha = wanted || latest?.sourceSha || seed;
+  const sha = wanted || latest?.sourceSha || "";
+
+  /**
+   * **种子不是可发布的内容**：它只是设计器里的起点。
+   *
+   * 没有租户源包（从没在设计器里交付过）就拒绝发布 —— 否则后台点一下「发布站点」
+   * 就能把一份通用模板发上线，租户会以为"这就是我的站"。新站点必须走
+   * 「打开设计器 → 发布」：那一步有签收、有租户的改动，才是"他的站"。
+   */
+  if (!sha || sha === seed) {
+    return err(
+      "no_template",
+      "还没有模板：新站点要在设计器里发布第一版（后台不能直接发布起点模板）",
+    );
+  }
 
   // ── 2) 幂等：同键直接返回已有版本（不新增、不重写字节）────────────────
   //

@@ -149,9 +149,13 @@ export async function handleAdminSite(
       actor,
     });
     if (!result.ok) {
-      // L0 失败是"内容有问题"，不是服务器错误：400 + 逐条 issues
+      // L0 失败是"内容有问题"，不是服务器错误：400 + 逐条 issues。
+      // 其余（`no_template` / `version_conflict` …）是 409：状态不允许，不是格式错。
       const status = result.code === "l0_failed" ? 400 : 409;
-      return json(result, status);
+      return json(
+        { error: result.code, message: result.message, ...(result.issues ? { issues: result.issues } : {}) },
+        status,
+      );
     }
     return json(result);
   }
