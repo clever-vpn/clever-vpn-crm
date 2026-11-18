@@ -59,7 +59,7 @@ created_at`），当前指针是 `site_settings.template_version`（与数据设
 
 ## 2. KV：指针，只有一把
 
-同一个 `HOSTS` namespace（与 cf-api 共用，见 `contracts/cf-api-hosting.md` §4）：
+同一个 `HOSTS` namespace（与 cf-api 共用，见 `contracts/services/cf-api-hosting.md` §4）：
 
 ```
 host:<hostname>        { tenant_id, slot, shard, status }   写：cf-api
