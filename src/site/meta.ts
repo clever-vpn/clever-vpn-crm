@@ -212,19 +212,14 @@ function collectionCapabilities(): Capability[] {
  * 清单。漏声明 = 把一份**合法**模板判成 `unknown_path`（`{{site.footer}}` 就是这么
  * 被拦的）。
  *
- * 两项：
+ * 只有 `site.footer` 一项（`© <年> <法务主体或站名>`）。`contact_link` 曾经也派生过，
+ * 后来去掉了：渲染器对所有取值统一转义，值里带 `<a>` 只会变成 `&lt;a`。
  *
- *   · `site.footer` —— `© <年> <法务主体或站名>`。`contact_link` 曾经也派生过，后来
- *     去掉了：渲染器对所有取值统一转义，值里带 `<a>` 只会变成 `&lt;a`。
- *   · `site.theme.brand` —— `contract: 8` 把主色改名为 `site.theme.color.primary`，
- *     旧路径留成派生别名（值就是 primary）。已发布的模板里还有 `{{site.theme.brand}}`，
- *     删掉就等于让所有老站点下次发布会 `unknown_path` 直接失败。
+ * 不留旧路径别名：产品是正式发布、没有历史包袱，`contract: 7` 的 `site.theme.brand`
+ * 随主色一起删掉（现在是 `site.theme.color.primary`）。
  */
 function derivedCapabilities(): Capability[] {
-  return [
-    { path: "site.footer", kind: "text", label: "页脚版权行（自动）", derived: true },
-    { path: "site.theme.brand", kind: "color", label: "主色（旧路径别名）", derived: true },
-  ];
+  return [{ path: "site.footer", kind: "text", label: "页脚版权行（自动）", derived: true }];
 }
 
 /** 一套配色建议：五个令牌的值，**不落库**（存的是色值，不是方案名） */

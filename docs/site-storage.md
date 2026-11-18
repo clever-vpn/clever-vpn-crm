@@ -96,9 +96,10 @@ site:<tenant>:active   { n }                                写：本仓发布
 | `site.theme.preset` | `light` / `dark` | 中性色底盘 |
 | `site.theme.color.{primary,accent,background,surface,text}` | `#rrggbb` | 品牌色令牌（一套五个） |
 
-**派生值**（渲染时算，不存库、不可填）：`site.footer` = `© <年> <legal_name 或 name>`；
-`site.theme.brand` = `primary`（`contract: 7` 的旧路径别名，留着只为已发布模板里的
-`{{site.theme.brand}}` 不变成 `unknown_path`）。
+**派生值**（渲染时算，不存库、不可填）：`site.footer` = `© <年> <legal_name 或 name>`。
+
+`contract: 7` 的 `site.theme.brand` **已删除**（产品是正式发布，不留旧路径别名）——
+主色只有一个名字：`site.theme.color.primary`。
 
 校验：格式 / 枚举 / 上限，外加 `primary` 与白字的对比度 ≥ 3:1（`bad_contrast`）。
 空值不写进库，渲染时由 `buildScope()` 兜默认（`DEFAULT_COLORS`）—— 留空会让

@@ -480,10 +480,6 @@ export function buildScope(
         // `:root.<preset>` 找不到类名 ⇒ 用默认那套）
         preset: (THEME_PRESETS as readonly string[]).includes(preset) ? preset : "light",
         color: colors,
-        // 旧路径别名（`contract: 7` 叫 `site.theme.brand`）。已发布的模板里还有
-        // `{{site.theme.brand}}`，删掉就等于让它们发布时 `unknown_path`；它只是
-        // primary 的派生副本，不是第二个真源。
-        brand: colors.primary,
       },
       // 下载入口按**平台分组**：模板写 `data-if="site.download.ios"` 决定整块
       // 出不出现，写 `data-repeat="site.download.ios"` 决定这一平台有几个按钮。

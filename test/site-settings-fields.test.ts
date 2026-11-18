@@ -63,9 +63,10 @@ describe("字段清单：租户事实", () => {
   });
 
   it("派生值在清单里（闸门要认），但带 derived 标记（表单要跳过）", () => {
-    expect(derived()).toEqual(["site.footer", "site.theme.brand"]);
-    // 旧主色路径只是别名，不再是可填字段
+    expect(derived()).toEqual(["site.footer"]);
+    // 旧主色路径已删除（正式发布、无历史包袱），连派生别名都不留
     expect(paths()).not.toContain("site.theme.brand");
+    expect(siteCapabilities().map((c) => c.path)).not.toContain("site.theme.brand");
   });
 
   it("主题是封闭集合，并且带人话标签（表单里不该出现 light/dark）", () => {
@@ -166,14 +167,14 @@ describe("渲染作用域", () => {
     expect(color).toEqual(DEFAULT_COLORS);
   });
 
-  it("旧路径 site.theme.brand 是 primary 的派生别名（老模板不炸）", () => {
+  it("作用域里没有旧路径 brand（只有 theme.color.primary）", () => {
     const scope = buildScope(
       { values: { site: { theme: { color: { primary: "#123456" } } } } },
       "兜底",
     );
-    const theme = (scope.site as { theme: { brand: string; color: { primary: string } } }).theme;
-    expect(theme.color.primary).toBe("#123456");
-    expect(theme.brand).toBe("#123456");
+    const theme = (scope.site as { theme: Record<string, unknown> }).theme;
+    expect((theme.color as { primary: string }).primary).toBe("#123456");
+    expect(theme).not.toHaveProperty("brand");
   });
 
   it("版权行：有法务主体就用它，没有才用站名", () => {

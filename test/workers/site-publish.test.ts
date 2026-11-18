@@ -412,7 +412,7 @@ describe("发布：把设置烘焙进产物", () => {
   it("主题色留空 ⇒ 回落默认色（否则 `--brand: ;` 整份 CSS 失效）", async () => {
     const seed3 = await sourceOf({
       "index.html": "<h1>{{site.name}}</h1>",
-      "site.css": ":root{--brand: {{site.theme.brand}};}",
+      "site.css": ":root{--brand: {{site.theme.color.primary}};}",
     });
     await saveSiteSettings(env, { values: { site: { name: "Acme" } } });
 

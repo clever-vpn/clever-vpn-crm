@@ -118,9 +118,9 @@ export function getPath(source: unknown, path: string): unknown {
 /**
  * 表单初始值：**只从清单里的字段取**。
  *
- * 这条白名单是刻意的：库里可能还留着已经删掉的路径（比如 `contract: 7` 的
- * `site.theme.brand`），原样回填会被后端判 `unknown_field`，租户看到的是"保存失败"
- * 却不知道哪一项。取不到的字段再用契约声明的 `default`。
+ * 这条白名单是刻意的：库里可能还留着已经删掉的路径（`site.theme.brand` 就在
+ * `contract: 8` 删了），原样回填会被后端判 `unknown_field` —— 租户看到的是
+ * "保存失败"，却不知道哪一项。取不到的字段再用契约声明的 `default`。
  */
 export function initialValues(
   fields: readonly FormField[],
