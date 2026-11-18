@@ -6,7 +6,7 @@ Last updated: 2026-10-25
 
 - [`clever-vpn-docs/docs/contracts/services/cf-api/crm.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/cf-api/crm.md)
   —— 认证、`customers` 字段与可写性、激活码语义、错误码、限流、缺口清单。
-- [`clever-vpn-docs/docs/contracts/services/crm/app.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/crm/app.md)
+- [`clever-vpn-docs/docs/contracts/services/crm/clients.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/crm/clients.md)
   —— App 是 CRM 的终端客户端：注册/付费/取码都在 App 内（`/api/app/v1`，✅），许可仍只由 cf-api 签发。
 - [`clever-vpn-docs/docs/contracts/README.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/README.md)
   —— 状态图例与版本策略（`contract: 1`，只加不删）。
