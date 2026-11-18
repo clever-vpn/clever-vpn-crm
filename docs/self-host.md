@@ -13,6 +13,13 @@
 - Cloudflare 账号（免费即可）
 - 一个域名（可以稍后再配；先用 `*.workers.dev` 也能跑）
 - 一个 **cf-api 租户 API Token**（`cv_api_…`）——CRM 用它调平台接口
+- 一个 **site-studio 地址**（`STUDIO_SITE_URL`）——**要做站点就必须接**（见下）
+
+> **站点功能需要 studio，自部署也一样。** studio 不区分自部署/托管：它只认
+> `STUDIO_CRM_BASE`（CRM 地址，会话里带）与 cf-api 的 `verify-tenant`（判租户），
+> 而这两样你的部署已经有了。所以把 `STUDIO_SITE_URL` 指向你用的那个 studio 即可。
+> **不接 studio = 站点发不出去**：起点模板（种子）只是设计器里的起点，不会直接上线；
+> CRM 后台的「发布站点」只负责重发设计器里做过的站。其余功能（套餐、订单、客户）不受影响。
 
 ## 0. 为什么必须走 CI
 
@@ -53,6 +60,8 @@ Variables（明文）：
 | `D1_NAME` | – | 默认 `clever-vpn-crm` |
 | `WORKER_NAME` | – | 默认 `clever-vpn-crm` |
 | `EMAIL_FROM` | – | 发信人地址（如 `noreply@your-domain.com`，域名需验证）；**与传输一起才算"邮件就绪"** |
+| `STUDIO_SITE_URL` | 站点必填 | site-studio 的地址（如 `https://site-studio.clever-vpn.org` 或你自己的）。**不配就没有站点上线路径** —— 后台「打开设计器」会报 `studio_not_configured` |
+| `SITE_URL` | 站点必填 | 站点对外地址（`site-serve` 绑的域名）。只用于给租户一个「点开看线上」的链接；不配就是不给链接，**绝不拿 CRM 的 origin 冒充** |
 
 > `CLOUDFLARE_API_TOKEN` 建议单独建一把、只给这个仓库用；它是"能改你 Cloudflare
 > 账号"的密钥，不要复用主账号 token。

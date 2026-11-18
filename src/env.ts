@@ -45,6 +45,10 @@ export interface Env {
   /**
    * 两个 studio 的对外地址（**服务端配置**，从不接受请求方传入 —— 否则是开放重定向）。
    * 票据 URL 形如 `<origin>/#t=<ticket>`。
+   *
+   * `STUDIO_SITE_URL` 是**站点功能的前提**：发布需要一份租户源包，而源包只能由
+   * 设计器交付（种子不发布，见契约 `site-studio-crm.md` Contract 19）。自部署也一样
+   * —— studio 不区分部署模式。不配 ⇒ `studio_not_configured`，站点没有上线路径。
    */
   STUDIO_SITE_URL?: string;
   STUDIO_APP_URL?: string;
