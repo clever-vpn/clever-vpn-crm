@@ -2,7 +2,7 @@
  * site-serve：客户站点的出口 Worker（契约 `contracts/cf-api-hosting.md`）。
  *
  * 链路只有一条：
- *   Host → KV[host:{host}] → tenant → KV[site:{tenant}:active] → R2 取文件
+ *   Host → KV[host:{host}] → tenant → KV[site:{tenant}:active] → R2 `art/<sha>/` 取文件
  *
  * 三条纪律：
  *  1. **零 D1**：最轻的路径不背包袱；要不要"哪个库"是 CRM 的事。
@@ -112,14 +112,37 @@ function resolveHost(env: SiteEnv, host: string): Promise<HostMap | null> {
     });
 }
 
-function activeVersion(env: SiteEnv, tenant: string): Promise<{ n: number } | null> {
-  return remembered<{ n: number } | null>(`active:${tenant}`, ACTIVE_TTL, async () => {
+/**
+ * 线上指针：**哪一版设计 + 哪份产物**。
+ *
+ * `templateSeq` 只用于展示/排障（`x-site-version`）；真正取文件用的是 `artifactSha`
+ * —— 产物按内容寻址（`art/<sha>/`），所以"设置改了重新烘焙"不会覆盖任何已有字节。
+ */
+interface Pointer {
+  templateSeq: number | null;
+  artifactSha: string;
+  bakedAt?: string;
+  settingsRev?: number;
+}
+
+function activePointer(env: SiteEnv, tenant: string): Promise<Pointer | null> {
+  return remembered<Pointer | null>(`active:${tenant}`, ACTIVE_TTL, async () => {
     try {
-      return (await env.HOSTS.get(`site:${tenant}:active`, "json")) as { n: number } | null;
+      const raw = (await env.HOSTS.get(`site:${tenant}:active`, "json")) as Partial<Pointer> | null;
+      if (!raw || typeof raw.artifactSha !== "string" || !raw.artifactSha) return null;
+      return {
+        templateSeq: typeof raw.templateSeq === "number" ? raw.templateSeq : null,
+        artifactSha: raw.artifactSha,
+      };
     } catch {
       return null;
     }
   });
+}
+
+/** `art/<sha-hex>/` —— 与 CRM `src/site/bake.ts` 严格一致 */
+export function artPrefix(sha: string): string {
+  return `art/${sha.replace(/^sha256:/, "")}/`;
 }
 
 /** 平台文件：不落租户 R2，由这里直接送（发版后 purge 即可更新） */
@@ -170,9 +193,15 @@ export default {
 
     if (url.pathname === "/__site/version") {
       const map = await resolveHost(env, host);
-      const active = map ? await activeVersion(env, map.tenant_id) : null;
+      const pointer = map ? await activePointer(env, map.tenant_id) : null;
       return Response.json(
-        { host, tenant: map?.tenant_id ?? null, active: active?.n ?? null, platform: env.PLATFORM_VERSION },
+        {
+          host,
+          tenant: map?.tenant_id ?? null,
+          active: pointer?.templateSeq ?? null,
+          artifact: pointer?.artifactSha ?? null,
+          platform: env.PLATFORM_VERSION,
+        },
         { headers: { "cache-control": "no-store" } },
       );
     }
@@ -195,13 +224,13 @@ export default {
       // 其余 `/_crm/*` 当成普通产物继续往下走（不再 404）
     }
 
-    const active = await activeVersion(env, map.tenant_id);
-    if (!active || !active.n) return notFound("站点尚未发布");
+    const active = await activePointer(env, map.tenant_id);
+    if (!active) return notFound("站点尚未发布");
 
     const rel = safePath(url.pathname);
     if (!rel) return new Response("bad path", { status: 400 });
 
-    const key = `sites/${map.tenant_id}/versions/${active.n}/public/${rel}`;
+    const key = `${artPrefix(active.artifactSha)}${rel}`;
 
     const headersFor = (meta: R2Object): Headers => {
       const headers = new Headers({
@@ -213,7 +242,8 @@ export default {
           ? "public, max-age=31536000, immutable"
           : "public, max-age=0, must-revalidate",
         "cache-tag": `site:${map.tenant_id}`,
-        "x-site-version": String(active.n),
+        "x-site-version": String(active.templateSeq ?? ""),
+        "x-site-artifact": active.artifactSha,
       });
       if (meta.httpEtag) headers.set("etag", meta.httpEtag);
       return headers;

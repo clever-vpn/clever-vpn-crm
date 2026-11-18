@@ -13,7 +13,7 @@
  * `:root.dark` 只在选了深色主题时生效。
  */
 :root {
-  --brand: {{site.theme.brand}};
+  /* 品牌色令牌在文件末尾（§ 租户颜色令牌）：它们要压过深色主题的中性色 */
   --brand-ink: color-mix(in srgb, var(--brand) 78%, #0b1020);
   --brand-soft: color-mix(in srgb, var(--brand) 12%, var(--surface));
   --brand-line: color-mix(in srgb, var(--brand) 28%, var(--surface));
@@ -80,7 +80,12 @@ body {
 }
 
 a { color: var(--brand-ink); text-decoration: none; }
-a:hover { text-decoration: underline; text-underline-offset: 3px; }
+a:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
 
 .wrap { max-width: 1040px; margin: 0 auto; padding: 0 22px; }
 .narrow { max-width: 520px; }
@@ -88,7 +93,8 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 /* ── 顶栏 ── */
 header.site {
   position: sticky; top: 0; z-index: 20;
-  background: rgba(255, 255, 255, 0.86);
+  /* 跟着底色走（不能写死白色）：深色主题下白底 + 浅色字等于看不见 */
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
   backdrop-filter: saturate(180%) blur(12px);
   border-bottom: 1px solid var(--border);
 }
@@ -206,7 +212,8 @@ p { margin: 0 0 14px; }
   .facts div { border-top: none; border-left: 1px solid var(--border); }
   .facts div:first-child { border-left: none; }
 }
-.facts b { display: block; font-size: 15px; }
+/* 事实区的标签用强调色，但与正文混一档 —— 纯 accent 在白底上对比不够 */
+.facts b { display: block; font-size: 15px; color: color-mix(in srgb, var(--accent) 65%, var(--text)); }
 .facts span { color: var(--dim); font-size: 13px; }
 
 section.band { padding: 46px 0; }
@@ -399,4 +406,20 @@ footer.site .legal {
 }
 #flash > div.err, #redeem-result > div.err {
   background: var(--err-soft); color: var(--err); border-color: var(--err-line);
+}
+
+/* ── 租户颜色令牌（契约 contract 8）────────────────────────────────
+   烘焙时由 CRM 写入。五个令牌是**一套**：主色 / 强调 / 底色 / 卡片 / 正文文字，
+   所以放在文件最末尾，并且把 `:root.dark` 一起写上 —— 与深色主题的选择器同优先级、
+   但更靠后，于是租户选的颜色在浅色与深色主题下都生效。
+
+   "没填"不是空串：CRM 会按当前主题给出那一套的中性色（浅色白底 / 深色深蓝底），
+   所以这里永远拿到合法色值，`--bg: ;` 这种会整份失效的写法不会出现。 */
+:root,
+:root.dark {
+  --brand: {{site.theme.color.primary}};
+  --accent: {{site.theme.color.accent}};
+  --bg: {{site.theme.color.background}};
+  --surface: {{site.theme.color.surface}};
+  --text: {{site.theme.color.text}};
 }

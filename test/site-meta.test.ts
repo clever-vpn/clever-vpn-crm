@@ -85,13 +85,16 @@ describe("capabilities：模板能引用什么", () => {
 });
 
 describe("响应体", () => {
-  it("只有四件东西：契约版本 + 引擎版本 + SDK 版本 + 能力清单", () => {
+  it("六件东西：契约 + 引擎 + SDK + 能力清单 + 体积上限 + 配色建议", () => {
     // `sdk_version` 是 contract 6 加的：租户排障要看"这个站跑的是哪版 SDK"，
     // studio 预览也用它证明"预览与线上同一份 SDK"（site-crm.md §3.1）。
+    // `limits` / `palettes` 是 contract 8 / 15 加的（site-studio.md §4.4）。
     expect(Object.keys(siteMeta()).sort()).toEqual([
       "capabilities",
       "contract",
       "engine",
+      "limits",
+      "palettes",
       "sdk_version",
     ]);
     expect(siteMeta().contract).toBe(SITE_CONTRACT);

@@ -29,13 +29,20 @@ describe("GET /api/site/meta", () => {
       engine: string;
       sdk_version: string;
       capabilities: { path: string; kind: string; label: string }[];
+      palettes: { id: string; colors: Record<string, string> }[];
+      limits: { fileBytes: number; totalBytes: number; files: number };
     };
     expect(Object.keys(body).sort()).toEqual([
       "capabilities",
       "contract",
       "engine",
+      "limits",
+      "palettes",
       "sdk_version",
     ]);
+    // 体积上限与配色建议是 Contract 15 加的：studio 的闸门读同一份
+    expect(body.limits).toEqual({ fileBytes: 2 << 20, totalBytes: 32 << 20, files: 200 });
+    expect(body.palettes.length).toBeGreaterThan(0);
     expect(body.engine).toMatch(/^sha256:[0-9a-f]{16}$/);
     // 预览与线上对账用：它必须是个真版本号，不是占位
     expect(body.sdk_version).toMatch(/^\d+\.\d+\.\d+$/);

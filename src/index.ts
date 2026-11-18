@@ -25,9 +25,10 @@ import { buildScope, readSiteSettings, saveSiteSettings } from "./site/settings"
 import { siteSourceOf } from "./site/template-source";
 import { deliverSite, type DeliveryInput } from "./site/deliver";
 import { SAMPLE_PLANS_RAW, sampleDataOf } from "./site/sample";
-import { ALLOWED_EXT, latestRelease, publishSite } from "./site/publish";
+import { ALLOWED_EXT } from "./site/bake";
+import { latestRelease, publishSite, reprintSite } from "./site/publish";
+import { SITE_LIMITS } from "./site/limits";
 import {
-  TPL_LIMITS,
   checkSourcePath,
   contentTypeOfPath,
   storeSource,
@@ -208,12 +209,26 @@ export default {
             );
           }
           const saved = result.settings;
+          /**
+           * **保存设置 = 自动重烘焙**（契约 §0.1 / D3）：设计版本不动，只换线上产物，
+           * 所以设计器不需要再按一次"发布"。烘焙失败要如实回 —— 设置存了、线上没换。
+           */
+          const baked = await reprintSite(env, scoped.tenantId, {
+            apiBase: (env.SITE_API_BASE ?? "").trim() || new URL(request.url).origin,
+          });
           return json({
             ok: true,
             rev: saved.rev,
             values: saved.values,
             collections: saved.collections,
             scope: buildScope(saved, "我的站点"),
+            live:
+              baked.ok && baked.baked
+                ? { artifactSha: baked.artifactSha, bakedAt: baked.bakedAt, settingsRev: baked.settingsRev }
+                : null,
+            ...(baked.ok
+              ? { unused_settings: baked.unusedSettings }
+              : { bake_error: { code: baked.code, message: baked.message, issues: baked.issues ?? [] } }),
           });
         }
 
@@ -374,6 +389,8 @@ export default {
           files: published.files,
           bytes: published.bytes,
           idempotent: published.idempotent,
+          // S2：设了值但模板没用到（studio 拿它进签收清单 / 设置面板提示）
+          unused_settings: published.unusedSettings,
         });
       }
 
@@ -414,9 +431,9 @@ export default {
         }
 
         const declared = Number(request.headers.get("content-length") ?? 0);
-        if (declared > TPL_LIMITS.fileBytes) {
+        if (declared > SITE_LIMITS.fileBytes) {
           return json(
-            { error: "site_bundle_too_large", message: `${path} 超过单文件上限 ${TPL_LIMITS.fileBytes} 字节` },
+            { error: "site_bundle_too_large", message: `${path} 超过单文件上限 ${SITE_LIMITS.fileBytes} 字节` },
             413,
           );
         }

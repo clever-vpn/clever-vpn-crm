@@ -2,13 +2,18 @@
  * 站点设置：**发布时烘焙进产物**，运行时不再回填。
  *
  * 规范：`clever-vpn-docs/docs/standards/site-template.md` §3
- * 契约：`clever-vpn-docs/docs/contracts/site-crm.md` §0.1
+ * 契约：`clever-vpn-docs/docs/contracts/services/crm/site.md` §0.1
  *
- * **只装"身份 + 视觉"**（契约 `contract: 7`）：站点名 / 一句话介绍 / 客服邮箱 /
- * 主色 / 主题。别的都别往里塞 —— 判据见
- * `clever-vpn-docs/docs/standards/site-template.md` §3.2（六条）。一句话版本：
- * 只在"多处重复 / 需要校验 / 租户能选不能描述 / 成套 / 是资产"时才配当字段；
- * 单页单处的文案写进 HTML，结构决策交给编辑期（改 HTML 或换起点）。
+ * **装"租户事实"**（契约 `contract: 8`）：站点名 / 法务主体 / 首屏标题与副标题 /
+ * 一句话介绍 / 客服邮箱 / 主题与五个颜色令牌。判据见
+ * `clever-vpn-docs/docs/standards/site-template.md` §3.2：
+ *
+ *   1. **文件 vs 事实**：改它要动模板文件 ⇒ studio 改；它是租户关于自己的一个事实
+ *      （叫什么、主体是谁、什么颜色、怎么联系）⇒ 放这里；
+ *   2. **首屏可见的进 setting，哪怕只出现一次** —— 首屏是租户最想改、也最容易看出
+ *      "改了没变"的一屏，所以 `site.hero.*` 进（`contract: 7` 曾按"单页单处"删掉）。
+ *
+ * 结构决策（顶部导航还是侧边栏、首屏排布）仍然不进这里：那是编辑期的事。
  *
  * 三条约定：
  *  1. **单行 JSON + `rev` 乐观锁**：`site_settings.values` 是唯一事实，`rev` 每写一次 +1。
@@ -30,43 +35,94 @@ interface FieldSpec {
 }
 
 /**
- * 已知设置字段 = **数据契约本身**（契约 `site-studio-crm.md` v8 §4.4）。
+ * 主题预设：中性色底盘（底色 / 卡片 / 边框 / 次要文字）整套换。
+ *
+ * 颜色令牌（`site.theme.color.*`）在它之上做品牌覆盖：`preset` 决定"浅色还是深色"，
+ * 五个令牌决定"这个租户长什么样"。
+ */
+export const THEME_PRESETS = ["light", "dark"] as const;
+export type ThemePreset = (typeof THEME_PRESETS)[number];
+
+/**
+ * 已知设置字段 = **数据契约本身**（契约 `site-studio-crm.md` §4.4）。
  *
  * 这份清单**只住在这里**：模板（studio 产出的静态文件包）只引用路径，不声明字段；
  * AI 也不能新增字段 —— 加一个可编辑项是**平台动作**（+`SITE_CONTRACT`、过评审、
  * 影响所有站点），不是某次设计对话的副作用。
  *
  * 对外形态：`GET /api/site/meta` 的 `capabilities`（见 `src/site/meta.ts`）。
- * 改这里时同时补 `meta.ts` 的 `LABELS`，否则表单会回退成路径本身。
+ * 改这里时同时补 `meta.ts` 的 `LABELS`（人话标签）与 `HINTS`（表单里那句说明），
+ * 否则表单会回退成路径本身。
+ *
+ * 顺序 = 表单里的顺序：身份 → 首屏 → SEO → 视觉。
  */
 export const SETTING_FIELDS: Record<string, FieldSpec> = {
   // ── 身份：全站一份，出现在多个页面 ──
-  "site.name": { kind: "text", max: 40 },
-  "site.tagline": { kind: "text", max: 120 },
+  "site.name": { kind: "text", max: 24 },
+  // 法务主体：页脚署名用。站名可以不等于主体名（"云端加速" vs "上海某某网络科技有限公司"）
+  "site.legal_name": { kind: "text", max: 40 },
   "site.contact_email": { kind: "email", max: 120 },
-  // ── 视觉：主色 + 成套主题 ──
-  "site.theme.brand": { kind: "color" },
-  "site.theme.preset": { kind: "enum", values: ["light", "dark"] },
+  // ── 首屏：只出现一次，但首屏可见 ⇒ 进 setting（§3.2 的例外）──
+  "site.hero.title": { kind: "text", max: 24 },
+  "site.hero.sub": { kind: "text", max: 60 },
+  // ── SEO / 分享：只进 <meta name="description"> 与分享卡片，不上首屏 ──
+  "site.tagline": { kind: "text", max: 120 },
+  // ── 视觉：中性色底盘 + 五个品牌颜色令牌 ──
+  "site.theme.preset": { kind: "enum", values: THEME_PRESETS },
+  "site.theme.color.primary": { kind: "color" },
+  "site.theme.color.accent": { kind: "color" },
+  "site.theme.color.background": { kind: "color" },
+  "site.theme.color.surface": { kind: "color" },
+  "site.theme.color.text": { kind: "color" },
 };
 
 /**
- * 主题 = **一组成套的颜色**，不是几个散装色值。
+ * 颜色令牌：**一套五个**，不是散装色值。
  *
- * 为什么不让租户直接选 `bg` / `text`（`contract: 6` 曾经有这个字段）：底色一改，
- * 卡片 / 边框 / 次要文字 / 状态底色全都得跟着改，只给一个字段必然出现"深色底 +
- * 浅灰卡片"。所以主题只能整套选，模板里 `:root.<preset>` 一次覆盖一串变量。
+ * `contract: 7` 只留 preset、其余中性色硬编码，那时给一个"底色"字段必然出现
+ * "深色底 + 浅灰卡片"；现在五个一起给，模板按 CSS 变量整套消费（标准 §3.2）。
  */
-export const THEME_PRESETS = ["light", "dark"] as const;
-export type ThemePreset = (typeof THEME_PRESETS)[number];
+export const THEME_COLORS = ["primary", "accent", "background", "surface", "text"] as const;
+export type ThemeColor = (typeof THEME_COLORS)[number];
 
-/** 兜底主题色：留空会拼出非法 CSS，整份样式失效 */
-const DEFAULT_BRAND = "#4f46e5";
+/**
+ * **每个主题的中性色底盘**：某个颜色令牌没填时用它。
+ *
+ * 为什么按主题分开：`preset` 是"浅色还是深色"的整套中性色。如果所有主题共用一组
+ * 兜底值，选了深色主题但没单独挑颜色的站会得到"白底 + 深色边框"的花屏。所以
+ * "没填"的含义是**跟随主题**，不是"用某个固定色"。
+ *
+ * 表单把没填的项显示成什么见 `meta.ts` 的 `DEFAULTS`（只给 primary / accent ——
+ * 这两个在深浅两套里含义相同；另外三个留空才是正确的默认）。
+ */
+export const PRESET_COLORS: Record<ThemePreset, Record<ThemeColor, string>> = {
+  light: {
+    primary: "#4f46e5",
+    accent: "#0ea5e9",
+    background: "#ffffff",
+    surface: "#ffffff",
+    text: "#0d1626",
+  },
+  dark: {
+    primary: "#6366f1",
+    accent: "#22d3ee",
+    background: "#0b1020",
+    surface: "#141d31",
+    text: "#e8eefc",
+  },
+};
+
+/** 浅色底盘（配色建议 `palettes` 与测试拿它当基准） */
+export const DEFAULT_COLORS: Record<ThemeColor, string> = PRESET_COLORS.light;
+
 /** 主色上的文字永远是白色（按钮），所以对比度按白字算 */
-const ON_BRAND = "#ffffff";
+const ON_PRIMARY = "#ffffff";
 /**
  * 主色配白字的最低对比度。3:1 是 WCAG 对大号粗体 / 图形的最低门槛；再低就是
  * "按钮看得见但字看不清"。低于它**拒绝保存**，因为界面上没有警告通道，
  * 而静默接受等于让租户发布一个读不出字的按钮。
+ *
+ * 只查 `primary`：另外四个令牌目前还没有被种子消费，先别为还没接上的东西定门槛。
  */
 const MIN_CONTRAST = 3;
 
@@ -193,8 +249,8 @@ function validate(flat: Record<string, unknown>): { code: string; message: strin
         message: `${path} 只能是 ${(spec.values ?? []).join(" / ")}`,
       };
     }
-    if (path === "site.theme.brand" && text && HEX.test(text)) {
-      const ratio = contrast(text, ON_BRAND);
+    if (path === "site.theme.color.primary" && text && HEX.test(text)) {
+      const ratio = contrast(text, ON_PRIMARY);
       if (ratio < MIN_CONTRAST) {
         return {
           code: "bad_contrast",
@@ -215,6 +271,21 @@ function validate(flat: Record<string, unknown>): { code: string; message: strin
 export function validateValues(values: unknown): { code: string; message: string } | null {
   if (!isObj(values)) return { code: "bad_values", message: "values 必须是对象" };
   return validate(flatten(values));
+}
+
+/**
+ * 「设了值」的路径 → 文本值（空串不算设了）。
+ *
+ * 给 S2 用：判断"这个设置到底有没有被模板消费"必须从**设了值的路径**出发，
+ * 而不是从 schema 出发 —— 没填的字段当然不会出现在产物里。
+ */
+export function setValues(values: SiteValues): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [path, value] of Object.entries(flatten(values))) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (text) out[path] = text;
+  }
+  return out;
 }
 
 /**
@@ -397,12 +468,11 @@ export async function saveSiteSettings(
 /**
  * 把设置变成**渲染作用域**：`{{site.x}}` 就在这棵树上取。
  *
- * 这里只做两件事：空值兜默认、算派生值（`footer` 不存库）。
+ * 这里只做两件事：空值兜默认、算派生值（`footer` / `brand` 不存库）。
  *
- * `contract: 7` 起这棵树很小，这是**有意的**：`{{}}` 只留"多处重复"的值
- * （站名 / 一句话介绍 / 客服邮箱）和"成套的视觉令牌"（主色 / 主题）。
- * 首页大标题、副标题、下载页说明这类**单页单处**的文案直接写在 HTML 里 ——
- * 它们本来就该由 AI / 人改，放进设置只会挡住他们。
+ * `contract: 8` 的判据是"文件 vs 事实"，所以这棵树装的是**租户关于自己的事实**：
+ * 叫什么（name）、主体是谁（legal_name）、首屏说什么（hero）、什么颜色（theme）、
+ * 怎么联系（contact_email）。结构、排布、一次性文案仍然在模板文件里。
  */
 export function buildScope(
   settings: { values: SiteValues; collections?: SiteCollections },
@@ -416,18 +486,36 @@ export function buildScope(
 
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
   const name = str(site.name) || fallbackName;
-  const preset = str(theme.preset);
+  const legalName = str(site.legal_name);
+  const hero = isObj(site.hero) ? site.hero : {};
+  // 只有封闭集合里的值才算数：写错一个字母就让整站掉回亮色（模板里
+  // `:root.<preset>` 找不到类名 ⇒ 用默认那套）
+  const preset: ThemePreset = (THEME_PRESETS as readonly string[]).includes(str(theme.preset))
+    ? (str(theme.preset) as ThemePreset)
+    : "light";
+  const color = isObj(theme.color) ? theme.color : {};
+  // 五个令牌各自兜底：**空的含义是"跟随主题"**（见 PRESET_COLORS）。
+  // 不能留空串 —— `--bg: ;` 是非法 CSS，整份样式会失效。
+  const colors = Object.fromEntries(
+    THEME_COLORS.map((key) => [key, str(color[key]) || PRESET_COLORS[preset][key]]),
+  ) as Record<ThemeColor, string>;
 
   return {
     site: {
       name,
+      legal_name: legalName,
+      hero: {
+        // 没填就回落到站名：首屏大标题空着 = 页面上一个空洞，比"重复站名"更糟
+        title: str(hero.title) || name,
+        // 副标题留空就是留空：模板用 `data-if` 把整段收起来
+        sub: str(hero.sub),
+      },
+      // 只做 SEO / 分享：模板里的 `<meta name="description">` 与 og 卡片读它，首屏不读
       tagline: str(site.tagline),
       contact_email: str(site.contact_email),
       theme: {
-        brand: str(theme.brand) || DEFAULT_BRAND,
-        // 只有封闭集合里的值才算数：写错一个字母就让整站掉回亮色（模板里
-        // `:root.<preset>` 找不到类名 ⇒ 用默认那套）
-        preset: (THEME_PRESETS as readonly string[]).includes(preset) ? preset : "light",
+        preset,
+        color: colors,
       },
       // 下载入口按**平台分组**：模板写 `data-if="site.download.ios"` 决定整块
       // 出不出现，写 `data-repeat="site.download.ios"` 决定这一平台有几个按钮。
@@ -441,7 +529,8 @@ export function buildScope(
       // 渲染器对所有取值统一转义，值里带标签只会被转义成一堆 `&lt;a` ——
       // 要么放开转义（XSS 口子），要么就别在数据里放标记。模板自己写
       // `<a href="mailto:{{site.contact_email}}">`。
-      footer: `© ${now.getFullYear()} ${name}`,
+      // 署名优先用法务主体（工商登记名），没有才退回站名
+      footer: `© ${now.getFullYear()} ${legalName || name}`,
     },
   };
 }

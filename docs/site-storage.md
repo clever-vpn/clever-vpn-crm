@@ -1,6 +1,6 @@
 # 站点存储布局（R2 + KV）
 
-Last updated: 2026-11-10
+Last updated: 2026-11-18
 Status: `as-built`（本仓内部实现说明，**不是跨仓契约**）
 
 > 写这份东西的是 `src/site/publish.ts`，读它的是 `workers/site/src/index.ts`
@@ -20,17 +20,20 @@ g/templates/<模板>/<版本>/…           全局模板（公共模板），一
 tpl/<sha256>/…                        租户模板包的**内容寻址**存储（studio 交付）
   files/<包内路径>                    包里的静态文件
   manifest.json                       包清单（契约 site-studio-crm.md §4.1）
-sites/<租户>/versions/<n>/public/…    已发布的产物，按版本隔离
+art/<artifact_sha>/…                产物，**内容寻址**（渲染后的全部文件 + 素材 + _crm/*）
 ```
 
-- **模板**由 `npm run site:template:upload` 上传（`scripts/upload-site-template.mjs`），
-  现在固定是 `g/templates/basic/v1/`。
-- **产物**由发布写入：把模板整体复制到 `sites/<租户>/versions/<n>/public/`，
-  复制时做两件事（**只在发布时做，运行时不改**）：
-  - 写三个平台文件 `_crm/{config,sdk,return.html}`（`config.js` 里是本次发布的
+- **起点（种子）**是 `site-template/` 编译进 Worker 的 `src/site/seed.generated.ts`
+   （`npm run seed:gen` / `seed:check`），**不经过 R2**：它只在"这个租户还没有源包"时
+   被读一次。`g/templates/` 与 `npm run site:template:upload` 是 Contract 14 之前的
+   遗留路径，已不被读取。
+- **产物**由**烘焙**写入 `art/<artifact_sha>/`（内容寻址）：把源包整体渲染一遍再写，
+  写的时候做两件事（**只在烘焙时做，运行时不改**）：
+  - 写三个平台文件 `_crm/{config,sdk,return.html}`（`config.js` 里是本次烘焙的
     `window.CRM_API_BASE`；源包里**没有** `_crm/`，出现了 L0 直接拒）
-  - 所有文本产物做 `{{site.*}}` 占位符替换（品牌设置烘焙，见下）
-- **版本不可变**：写完就不再改。回滚 = 把指针指回旧 `n`，**不重建、不删除旧版本**。
+  - 所有文本产物做 `{{site.*}}` 占位符替换（品牌设置，见下）
+- **产物不可变**：目录名就是整版内容的 sha，写完就不再改（同内容只占一份，不同内容
+  绝不同目录）。发布、保存设置、回滚**都只是重新烘焙 + 换指针**，没有"原地覆盖"。
 
 ### 1.1 `tpl/<sha>/`：模板版本（内容寻址）
 
@@ -63,45 +66,58 @@ created_at`），当前指针是 `site_settings.template_version`（与数据设
 
 ```
 host:<hostname>        { tenant_id, slot, shard, status }   写：cf-api
-site:<tenant>:active   { n }                                写：本仓发布
+site:<tenant>:active   { template_seq, artifact_sha,         写：本仓发布 / 烘焙 / 回滚
+                         baked_at, settings_rev }
 ```
 
-- `site-serve` 先读 `host:*` 拿到租户，再读 `site:*:active` 拿到版本号，最后拼
-  R2 key `sites/<租户>/versions/<n>/public/<路径>`。
+- `site-serve` 先读 `host:*` 拿到租户，再读 `site:*:active` 拿到 `artifact_sha`，
+  最后拼 R2 key `art/<artifact_sha>/<路径>`（`template_seq` 只用于展示与排障）。
+- **为什么是两个字段**：`template_seq` 回答"线上是哪一版设计"，`artifact_sha` 回答
+  "线上跑的是哪份字节"。换主色只换后者（不占版本号）；回滚设计只换前者 + 重烘焙。
 - **键前缀即所有权**：本仓只写 `site:*`，绝不写 `host:*`（那是 cf-api 的）。
 - 指针缓存 5 秒 ⇒ 发布后最多 5 秒生效。
 
 ## 3. 版本号的权威在 D1，不在 KV
 
-`site_versions(seq UNIQUE, template, template_version, files, bytes, created_by, created_at)`。
+`site_releases(tenant_id, seq, source_sha, artifact_sha, seed_sha, files, bytes, idem_key, created_by, created_at)`，
+`seq` 在租户内唯一（发布记录 append-only）。
 
 - `seq` 是 `MAX(seq)+1`，唯一索引挡住并发撞号（撞了就返回 `version_conflict`）
-- 回滚前校验"这个 `n` 真实存在过"，防止指针指向从未发布的版本（那会 404 且难排查）
+- 回滚前校验"这个 `seq` 真实存在过"，防止指针指向从未发布的版本（那会 404 且难排查）
 - 保留策略未实现（契约 `site-studio-crm.md` §9.3 定的是最近 30 版 + blob mark-and-sweep）
 
-## 4. 品牌设置：发布时烘焙
+## 4. 设置：烘焙进产物（保存即重烘焙）
 
-`site_settings`（本仓 D1，单行）：`site_name` / `tagline` / `color` / `contact_email`
-/ `footer_note`。
+`site_settings`（本仓 D1，**单行 JSON**）：`values`（键就是模板里写的路径）+
+`collections`（下载入口）+ `rev`（乐观锁）。字段清单只有一份，住
+`src/site/settings.ts` 的 `SETTING_FIELDS`，对外形态是 `/api/site/meta` 的
+`capabilities`（契约 `site.md` `contract: 8`、标准 `site-template.md` §3）。
 
-发布的替换表只有六个槽，**多一个都要先改契约**：
-
-| 槽 | 来源 | 说明 |
+| 路径 | 上限 | 说明 |
 |---|---|---|
-| `{{site.name}}` | `site_name`，空则用兜底名 | 转义后写入 |
-| `{{site.tagline}}` | `tagline` | 转义 |
-| `{{site.hero_title}}` | `hero_title`，空则用默认文案 | 转义 |
-| `{{site.hero_sub}}` | `hero_sub` | 转义；空 ⇒ 空串（模板用 `:empty` 隐藏） |
-| `{{site.color}}` | `color`（`#rrggbb`） | 不转义，需已校验 |
-| `{{site.contact}}` | `contact_email` | 转义 |
-| `{{site.contact_link}}` | `contact_email` | **整段 `<a>`**；没配就渲染空串（避免空的 `mailto:`） |
-| `{{site.footer}}` | `footer_note`，空则 `© <年> <站点名>` | 转义 |
+| `site.name` | 24 | 站名 |
+| `site.legal_name` | 40 | 法务主体（页脚署名优先用它） |
+| `site.contact_email` | 120 | 客服邮箱 |
+| `site.hero.title` / `site.hero.sub` | 24 / 60 | 首屏大标题与副标题 |
+| `site.tagline` | 120 | **只做 SEO / 分享卡片**，不进首屏 |
+| `site.theme.preset` | `light` / `dark` | 中性色底盘 |
+| `site.theme.color.{primary,accent,background,surface,text}` | `#rrggbb` | 品牌色令牌（一套五个） |
 
-> **空值必须回落到可用默认**：`{{site.color}}` 留空会让 `--brand: ;` 变成非法 CSS，
-> 整份样式失效 —— 所以它回落到 `#3b82f6`，而不是空串。
+**派生值**（渲染时算，不存库、不可填）：`site.footer` = `© <年> <legal_name 或 name>`。
+
+`contract: 7` 的 `site.theme.brand` **已删除**（产品是正式发布，不留旧路径别名）——
+主色只有一个名字：`site.theme.color.primary`。
+
+校验：格式 / 枚举 / 上限，外加 `primary` 与白字的对比度 ≥ 3:1（`bad_contrast`）。
+空值不写进库，渲染时由 `buildScope()` 兜默认（`DEFAULT_COLORS`）—— 留空会让
+`--brand: ;` 变成非法 CSS，整份样式失效。
 
 产物里若残留**未定义**的 `{{site.xxx}}` ⇒ 发布直接失败（`template_token_unknown`），
 不让它漏到线上。
+
+**体积上限**：唯一口径是**整版字节**（文本 + 素材）
+`{fileBytes: 2 MB, totalBytes: 32 MB, files: 200}`，唯一出处 `src/site/limits.ts`，
+对外是 `/api/site/meta` 的 `limits`（studio 读同一份，不各自维护常量）。
 
 ## 5. 域名
 
