@@ -24,6 +24,7 @@ import { SITE_LIMITS } from "./limits";
 import { isTextPath, readSource, seedFiles, seedSha } from "./source";
 import { RETURN_HTML, SDK_JS } from "./sdk";
 import { renderTemplate } from "./render";
+import { isInternalSetting } from "./settings";
 import { buildScope, readSiteSettings, setValues } from "./settings";
 
 import type { Env } from "../env";
@@ -145,6 +146,7 @@ export async function bakeSite(
 
   // ── 3) 渲染：设置是**现在**的值（这就是"设置改了就重烘焙"的意义）────
   const settings = await readSiteSettings(env);
+  const flat = setValues(settings.values);
   const scope = buildScope(settings, input.brandFallback ?? "我的站点");
   const rendered: Array<[string, string | ArrayBuffer, string]> = [];
   const entries: Entry[] = [];
@@ -165,9 +167,14 @@ export async function bakeSite(
         "对照 GET /api/site/meta 的 capabilities 补齐数据，或从源包里删掉这段",
       ]);
     }
-    const bytes = enc.encode(r.html);
+    // 集成开关：只对 HTML、只在开着的时候插（internal 设置，不进模板）。
+    // 注意 `values` 是**嵌套**的，要先把路径摊平再查 —— 直接拿扁平 key 取会一直是 undefined。
+    const body = file.path.endsWith(".html")
+      ? injectZaraz(r.html, flat["site.integrations.zaraz"] === "1")
+      : r.html;
+    const bytes = enc.encode(body);
     entries.push({ path: file.path, sha256: await sha256Hex(bytes), bytes: bytes.byteLength });
-    rendered.push([file.path, r.html, "text/plain; charset=utf-8"]);
+    rendered.push([file.path, body, "text/plain; charset=utf-8"]);
   }
 
   // 平台文件也算进产物（`/_crm/config.js` 里是租户的 CRM 地址，换域名 artifact 就得换）
@@ -207,6 +214,31 @@ export async function bakeSite(
 
 type BakeBody = string | Uint8Array | ArrayBuffer;
 
+/**
+ * Cloudflare Zaraz 的加载器。
+ *
+ * 为什么由我们插：Zaraz 的**自动注入只改写源站响应**，而我们的站点是 Worker
+ * 返回的 HTML —— 实测（2026-11-19）自动注入完全不碰它；官方给这种情况的方案
+ * 就是手动加载这一行。工具（GA4 / 客服）仍在租户的 CF 后台配，我们不碰。
+ *
+ * 插在渲染之后、写产物之前：源码保持干净，AI 编辑也删不掉它。
+ */
+const ZARAZ_TAG =
+  '<script src="/cdn-cgi/zaraz/i.js" referrerpolicy="origin"></script>';
+
+export function injectZaraz(html: string, on: boolean): string {
+  if (!on || html.includes("/cdn-cgi/zaraz/i.js")) return html;
+  const head = html.search(/<\/head\s*>/i);
+  if (head >= 0) return html.slice(0, head) + ZARAZ_TAG + "\n" + html.slice(head);
+  // 没有 </head>（畸形页面）：L0 会在发布前拦下缺少 doctype 的情况，这里只做兜底
+  const open = html.search(/<head[^>]*>/i);
+  if (open >= 0) {
+    const end = html.indexOf(">", open);
+    return html.slice(0, end + 1) + ZARAZ_TAG + html.slice(end + 1);
+  }
+  return ZARAZ_TAG + "\n" + html;
+}
+
 /** 源包里出现过的数据路径（`{{x}}`、`data-repeat`、`data-if`）。只看文本文件 */
 function referencedPaths(files: { path: string; body: BakeBody }[]): Set<string> {
   const out = new Set<string>();
@@ -245,6 +277,8 @@ export function unusedOf(
   const refs = referencedPaths(files);
   const footer = refs.has("site.footer");
   return Object.keys(setValues(values)).filter((path) => {
+    // 站点工程配置本来就不该出现在页面里，别把它报成"模板没用到"
+    if (isInternalSetting(path)) return false;
     if (refs.has(path)) return false;
     if (footer && (path === "site.name" || path === "site.legal_name")) return false;
     return true;

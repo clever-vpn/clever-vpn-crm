@@ -32,6 +32,14 @@ interface FieldSpec {
   kind: Kind;
   max?: number;
   values?: readonly string[];
+  /**
+   * **站点工程配置，不是模板可见的内容字段。**
+   *
+   * 有这个标记的路径：不进 `capabilities`（模板不能引用）、
+   * 不算 `unused_settings`（它本来就不该出现在页面里）。
+   * 它仍然走同一张表、同一个校验、同一个 rev —— 只是"不由模板消费"。
+   */
+  internal?: true;
 }
 
 /**
@@ -74,7 +82,19 @@ export const SETTING_FIELDS: Record<string, FieldSpec> = {
   "site.theme.color.background": { kind: "color" },
   "site.theme.color.surface": { kind: "color" },
   "site.theme.color.text": { kind: "color" },
+  // ── 集成：站点工程配置（internal，不进模板）──
+  //
+  // Cloudflare Zaraz 的加载器：`1` = 在页面的 </head> 前插一行
+  // `<script src="/cdn-cgi/zaraz/i.js" referrerpolicy="origin">`。
+  // 为什么是我们插而不是 CF 自动插：Zaraz 的自动注入只改写**源站**响应，
+  // 而我们的站点是 Worker 返回的 HTML（2026-11-19 实测 + 官方文档的口径）。
+  "site.integrations.zaraz": { kind: "text", max: 1, internal: true },
 };
+
+/** 这个路径是不是"站点工程配置"（不进模板、不算未使用） */
+export function isInternalSetting(path: string): boolean {
+  return SETTING_FIELDS[path]?.internal === true;
+}
 
 /**
  * 颜色令牌：**一套五个**，不是散装色值。

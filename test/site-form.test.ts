@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import { siteCapabilities } from "../src/site/meta";
-import { SETTING_FIELDS } from "../src/site/settings";
+import { isInternalSetting, SETTING_FIELDS } from "../src/site/settings";
 import {
   COLOR_TOKENS,
   formFields,
@@ -22,9 +22,10 @@ import {
 const fields = () => formFields(siteCapabilities());
 
 describe("清单 → 表单", () => {
-  it("每一个可填字段都出现在表单里（一个不少）", () => {
+  it("每一个可填字段都出现在表单里（internal 的工程配置除外）", () => {
     const rendered = fields().map((f) => f.path);
-    expect(rendered.sort()).toEqual(Object.keys(SETTING_FIELDS).sort());
+    const expectable = Object.keys(SETTING_FIELDS).filter((p) => !isInternalSetting(p));
+    expect(rendered.sort()).toEqual(expectable.sort());
   });
 
   it("派生值与集合不进表单（填了也不生效）", () => {

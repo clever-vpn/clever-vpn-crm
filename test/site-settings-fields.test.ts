@@ -30,11 +30,14 @@ const derived = (): string[] =>
     .sort();
 
 describe("字段清单：租户事实", () => {
-  it("就是这 12 项", () => {
+  it("就是这 13 项（12 个内容字段 + 1 个站点工程配置）", () => {
+    // `site.integrations.zaraz` 是 internal 的工程配置：走同一张表与校验，
+    // 但不进模板 / 不进能力清单（见 meta.ts 的过滤）。
     expect(paths()).toEqual([
       "site.contact_email",
       "site.hero.sub",
       "site.hero.title",
+      "site.integrations.zaraz",
       "site.legal_name",
       "site.name",
       "site.tagline",
