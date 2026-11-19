@@ -168,14 +168,17 @@ export async function bakeSite(
       ]);
     }
     /**
-     * 集成开关：只对 HTML 插。
+     * 集成开关：只对 HTML 插，**缺省不开**。
      *
-     * **缺省是开**：站点走 Cloudflare 发布，Zaraz 是这条路的能力，默认就该有；
-     * 关掉要显式存 `"0"`（空值会被 `setValues` 丢掉，没法表达"显式关"）。
+     * 为什么缺省关：Zaraz 只在"租户域名自己也在 Cloudflare 上"时才有效（官方兼容表：
+     * Zaraz 在 SaaS 提供方 zone 上是 No）。对不在 CF 的租户，这行 loader 只会 404，
+     * 甚至可能把事件送进**我们自己的** GA 配置里。所以它必须是显式选择。
+     *
+     * 不满足条件的租户要统计/客服时，走对话让 AI 加外链脚本（规则在 studio 的 system prompt）。
      * 注意 `values` 是**嵌套**的，要先摊平再查。
      */
     const body = file.path.endsWith(".html")
-      ? injectZaraz(r.html, flat["site.integrations.zaraz"] !== "0")
+      ? injectZaraz(r.html, flat["site.integrations.zaraz"] === "1")
       : r.html;
     const bytes = enc.encode(body);
     entries.push({ path: file.path, sha256: await sha256Hex(bytes), bytes: bytes.byteLength });

@@ -157,7 +157,7 @@ export default function Site() {
       site: {
         ...((effectiveInitialValues(fields, settings.values, scope) as { site?: object }).site ?? {}),
         integrations: {
-          zaraz: String(getPath(settings.values, "site.integrations.zaraz") ?? "1") !== "0",
+          zaraz: String(getPath(settings.values, "site.integrations.zaraz") ?? "") === "1",
         },
       },
     });
@@ -636,7 +636,7 @@ export default function Site() {
           label="使用 Cloudflare Zaraz"
           name={ZARAZ_NAME as unknown as string[]}
           valuePropName="checked"
-          extra="在 Cloudflare 后台的 Tag Management 里配置 GA4、客服等工具；打开这里之后，发布出来的页面会加载 Zaraz（工具本身不在这里配）。"
+          extra="只有域名也在 Cloudflare 上时才有效。打开后发布出来的页面会加载 Zaraz；工具（GA4、客服）在你自己的 Cloudflare 后台 Tag Management 里配。域名不在 Cloudflare 上时，直接在对话里让 AI 加第三方脚本。"
         >
           <Switch checkedChildren="开" unCheckedChildren="关" />
         </Form.Item>
