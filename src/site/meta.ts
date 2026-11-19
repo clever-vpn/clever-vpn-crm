@@ -163,7 +163,8 @@ const DOWNLOAD_LABELS: Record<string, string> = {
 
 /** 设置字段清单（kind / 上限 / 枚举值 全部来自 `SETTING_FIELDS`，不重复一遍） */
 function settingsCapabilities(): Capability[] {
-  return Object.entries(SETTING_FIELDS).map(([path, spec]) => {
+  // internal = 站点工程配置（如 Zaraz 开关）：不进模板，也不该出现在内容表单的能力清单里
+  return Object.entries(SETTING_FIELDS).filter(([, spec]) => spec.internal !== true).map(([path, spec]) => {
     const spec2 = spec as { kind: CapabilityKind; max?: number; values?: readonly string[] };
     return {
       path,

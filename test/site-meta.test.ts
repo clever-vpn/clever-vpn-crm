@@ -21,7 +21,7 @@ import { ENGINE_ID, ENGINE_SHA256 } from "../src/site/engine.generated";
 import { SITE_CONTRACT, siteCapabilities, siteMeta } from "../src/site/meta";
 import { SDK_VERSION } from "../src/site/sdk";
 import { renderTemplate } from "../src/site/render";
-import { SETTING_FIELDS, buildScope } from "../src/site/settings";
+import { isInternalSetting, SETTING_FIELDS, buildScope } from "../src/site/settings";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -40,8 +40,9 @@ describe('engine 版本号 = render.ts 的 sha256（"同一份引擎"这件事�
 describe("capabilities：模板能引用什么", () => {
   const caps = siteCapabilities();
 
-  it("每个设置字段都在清单里，且带 kind 与 label", () => {
+  it("每个设置字段都在清单里，且带 kind 与 label（internal 的工程配置除外）", () => {
     for (const path of Object.keys(SETTING_FIELDS)) {
+      if (isInternalSetting(path)) continue;
       const cap = caps.find((c) => c.path === path);
       expect(cap, path).toBeDefined();
       expect(cap?.kind, path).toBeTruthy();
