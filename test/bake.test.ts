@@ -19,6 +19,16 @@ describe("Zaraz 加载器（渲染时注入）", () => {
     expect(injectZaraz("<html><head><title>t</title>", true)).toContain("zaraz");
   });
 
+  it("缺省是开：没设过（或设成 1）都插，只有显式 0 才不插", async () => {
+    const { injectZaraz } = await import("../src/site/bake");
+    const on = (v: string | undefined): boolean => (v ?? "1") !== "0";
+    // 这条规则在 bakeSite 里，这里钉住语义本身：undefined/1 → 开，0 → 关
+    expect(on(undefined)).toBe(true);
+    expect(on("1")).toBe(true);
+    expect(on("0")).toBe(false);
+    expect(injectZaraz("<html><head></head><body></body></html>", on("0"))).not.toContain("zaraz");
+  });
+
   it("internal 设置不算未使用（它本来就不该出现在页面里）", async () => {
     const { unusedOf } = await import("../src/site/bake");
     const files = [{ path: "index.html", body: "<p>{{site.name}}</p>" }];

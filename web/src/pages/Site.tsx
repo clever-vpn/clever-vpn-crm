@@ -14,6 +14,7 @@ import {
   Select,
   Space,
   Statistic,
+  Switch,
   Table,
   Tag,
   Tabs,
@@ -40,6 +41,7 @@ import {
   getPath,
   palettePatch,
   setPath,
+  type FormField,
 } from "../site-fields";
 
 /**
@@ -125,7 +127,16 @@ export default function Site() {
    * 逐个调色仍然在，只是要主动展开（评审时别把这条改回去）。
    */
   const colorFields = fields.filter((f) => f.path.startsWith("site.theme.color."));
-  const baseFields = fields.filter((f) => !f.path.startsWith("site.theme.color."));
+  const restFields = fields.filter((f) => !f.path.startsWith("site.theme.color."));
+  // 「主题（深/浅）」和「配色方案」是同一件事的两步，放同一组
+  const themeFields = restFields.filter((f) => f.path === "site.theme.preset");
+  const baseFields = restFields.filter((f) => f.path !== "site.theme.preset");
+  /** 首屏那些字段（contract 8 起是 site.hero.*）单独一组 */
+  const heroFields = baseFields.filter((f) => f.path.startsWith("site.hero."));
+  const siteFields = baseFields.filter((f) => !f.path.startsWith("site.hero."));
+  /** internal 设置：不在 capabilities 里，单独渲染 */
+  const ZARAZ_PATH = "site.integrations.zaraz";
+  const ZARAZ_NAME = ["site", "integrations", "zaraz"] as const;
 
   /**
    * 拿到设置 / 契约之后回填表单。
@@ -141,6 +152,13 @@ export default function Site() {
       // 这样"设置 + 集合"一次保存、一个 `rev`
       collections: {
         downloads: settings.collections.downloads.map((d) => ({ ...d })),
+      },
+      // 集成开关是 internal 设置（不在 capabilities 里），单独回填。缺省 = 开。
+      site: {
+        ...((effectiveInitialValues(fields, settings.values, scope) as { site?: object }).site ?? {}),
+        integrations: {
+          zaraz: String(getPath(settings.values, "site.integrations.zaraz") ?? "1") !== "0",
+        },
       },
     });
     // `fields` 由 meta 派生，跟着 meta 变；不放进依赖是为了避免每次渲染重算一份
@@ -248,6 +266,10 @@ export default function Site() {
     for (const field of fields) {
       if (!form.isFieldTouched(field.name)) continue;
       setPath(values, field.name, getPath(formValues, field.path) ?? "");
+    }
+    // 集成开关：internal 设置，不在 capabilities 里，所以不在上面的循环里
+    if (form.isFieldTouched(ZARAZ_NAME)) {
+      setPath(values, ZARAZ_NAME, getPath(formValues, ZARAZ_PATH) ? "1" : "0");
     }
     try {
       const res = await api.saveSiteSettings({
@@ -482,6 +504,31 @@ export default function Site() {
     </Space>
   );
 
+  /** 一条设置字段：标签 + 上限计数 + 说明（和 studio 的面板一致） */
+  const fieldItem = (f: FormField) => (
+    <Form.Item
+      key={f.path}
+      label={f.label}
+      name={f.name}
+      extra={f.hint}
+      rules={[
+        ...(f.max ? [{ max: f.max, message: `最多 ${f.max} 个字符` }] : []),
+        ...(f.control === "email"
+          ? [{ type: "email" as const, message: "邮箱格式不对" }]
+          : []),
+      ]}
+      getValueFromEvent={f.control === "color" ? colorEvent : undefined}
+    >
+      {f.control === "color" ? (
+        <ColorPicker format="hex" disabledAlpha showText />
+      ) : f.control === "select" ? (
+        <Select options={f.options} />
+      ) : (
+        <Input type={f.control === "email" ? "email" : "text"} maxLength={f.max} showCount={Boolean(f.max)} />
+      )}
+    </Form.Item>
+  );
+
   const settingsTab = (
     <Card>
       {/*
@@ -504,91 +551,95 @@ export default function Site() {
         onFinish={saveSettings}
         style={{ maxWidth: 560 }}
       >
-        {/* 配色方案：写 preset + 主色 + 强调色，本身不是字段（不落库） */}
-        {meta && meta.palettes.length > 0 && (
-          <Form.Item
-            label="配色方案"
-            extra="从现成的几套里挑一套。想逐个调色，展开下面的「高级」"
-          >
-            <Space wrap>
-              {meta.palettes.map((p) => (
-                <Button
-                  key={p.id}
-                  size="small"
-                  type={paletteId === p.id ? "primary" : "default"}
-                  onClick={() => applyPalette(p)}
-                >
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 10,
-                      height: 10,
-                      borderRadius: 2,
-                      marginRight: 6,
-                      background: p.colors.primary,
-                    }}
-                  />
-                  {p.label}
-                </Button>
-              ))}
-            </Space>
-          </Form.Item>
-        )}
+        <Divider orientation="left" plain>
+          站点
+        </Divider>
+        <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+          谁在用这个站、怎么联系你
+        </Typography.Paragraph>
+        {siteFields.map(fieldItem)}
 
-        {baseFields.map((f) => (
-          <Form.Item
-            key={f.path}
-            label={f.label}
-            name={f.name}
-            extra={f.hint}
-            rules={[
-              ...(f.max ? [{ max: f.max, message: `最多 ${f.max} 个字符` }] : []),
-              ...(f.control === "email"
-                ? [{ type: "email" as const, message: "邮箱格式不对" }]
-                : []),
-            ]}
-            getValueFromEvent={f.control === "color" ? colorEvent : undefined}
-          >
-            {f.control === "color" ? (
-              <ColorPicker format="hex" disabledAlpha showText />
-            ) : f.control === "select" ? (
-              <Select options={f.options} />
-            ) : (
-              <Input
-                type={f.control === "email" ? "email" : "text"}
-                maxLength={f.max}
-              />
-            )}
-          </Form.Item>
-        ))}
-
-        {colorFields.length > 0 && (
+        {heroFields.length > 0 && (
           <>
             <Divider orientation="left" plain>
-              高级
+              首屏
             </Divider>
-            <Button
-              type="link"
-              size="small"
-              style={{ paddingLeft: 0, marginBottom: 8 }}
-              onClick={() => setAdvanced((v) => !v)}
-            >
-              {advanced ? "收起颜色微调" : "逐个调色（一般不需要）"}
-            </Button>
-            {advanced &&
-              colorFields.map((f) => (
-                <Form.Item
-                  key={f.path}
-                  label={f.label}
-                  name={f.name}
-                  extra={f.hint}
-                  getValueFromEvent={colorEvent}
-                >
-                  <ColorPicker format="hex" disabledAlpha showText />
-                </Form.Item>
-              ))}
+            <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+              首页最上面那一屏
+            </Typography.Paragraph>
+            {heroFields.map(fieldItem)}
           </>
         )}
+
+        {(themeFields.length > 0 || meta?.palettes.length || colorFields.length > 0) && (
+          <>
+            <Divider orientation="left" plain>
+              外观
+            </Divider>
+            <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+              深浅、配色
+            </Typography.Paragraph>
+            {themeFields.map(fieldItem)}
+            {/* 配色方案：写 preset + 主色 + 强调色，本身不是字段（不落库） */}
+            {meta && meta.palettes.length > 0 && (
+              <Form.Item
+                label="配色方案"
+                extra="从现成的几套里挑一套。想逐个调色，展开下面的「高级」"
+              >
+                <Space wrap>
+                  {meta.palettes.map((p) => (
+                    <Button
+                      key={p.id}
+                      size="small"
+                      type={paletteId === p.id ? "primary" : "default"}
+                      onClick={() => applyPalette(p)}
+                    >
+                      <span
+                        style={{
+                          display: "inline-block",
+                          width: 10,
+                          height: 10,
+                          borderRadius: 2,
+                          marginRight: 6,
+                          background: p.colors.primary,
+                        }}
+                      />
+                      {p.label}
+                    </Button>
+                  ))}
+                </Space>
+              </Form.Item>
+            )}
+            {colorFields.length > 0 && (
+              <>
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ paddingLeft: 0, marginBottom: 8 }}
+                  onClick={() => setAdvanced((v) => !v)}
+                >
+                  {advanced ? "收起颜色微调" : "高级：逐个调色（一般不需要）"}
+                </Button>
+                {advanced && colorFields.map(fieldItem)}
+              </>
+            )}
+          </>
+        )}
+
+        <Divider orientation="left" plain>
+          集成
+        </Divider>
+        <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+          统计与客服
+        </Typography.Paragraph>
+        <Form.Item
+          label="使用 Cloudflare Zaraz"
+          name={ZARAZ_NAME as unknown as string[]}
+          valuePropName="checked"
+          extra="在 Cloudflare 后台的 Tag Management 里配置 GA4、客服等工具；打开这里之后，发布出来的页面会加载 Zaraz（工具本身不在这里配）。"
+        >
+          <Switch checkedChildren="开" unCheckedChildren="关" />
+        </Form.Item>
 
         <Divider orientation="left" plain>
           下载入口

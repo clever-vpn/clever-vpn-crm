@@ -167,10 +167,15 @@ export async function bakeSite(
         "对照 GET /api/site/meta 的 capabilities 补齐数据，或从源包里删掉这段",
       ]);
     }
-    // 集成开关：只对 HTML、只在开着的时候插（internal 设置，不进模板）。
-    // 注意 `values` 是**嵌套**的，要先把路径摊平再查 —— 直接拿扁平 key 取会一直是 undefined。
+    /**
+     * 集成开关：只对 HTML 插。
+     *
+     * **缺省是开**：站点走 Cloudflare 发布，Zaraz 是这条路的能力，默认就该有；
+     * 关掉要显式存 `"0"`（空值会被 `setValues` 丢掉，没法表达"显式关"）。
+     * 注意 `values` 是**嵌套**的，要先摊平再查。
+     */
     const body = file.path.endsWith(".html")
-      ? injectZaraz(r.html, flat["site.integrations.zaraz"] === "1")
+      ? injectZaraz(r.html, flat["site.integrations.zaraz"] !== "0")
       : r.html;
     const bytes = enc.encode(body);
     entries.push({ path: file.path, sha256: await sha256Hex(bytes), bytes: bytes.byteLength });
