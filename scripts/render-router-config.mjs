@@ -62,8 +62,13 @@ const config = {
     { binding: "REGISTRY", database_name: "clever-vpn-registry-d1", database_id: registryD1 },
   ],
   vars: { ADMIN_ZONE: crmRoot },
-  // CRM 自定义域的回源：originless 记录（AAAA 100::）+ 这条 route
-  routes: [{ pattern: `origin-crm.${baseDomain}/*`, zone_name: baseDomain }],
+  // 两条 route 缺一不可：
+  //   · `*.CRM_ROOT/*` 是平台子域（租户后台域）——**曾经漏掉，部署即把整片租户后台解绑**；
+  //   · `origin-crm.*` 是 CRM 自定义域的回源（originless 记录 + route）。
+  routes: [
+    { pattern: `*.${crmRoot}/*`, zone_name: crmRoot },
+    { pattern: `origin-crm.${baseDomain}/*`, zone_name: baseDomain },
+  ],
   services: deployed.map((n) => ({
     binding: `SHARD_${n}`,
     service: `clever-vpn-crm-saas-shard-${n}`,
