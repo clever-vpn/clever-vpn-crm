@@ -50,7 +50,7 @@
         <div class="actions" style="margin-top:18px">
           <a class="btn" href="pricing.html">续费 / 升级</a>
           <a class="btn ghost" href="download.html">下载 App</a>
-          <button id="logout" class="ghost" type="button">退出登录</button>
+          <button id="logout" class="btn ghost" type="button">退出登录</button>
         </div>
       </div>
 
@@ -64,9 +64,9 @@
             拿到活动码 / 渠道福利码后在这里输入，权益直接加到当前账号。
           </p>
           <div class="row" style="margin-top:14px">
-            <input id="redeem-code" class="grow mono" type="text" autocomplete="off" spellcheck="false"
+            <input id="redeem-code" class="ctl grow mono" type="text" autocomplete="off" spellcheck="false"
                    placeholder="例如 GUOQING7" style="text-transform:uppercase;letter-spacing:1px" />
-            <button id="redeem-btn" class="ghost" type="button">兑换</button>
+            <button id="redeem-btn" class="btn ghost" type="button">兑换</button>
           </div>
           <div id="redeem-result" style="margin-top:12px"></div>
         </div>
@@ -81,7 +81,7 @@
           </p>
           <div class="row" style="margin-top:14px">
             <code id="invite-code" class="mono grow" style="font-size:17px;letter-spacing:1px">—</code>
-            <button id="copy" class="ghost" type="button">复制</button>
+            <button id="copy" class="btn ghost" type="button">复制</button>
           </div>
           <dl id="invite" class="kv" style="margin-top:14px"></dl>
         </div>
@@ -89,7 +89,7 @@
 
       <div class="card" style="margin-top:16px">
         <h2>订单</h2>
-        <table>
+        <table class="table">
           <thead>
             <tr>
               <th>单号</th><th>套餐</th><th class="num">金额</th><th>状态</th><th>时间</th>
