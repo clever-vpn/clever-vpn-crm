@@ -185,7 +185,8 @@ header.site .brand:hover { text-decoration: none; }
 header.site .mark { width: 26px; height: 26px; flex: none; color: var(--brand); }
 header.site nav {
   display: flex; gap: var(--sp-4); align-items: center;
-  font-size: var(--fs-base); color: var(--dim);
+  /* 导航比正文重一档：它是"指路"，不是阅读内容 */
+  font-size: 15px; font-weight: 600; color: var(--dim);
   /* 窄屏时导航可以横向滚动，但不许把品牌和按钮挤成两行 */
   flex: 0 1 auto; min-width: 0;
   overflow-x: auto; scrollbar-width: none;
@@ -218,7 +219,7 @@ header.site nav a[aria-current="page"] { color: var(--text); border-bottom-color
 }
 .navpanel a {
   padding: 9px 10px; border-radius: 6px;
-  color: var(--text); font-size: var(--fs-base);
+  color: var(--text); font-size: 15px; font-weight: 600;
 }
 .navpanel a:hover { background: var(--soft); text-decoration: none; }
 .navpanel a[aria-current="page"] { background: var(--brand-soft); color: var(--brand-ink); }
