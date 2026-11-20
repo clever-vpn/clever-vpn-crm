@@ -61,6 +61,7 @@ jobs:
           # 平台子域按 slug 查 tenants（契约 cf-api-hosting §2）
           REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
           CRM_ROOT: ${{ vars.CRM_ROOT }}
+          BASE_DOMAIN: ${{ vars.SAAS_BASE_DOMAIN || 'clever-vpn.org' }}
         run: node scripts/render-router-config.mjs --input shards.json
 
       - run: npm ci

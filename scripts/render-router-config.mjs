@@ -13,6 +13,7 @@
  *   HOSTS_KV_ID     与 site-serve / shard 共用同一个 KV 命名空间
  *   REGISTRY_D1_ID  registry 库（`{slug}.<CRM_ROOT>` 按 slug 查 tenants 用）
  *   CRM_ROOT        租户后台域的父域（`clever-panel.win`）
+ *   BASE_DOMAIN     回源所在 zone（默认 clever-vpn.org）
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -30,6 +31,7 @@ const shards = Array.isArray(data.shards) ? data.shards : [];
 const hostsKvId = process.env.HOSTS_KV_ID ?? "";
 const registryD1 = process.env.REGISTRY_D1_ID ?? "";
 const crmRoot = String(process.env.CRM_ROOT ?? "").trim();
+const baseDomain = String(process.env.BASE_DOMAIN ?? "").trim() || "clever-vpn.org";
 if (!hostsKvId) {
   console.error("✘ 缺 HOSTS_KV_ID");
   process.exit(1);
@@ -60,6 +62,8 @@ const config = {
     { binding: "REGISTRY", database_name: "clever-vpn-registry-d1", database_id: registryD1 },
   ],
   vars: { ADMIN_ZONE: crmRoot },
+  // CRM 自定义域的回源：originless 记录（AAAA 100::）+ 这条 route
+  routes: [{ pattern: `origin-crm.${baseDomain}/*`, zone_name: baseDomain }],
   services: deployed.map((n) => ({
     binding: `SHARD_${n}`,
     service: `clever-vpn-crm-saas-shard-${n}`,
