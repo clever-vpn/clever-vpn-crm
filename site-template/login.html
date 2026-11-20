@@ -20,9 +20,7 @@
         </a>
 
         <h1 class="auth-title">登录</h1>
-        <p class="auth-sub">用邮箱收验证码登录，不需要密码。</p>
 
-        <div id="flash"></div>
         <div id="devcode" class="hint" hidden></div>
 
         <div class="field">
@@ -30,29 +28,23 @@
           <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
         </div>
 
-        <div id="code-wrap" hidden>
-          <div class="field">
-            <label for="code">验证码</label>
-            <input id="code" type="text" placeholder="6 位数字" inputmode="numeric"
-                   maxlength="6" autocomplete="one-time-code" />
+        <div class="field">
+          <label for="code">验证码</label>
+          <div class="row">
+            <input id="code" class="ctl grow" type="text" placeholder="6 位数字"
+                   inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+            <button id="send" class="btn ghost" type="button">发送验证码</button>
           </div>
         </div>
 
-        <button id="send" class="btn" type="button">发送验证码</button>
+        <button id="verify" class="btn" type="button">登录</button>
 
-        <div class="auth-alt" id="alt" hidden>
-          <button id="again" class="linkish" type="button" disabled>重新发送</button>
-          <button id="back" class="linkish" type="button">换个邮箱</button>
+        <div id="flash"></div>
+
+        <div class="field auth-invite">
+          <label for="ref">邀请码（选填）</label>
+          <input id="ref" type="text" placeholder="朋友给你的码" />
         </div>
-
-        <details class="auth-extra">
-          <summary>有邀请码？</summary>
-          <div class="field" style="margin-top: var(--sp-3)">
-            <label for="ref">邀请码（选填）</label>
-            <input id="ref" type="text" placeholder="朋友给你的码" />
-            <div class="hint">填了才有归因与首单奖励，不填照样登录。</div>
-          </div>
-        </details>
 
         <p class="auth-foot">
           继续即表示你同意 <a href="legal/terms.html">服务条款</a> 与
