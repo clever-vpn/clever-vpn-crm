@@ -61,15 +61,15 @@ INSERT OR IGNORE INTO plans
    sort_order, status, visibility, created_at, updated_at)
 VALUES
   ('dev_period_100g',  '月付 · 100GB · 1 设备', 'period',  1500, 'CNY', 1, 30, 100, NULL, NULL, '[]',
-   '[{"channel":"web_checkout","methods":["alipay"]},{"channel":"apple_iap"},{"channel":"google_play"}]',
+   '[{"channel":"web_checkout","methods":["alipay","wechat"]},{"channel":"apple_iap"},{"channel":"google_play"}]',
    '{"apple":"vpn.period.100g.month","google":"vpn_period_100g_month"}',
    10, 'active', 'public',
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   ('dev_traffic_500g','流量包 · 500GB',        'traffic', 5000, 'CNY', 1, NULL, NULL, 500, 365, '[]',
-   '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 20, 'active', 'public',
+   '[{"channel":"web_checkout","methods":["alipay","wechat"]}]', '{}', 20, 'active', 'public',
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   ('dev_addon_50g',    '加量包 · 50GB',        'addon',    800, 'CNY', 1, NULL, NULL,  50, NULL, '[]',
-   '[{"channel":"web_checkout","methods":["alipay"]}]', '{}', 30, 'active', 'public',
+   '[{"channel":"web_checkout","methods":["alipay","wechat"]}]', '{}', 30, 'active', 'public',
    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 
 -- 客户（cf_customer_id 留空：本地还没绑定 cf-api 行的场景）
