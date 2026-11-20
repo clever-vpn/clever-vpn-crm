@@ -108,7 +108,7 @@ export function isInternalSetting(path: string): boolean {
  */
 export const STARTER_SETTINGS: SiteValues = {
   site: {
-    name: "云桥加速",
+    name: "云桥VPN",
     legal_name: "云桥网络科技有限公司",
     contact_email: "support@yunqiao.app",
     tagline: "小团队的稳定加速服务，不记浏览日志。",
