@@ -97,6 +97,33 @@ export function isInternalSetting(path: string): boolean {
 }
 
 /**
+ * 起始品牌内容：**没有设置行时**返回这一套。
+ *
+ * 为什么不是"空"：模板是给租户直接用的起点，打开就该像一个正经的品牌站，
+ * 而不是"我的站点"加空字段。这些值不落库 —— 租户一保存就被自己的值覆盖。
+ *
+ * 为什么不是"测试数据"：它是一套完整的、可上线的文案（名字 / 主体 / 邮箱 /
+ * 标语 / 首屏 / 主题），租户要做的只是把"云桥"换成自己。真实数字（价格、流量）
+ * 一个都没有 —— 那些来自套餐与数据钩子，不在这份设置里。
+ */
+export const STARTER_SETTINGS: SiteValues = {
+  site: {
+    name: "云桥加速",
+    legal_name: "云桥网络科技有限公司",
+    contact_email: "support@yunqiao.app",
+    tagline: "小团队的稳定加速服务，不记浏览日志。",
+    hero: {
+      title: "快得不像 VPN",
+      sub: "一个账号，三端通用；连上就不用管了。",
+    },
+    theme: {
+      preset: "dark",
+      color: { primary: "#0f766e", accent: "#14b8a6" },
+    },
+  },
+};
+
+/**
  * 颜色令牌：**一套五个**，不是散装色值。
  *
  * `contract: 7` 只留 preset、其余中性色硬编码，那时给一个"底色"字段必然出现
@@ -420,6 +447,15 @@ export async function readSiteSettings(env: Env): Promise<SiteSettings> {
     }
   } catch {
     // 同上
+  }
+  // 没有设置行 = 新装环境：给它一套完整的起始品牌，而不是空字段
+  if (!row) {
+    return {
+      rev: 0,
+      values: STARTER_SETTINGS,
+      collections: EMPTY_COLLECTIONS,
+      updatedAt: null,
+    };
   }
   return {
     rev: Number(row?.rev ?? 0),
