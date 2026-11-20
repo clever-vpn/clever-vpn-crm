@@ -1,12 +1,11 @@
 /* login.html 的页面脚本。
  *
- * 两步、一个主按钮：填邮箱 → 「发送验证码」；收到后同一个按钮变成「登录」。
+ * 版式：邮箱一行；验证码与「发送验证码」同一行；「登录」单独一行。
  * 为什么要外部文件而不是内联 `<script>`：内联代码在加 CSP 后会被静默拦掉
  * （L0 的 `inline_script` 硬项就是这么来的）。
  */
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var mode = "email"; // email | code
   var timer = null;
 
   function flash(kind, text) {
@@ -21,21 +20,12 @@
     return n;
   }
 
-  function setMode(next) {
-    mode = next;
-    $('code-wrap').hidden = next === "email";
-    $('alt').hidden = next === "email";
-    $('send').textContent = next === "email" ? "发送验证码" : "登录";
-    if (next === "code") $('code').focus();
-    else $('email').focus();
-  }
-
   /** 重发倒计时：60 秒内不给点，避免"点十下收十封邮件" */
   function cooldown(seconds) {
     var left = seconds;
-    var btn = $('again');
+    var btn = $('send');
     btn.disabled = true;
-    btn.textContent = '重新发送（' + left + 's）';
+    btn.textContent = '重新发送 ' + left + 's';
     clearInterval(timer);
     timer = setInterval(function () {
       left -= 1;
@@ -45,7 +35,7 @@
         btn.textContent = '重新发送';
         return;
       }
-      btn.textContent = '重新发送（' + left + 's）';
+      btn.textContent = '重新发送 ' + left + 's';
     }, 1000);
   }
 
@@ -62,26 +52,26 @@
         $('devcode').hidden = true;
         flash('ok', '验证码已发到 ' + email);
       }
-      setMode("code");
+      $('code').focus();
       cooldown(60);
     }).catch(function (e) {
-      flash('err', e.message || '发送失败，请稍后再试');
-    }).finally(function () {
       $('send').disabled = false;
+      flash('err', e.message || '发送失败，请稍后再试');
     });
   }
 
   function verify() {
     var email = $('email').value.trim();
     var code = $('code').value.trim();
+    if (!email) { flash('err', '先填邮箱'); $('email').focus(); return; }
     if (!code) { flash('err', '填一下验证码'); $('code').focus(); return; }
-    $('send').disabled = true;
+    $('verify').disabled = true;
     SiteCrm.verify(email, code, $('ref').value.trim()).then(function () {
       location.assign(next());
     }).catch(function (e) {
       flash('err', e.message || '登录失败，请重试');
     }).finally(function () {
-      $('send').disabled = false;
+      $('verify').disabled = false;
     });
   }
 
@@ -89,19 +79,11 @@
   var ref = new URLSearchParams(location.search).get('ref');
   if (ref) $('ref').value = ref.trim().toUpperCase();
 
-  $('send').addEventListener('click', function () {
-    if (mode === "email") sendCode();
-    else verify();
-  });
-
-  $('again').addEventListener('click', sendCode);
-  $('back').addEventListener('click', function () {
-    flash('', '');
-    setMode("email");
-  });
+  $('send').addEventListener('click', sendCode);
+  $('verify').addEventListener('click', verify);
 
   $('email').addEventListener('keydown', function (ev) {
-    if (ev.key === "Enter") { ev.preventDefault(); if (mode === "email") sendCode(); }
+    if (ev.key === "Enter") { ev.preventDefault(); if (!$('send').disabled) sendCode(); }
   });
   $('code').addEventListener('keydown', function (ev) {
     if (ev.key === "Enter") { ev.preventDefault(); verify(); }
