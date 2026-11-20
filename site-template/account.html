@@ -15,12 +15,23 @@
           <img class="mark" src="assets/logo.png" alt="" width="26" height="26" />
           <span>{{site.name}}</span>
         </a>
-        <nav>
+        <nav aria-label="主导航">
           <a href="index.html#features">特性</a>
           <a href="pricing.html">套餐</a>
           <a href="download.html">下载</a>
-          <a href="account.html" class="active">我的</a>
+          <a href="help.html">帮助</a>
+          <a href="account.html" aria-current="page">我的</a>
         </nav>
+        <details class="navmenu">
+          <summary aria-label="打开菜单">菜单</summary>
+          <div class="navpanel">
+            <a href="index.html#features">特性</a>
+            <a href="pricing.html">套餐</a>
+            <a href="download.html">下载</a>
+            <a href="help.html">帮助</a>
+            <a href="account.html" aria-current="page">我的</a>
+          </div>
+        </details>
         <a class="btn sm" href="pricing.html">查看套餐</a>
       </div>
     </header>
@@ -94,8 +105,10 @@
         <div class="cols">
           <div>
             <div class="brand">{{site.name}}</div>
-            <p>{{site.tagline}}</p>
-            <p><a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a></p>
+            <p class="about">{{site.tagline}}</p>
+            <p class="contact">
+              <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a>
+            </p>
           </div>
           <div>
             <h4>产品</h4>
@@ -103,6 +116,7 @@
               <li><a href="pricing.html">套餐与价格</a></li>
               <li><a href="download.html">下载客户端</a></li>
               <li><a href="account.html">我的账号</a></li>
+              <li><a href="help.html">帮助中心</a></li>
             </ul>
           </div>
           <div>

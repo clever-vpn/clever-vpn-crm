@@ -12,25 +12,31 @@
     <header class="site">
       <div class="wrap bar">
         <a class="brand" href="../index.html">
-          <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.6" />
-            <path d="M3.2 12h17.6M12 2.9c4.2 3.4 4.2 14.8 0 18.2M12 2.9c-4.2 3.4-4.2 14.8 0 18.2"
-                  stroke="currentColor" stroke-width="1.2" opacity=".55" />
-            <path d="M13.4 7.6 9.6 12.6h2.7l-1.7 3.9 4-5.2h-2.8l1.6-3.7Z" fill="currentColor" />
-          </svg>
+          <img class="mark" src="../assets/logo.png" alt="" width="26" height="26" />
           <span>{{site.name}}</span>
         </a>
-        <nav>
+        <nav aria-label="主导航">
           <a href="../index.html#features">特性</a>
           <a href="../pricing.html">套餐</a>
           <a href="../download.html">下载</a>
+          <a href="../help.html">帮助</a>
           <a href="../account.html">我的</a>
         </nav>
+        <details class="navmenu">
+          <summary aria-label="打开菜单">菜单</summary>
+          <div class="navpanel">
+            <a href="../index.html#features">特性</a>
+            <a href="../pricing.html">套餐</a>
+            <a href="../download.html">下载</a>
+            <a href="../help.html">帮助</a>
+            <a href="../account.html">我的</a>
+          </div>
+        </details>
         <a class="btn sm" href="../pricing.html">查看套餐</a>
       </div>
     </header>
 
-    <main class="wrap" style="max-width:760px">
+    <main class="wrap longform" style="max-width:760px">
       <h1>服务条款</h1>
       <p class="lead">
         这份条款说明你与我们之间的约定。付款前请读完，有疑问可以联系客服。
@@ -86,8 +92,10 @@
         <div class="cols">
           <div>
             <div class="brand">{{site.name}}</div>
-            <p>{{site.tagline}}</p>
-            <p><a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a></p>
+            <p class="about">{{site.tagline}}</p>
+            <p class="contact">
+              <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a>
+            </p>
           </div>
           <div>
             <h4>产品</h4>
@@ -95,13 +103,14 @@
               <li><a href="../pricing.html">套餐与价格</a></li>
               <li><a href="../download.html">下载客户端</a></li>
               <li><a href="../account.html">我的账号</a></li>
+              <li><a href="../help.html">帮助中心</a></li>
             </ul>
           </div>
           <div>
             <h4>条款</h4>
             <ul>
-              <li><a href="terms.html">服务条款</a></li>
-              <li><a href="privacy.html">隐私政策</a></li>
+              <li><a href="../legal/terms.html">服务条款</a></li>
+              <li><a href="../legal/privacy.html">隐私政策</a></li>
             </ul>
           </div>
         </div>
