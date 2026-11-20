@@ -5,66 +5,68 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{site.name}}</title>
     <meta name="description" content="{{site.tagline}}" />
-    <link rel="stylesheet" href="site.css" />
     <link rel="icon" type="image/png" href="assets/favicon.png" />
+    <link rel="stylesheet" href="site.css" />
   </head>
   <body>
-    <!-- 模板由 studio 与 harness 编辑；取值只有「双花括号 + 路径」一种写法 -->
     <header class="site">
       <div class="wrap bar">
         <a class="brand" href="index.html">
           <img class="mark" src="assets/logo.png" alt="" width="26" height="26" />
           <span>{{site.name}}</span>
         </a>
-        <nav>
-          <a href="#features">特性</a>
+        <nav aria-label="主导航">
+          <a href="index.html#features">特性</a>
           <a href="pricing.html">套餐</a>
           <a href="download.html">下载</a>
+          <a href="help.html">帮助</a>
           <a href="account.html">我的</a>
         </nav>
-        <a class="btn sm" href="pricing.html">立即开始</a>
+        <details class="navmenu">
+          <summary aria-label="打开菜单">菜单</summary>
+          <div class="navpanel">
+            <a href="index.html#features">特性</a>
+            <a href="pricing.html">套餐</a>
+            <a href="download.html">下载</a>
+            <a href="help.html">帮助</a>
+            <a href="account.html">我的</a>
+          </div>
+        </details>
+        <a class="btn sm" href="pricing.html">查看套餐</a>
       </div>
     </header>
 
     <main>
+      <!-- ── 首屏：一句话主张 + 两个动作 + 一行信任 ──────────────────
+           标题/副标题来自设置（contract 8）：标题留空回落到站名，
+           副标题留空整段收起 —— 所以这里没有写死的营销文案。 -->
       <section class="hero">
         <div class="wrap inner">
           <div>
             <span class="badge">一个账号，三端通用</span>
-            <!-- 首屏标题/副标题是设置项（contract 8）：标题留空回落到站名，
-                 副标题留空整段收起 —— 所以这里没有写死的营销文案 -->
             <h1>{{site.hero.title}}</h1>
             <p class="lead" data-if="site.hero.sub">{{site.hero.sub}}</p>
             <div class="actions">
               <a class="btn" href="pricing.html">查看套餐</a>
               <a class="linkish" href="download.html">下载客户端 →</a>
             </div>
+            <div class="trust">
+              <span>不限速不限量</span>
+              <span>不记浏览日志</span>
+              <span>换设备不用重新买</span>
+            </div>
           </div>
-          <div class="art" aria-hidden="true">
-            <!-- 占位图：换主色不会跟变，租户可以直接替换 assets/hero.png -->
-            <img src="assets/hero.png" alt="" width="720" height="600" />
-          </div>
-        </div>
-      </section>
-
-      <section class="wrap">
-        <!-- 只写能兑现的事实，不写编造的节点数 / 星级 -->
-        <div class="facts">
-          <div>
-            <b>不限速不限量</b>
-            <span>按套餐给带宽，不按天掐你</span>
-          </div>
-          <div>
-            <b>一个账号，三端通用</b>
-            <span>手机、电脑、浏览器同步登录</span>
-          </div>
-          <div>
-            <b>不记浏览日志</b>
-            <span>只保留计费必需的数据</span>
+          <!-- 占位图：换主色不会跟变，租户可以直接替换 assets/hero.png -->
+          <div class="art">
+            <figure>
+              <img src="assets/hero.png" alt="" width="720" height="600" />
+              <figcaption>示例截图 · 替换成你自己的客户端界面</figcaption>
+            </figure>
           </div>
         </div>
       </section>
 
+      <!-- ── 能力：两主两次，不铺四张一样大的卡 ────────────────────── -->
       <section class="band" id="features">
         <div class="wrap">
           <div class="section-head">
@@ -72,81 +74,141 @@
             <p>四件事做好就够了，不用记一堆参数。</p>
           </div>
           <div class="grid cols-2">
-            <div class="card feature">
+            <div class="card feature lg">
               <div class="ico">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12L13 2Z" />
                 </svg>
               </div>
-              <h3>真的快</h3>
-              <p>中转专线直连，晚高峰也不掉速；看 4K 不用等缓冲。</p>
+              <div>
+                <h3>真的快</h3>
+                <p>中转专线直连，晚高峰也不掉速；看 4K 不用等缓冲。</p>
+              </div>
             </div>
-            <div class="card feature">
+            <div class="card feature lg">
               <div class="ico">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M12 21s7-3.6 7-9V5.6L12 3 5 5.6V12c0 5.4 7 9 7 9Z" />
                   <path d="M9 12.2l2.1 2.1L15.4 10" />
                 </svg>
               </div>
-              <h3>真的稳</h3>
-              <p>一条线路不通自动换，不用你自己试哪个节点能连。</p>
+              <div>
+                <h3>真的稳</h3>
+                <p>一条线路不通自动换，不用你自己试哪个节点能连。</p>
+              </div>
             </div>
             <div class="card feature">
               <div class="ico">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <rect x="4.5" y="10.5" width="15" height="10" rx="2.4" />
                   <path d="M8.2 10.5V8a3.8 3.8 0 0 1 7.6 0v2.5" />
                   <path d="M12 14.6v2.2" />
                 </svg>
               </div>
-              <h3>只看计费，不看你去哪</h3>
-              <p>不记录访问内容，不出售数据；账单只算流量与时长。</p>
+              <div>
+                <h3>只看计费，不看你去哪</h3>
+                <p>不记录访问内容，不出售数据；账单只算流量与时长。</p>
+              </div>
             </div>
             <div class="card feature">
               <div class="ico">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <rect x="3" y="4.5" width="13" height="10" rx="2" />
                   <path d="M18.5 9.5v9a2 2 0 0 1-2 2h-9" />
-                  <path d="M6.2 17.2h.01M9.8 17.2h.01M13.4 17.2h.01" stroke-width="2.4" />
                 </svg>
               </div>
-              <h3>装完就能用</h3>
-              <p>没有配置文件、没有节点列表，登录后点一下连接。</p>
+              <div>
+                <h3>装完就能用</h3>
+                <p>没有配置文件、没有节点列表，登录后点一下连接。</p>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
+      <!-- ── 怎么用：三步，每步说清"你会看到什么" ─────────────────── -->
+      <section class="band soft">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>三步开始</h2>
+            <p>全程不需要改任何设置。</p>
+          </div>
+          <div class="grid cols-2">
+            <ol class="steps">
+              <li>
+                <b>选套餐并支付</b>
+                <span>支持常用支付方式；付完立刻到账，不用等人工。</span>
+              </li>
+              <li>
+                <b>用邮箱登录</b>
+                <span>邮箱加验证码，不需要记密码；登录后能看到剩余流量与到期时间。</span>
+              </li>
+              <li>
+                <b>下载客户端并连接</b>
+                <span>装好后登录一次，之后一键连接；换设备直接登录，不用重新买。</span>
+              </li>
+            </ol>
+            <div class="card">
+              <h2>能用在哪</h2>
+              <p class="hint">一个账号覆盖手机与电脑，具体台数以套餐说明为准。</p>
+              <ul class="spec">
+                <li>iPhone / iPad</li>
+                <li>Android 手机与平板</li>
+                <li>Windows 与 macOS 电脑</li>
+              </ul>
+              <div class="actions">
+                <a class="btn ghost sm" href="download.html">查看下载方式</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 信任：把"凭什么信你"集中一块，不散落 ─────────────────── -->
+      <section class="band">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>我们怎么对待你的数据</h2>
+            <p>只写能兑现的，不写"军队级加密"这类空话。</p>
+          </div>
+          <div class="grid cols-2">
+            <div class="card soft">
+              <h3>不记浏览日志</h3>
+              <p class="hint">只保留计费必需的数据：账号、套餐、流量与时长。</p>
+            </div>
+            <div class="card soft">
+              <h3>退款写清楚</h3>
+              <p class="hint">未使用流量的订单，购买后 7 天内可申请退款；具体见服务条款。</p>
+            </div>
+            <div class="card soft">
+              <h3>支付方式透明</h3>
+              <p class="hint">支持哪些方式，在下单前就写清楚，不替你做选择。</p>
+            </div>
+            <div class="card soft">
+              <h3>找得到人</h3>
+              <p class="hint">
+                遇到问题发邮件给 <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">{{site.contact_email}}</a>，我们会按顺序回复。
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 常见问题：首页放 4 条，全部进帮助页 ───────────────────── -->
       <section class="band soft">
         <div class="wrap">
           <div class="grid cols-2">
             <div>
               <div class="section-head">
-                <h2>三步开始</h2>
-                <p>全程不需要改任何设置。</p>
-              </div>
-              <ol class="steps" style="padding:0;margin:0">
-                <li>
-                  <b>选套餐并支付</b>
-                  <span>支持常用支付方式，付完立刻到账。</span>
-                </li>
-                <li>
-                  <b>用邮箱登录</b>
-                  <span>邮箱加验证码，不需要记密码。</span>
-                </li>
-                <li>
-                  <b>下载客户端并连接</b>
-                  <span>装好后登录一次，之后一键连接。</span>
-                </li>
-              </ol>
-            </div>
-            <div class="card">
-              <div class="section-head" style="margin-bottom:14px">
                 <h2>常见问题</h2>
+                <p>先看这几个；更多在<a href="help.html">帮助中心</a>。</p>
               </div>
+              <a class="linkish" href="help.html">全部问题 →</a>
+            </div>
+            <div>
               <details class="faq">
                 <summary>支持几台设备？</summary>
-                <p>一个账号可在手机、电脑、浏览器上同时登录，具体台数见套餐说明。</p>
+                <p>一个账号可在手机、电脑上同时登录，具体台数见套餐说明。</p>
               </details>
               <details class="faq">
                 <summary>能退款吗？</summary>
@@ -158,16 +220,15 @@
               </details>
               <details class="faq">
                 <summary>连不上怎么办？</summary>
-                <p>
-                  先换一个节点；还不行就把时间和错误提示发给客服邮箱。
-                </p>
+                <p>先换一个节点；还不行就把时间和错误提示发给客服邮箱。</p>
               </details>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="wrap" style="padding-top:52px">
+      <!-- ── 收口 ───────────────────────────────────────────────── -->
+      <section class="wrap">
         <div class="cta-card">
           <h2>现在开始，几分钟就能连上</h2>
           <p>先看套餐，选一个合适的；随时可以升到更大的套餐。</p>
@@ -181,8 +242,10 @@
         <div class="cols">
           <div>
             <div class="brand">{{site.name}}</div>
-            <p>{{site.tagline}}</p>
-            <p><a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a></p>
+            <p class="about">{{site.tagline}}</p>
+            <p class="contact">
+              <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a>
+            </p>
           </div>
           <div>
             <h4>产品</h4>
@@ -190,6 +253,7 @@
               <li><a href="pricing.html">套餐与价格</a></li>
               <li><a href="download.html">下载客户端</a></li>
               <li><a href="account.html">我的账号</a></li>
+              <li><a href="help.html">帮助中心</a></li>
             </ul>
           </div>
           <div>

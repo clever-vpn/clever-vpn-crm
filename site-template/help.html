@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN" class="{{site.theme.preset}}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>帮助 · {{site.name}}</title>
+    <meta name="description" content="{{site.tagline}}" />
+    <link rel="icon" type="image/png" href="assets/favicon.png" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="site">
+      <div class="wrap bar">
+        <a class="brand" href="index.html">
+          <img class="mark" src="assets/logo.png" alt="" width="26" height="26" />
+          <span>{{site.name}}</span>
+        </a>
+        <nav aria-label="主导航">
+          <a href="index.html#features">特性</a>
+          <a href="pricing.html">套餐</a>
+          <a href="download.html">下载</a>
+          <a href="help.html" aria-current="page">帮助</a>
+          <a href="account.html">我的</a>
+        </nav>
+        <details class="navmenu">
+          <summary aria-label="打开菜单">菜单</summary>
+          <div class="navpanel">
+            <a href="index.html#features">特性</a>
+            <a href="pricing.html">套餐</a>
+            <a href="download.html">下载</a>
+            <a href="help.html" aria-current="page">帮助</a>
+            <a href="account.html">我的</a>
+          </div>
+        </details>
+        <a class="btn sm" href="pricing.html">查看套餐</a>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <div class="narrow" style="margin-inline: auto">
+        <h1>帮助中心</h1>
+        <p class="lead">先看下面这几类。找不到答案就发邮件给我们。</p>
+
+        <h2 style="margin-top: var(--sp-6)">购买与退款</h2>
+        <details class="faq">
+          <summary>怎么付款？支持哪些方式？</summary>
+          <p>可在套餐页下单，支持的方式会写在按钮旁边；下单前就能看到，不会替你挑。</p>
+        </details>
+        <details class="faq">
+          <summary>能退款吗？</summary>
+          <p>
+            未使用流量的订单可在购买后 7 天内申请退款；已产生流量、已兑换的加量包与促销活动
+            另有说明的，按活动说明执行。具体见<a href="legal/terms.html">服务条款</a>。
+          </p>
+        </details>
+        <details class="faq">
+          <summary>买了之后多久能用？</summary>
+          <p>支付成功后即时开通；登录后用「我的账号」即可看到剩余流量与到期时间。</p>
+        </details>
+
+        <h2 style="margin-top: var(--sp-6)">安装与连接</h2>
+        <details class="faq">
+          <summary>支持哪些设备？</summary>
+          <p>
+            手机、平板与电脑都可以；具体可用台数以套餐说明为准。下载页有每个平台的安装入口。
+          </p>
+        </details>
+        <details class="faq">
+          <summary>装好之后怎么连？</summary>
+          <p>打开客户端，用邮箱登录一次；之后点一下连接即可，不需要配置文件或节点列表。</p>
+        </details>
+        <details class="faq">
+          <summary>连不上怎么办？</summary>
+          <p>
+            先换一个节点；还不行就检查本机时间是否准确，然后把错误提示的截图与发生时间发到
+            <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">{{site.contact_email}}</a>。
+          </p>
+        </details>
+
+        <h2 style="margin-top: var(--sp-6)">账号</h2>
+        <details class="faq">
+          <summary>换设备要重新买吗？</summary>
+          <p>不需要。同一个账号在新设备上登录即可，旧设备登出就行。</p>
+        </details>
+        <details class="faq">
+          <summary>能几台设备同时用？</summary>
+          <p>具体台数以套餐说明为准；超出时通常表现为新设备登录后旧设备掉线。</p>
+        </details>
+        <details class="faq">
+          <summary>邀请码有什么用？</summary>
+          <p>填了才有归因与首单奖励，不填照样注册；奖励规则以活动说明为准。</p>
+        </details>
+
+        <div class="card soft" style="margin-top: var(--sp-6)">
+          <h2>还是没解决？</h2>
+          <p class="hint">
+            发邮件到
+            <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">{{site.contact_email}}</a>，
+            附上账号邮箱、发生时间与截图；我们会按顺序回复。
+          </p>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site">
+      <div class="wrap">
+        <div class="cols">
+          <div>
+            <div class="brand">{{site.name}}</div>
+            <p class="about">{{site.tagline}}</p>
+            <p class="contact">
+              <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a>
+            </p>
+          </div>
+          <div>
+            <h4>产品</h4>
+            <ul>
+              <li><a href="pricing.html">套餐与价格</a></li>
+              <li><a href="download.html">下载客户端</a></li>
+              <li><a href="account.html">我的账号</a></li>
+              <li><a href="help.html">帮助中心</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4>条款</h4>
+            <ul>
+              <li><a href="legal/terms.html">服务条款</a></li>
+              <li><a href="legal/privacy.html">隐私政策</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="legal">
+          <span>{{site.footer}}</span>
+          <span>支付与订阅服务由本网站提供</span>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
