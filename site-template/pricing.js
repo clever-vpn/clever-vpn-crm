@@ -74,57 +74,71 @@
     }).finally(done);
   }
 
+  /** 打开确认对话框：金额 + 支付方式都在这里，卡片布局不动 */
+  var dlg = null;
+  function closeDlg() {
+    if (dlg) {
+      if (dlg.open) dlg.close();
+      if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      dlg = null;
+    }
+  }
+
+  function openPay(plan) {
+    closeDlg();
+    var options = plan.method_options || [];
+    dlg = document.createElement('dialog');
+    dlg.className = 'paydlg';
+    dlg.innerHTML =
+      '<div class="paydlg-head">'
+      + '<h2>' + SiteCrm.escape(plan.name || '确认支付') + '</h2>'
+      + '<button class="paydlg-x" type="button" aria-label="关闭">×</button>'
+      + '</div>'
+      + '<div class="paydlg-amount"><span class="now">' + SiteCrm.escape(plan.price || '')
+      + '</span>' + (plan.compareAt
+        ? '<span class="was">' + SiteCrm.escape(plan.compareAt) + '</span>' : '')
+      + '</div>'
+      + '<div class="paydlg-per">'
+      + (plan.action === 'renewal' ? '续订价' : '实付价格') + '</div>'
+      + '<div class="paydlg-label">选择支付方式</div>'
+      + '<div class="paydlg-methods">'
+      + (options.length
+        ? options.map(function (m) {
+            return '<button class="btn paydlg-m" type="button" data-method="'
+              + SiteCrm.escape(m.id) + '">' + SiteCrm.escape(m.label) + '</button>';
+          }).join('')
+        : '<p class="hint">这一档暂时没有可用的支付方式。</p>')
+      + '</div>'
+      + '<button class="ghost paydlg-cancel" type="button">取消</button>';
+
+    document.body.appendChild(dlg);
+    if (typeof dlg.showModal === 'function') dlg.showModal();
+
+    dlg.querySelector('.paydlg-x').addEventListener('click', closeDlg);
+    dlg.querySelector('.paydlg-cancel').addEventListener('click', closeDlg);
+    // 点遮罩关闭（dialog 本身接收点击，内容区会冒泡到它）
+    dlg.addEventListener('click', function (ev) { if (ev.target === dlg) closeDlg(); });
+
+    Array.prototype.forEach.call(dlg.querySelectorAll('[data-method]'), function (m) {
+      m.addEventListener('click', function () {
+        var all = dlg.querySelectorAll('button');
+        Array.prototype.forEach.call(all, function (b) { b.disabled = true; });
+        m.textContent = '正在准备支付…';
+        checkout(plan.id, m.getAttribute('data-method'), function () {
+          closeDlg();
+        });
+      });
+    });
+  }
+
   function buy(btn) {
     // 需要登录的档位：一步到位跳登录，回来接着买（不发起下单请求）
     if (btn.getAttribute('data-login') === '1') {
       location.assign('login.html?next=pricing.html');
       return;
     }
-    var planId = btn.getAttribute('data-plan');
-    var plan = ALL[planId] || {};
-    var options = plan.method_options || [];
-
-    // 只有一种（或拿不到）：直接下单，不拿"选哪个"多问一句
-    if (!btn.getAttribute('data-pick') || options.length <= 1) {
-      var label = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = '正在准备支付…';
-      checkout(planId, options.length === 1 ? options[0].id : '', function () {
-        btn.disabled = false;
-        btn.textContent = label;
-      });
-      return;
-    }
-
-    // 两种以上：把按钮换成选择器，就地展开（不弹窗、不跳页）
-    var cta = btn.parentNode;
-    if (cta.querySelector('.pay-pick')) { return; }
-    btn.style.display = 'none';
-
-    var pick = document.createElement('div');
-    pick.className = 'pay-pick';
-    pick.innerHTML = '<div class="pay-what">选择支付方式</div>'
-      + options.map(function (m) {
-        return '<button class="btn pick" type="button" data-method="'
-          + SiteCrm.escape(m.id) + '">' + SiteCrm.escape(m.label) + '</button>';
-      }).join('')
-      + '<button class="ghost cancel" type="button">取消</button>';
-    cta.appendChild(pick);
-
-    function restore() {
-      if (pick.parentNode) { pick.parentNode.removeChild(pick); }
-      btn.style.display = '';
-    }
-
-    pick.querySelector('.cancel').addEventListener('click', restore);
-    Array.prototype.forEach.call(pick.querySelectorAll('[data-method]'), function (m) {
-      m.addEventListener('click', function () {
-        var buttons = pick.querySelectorAll('button');
-        Array.prototype.forEach.call(buttons, function (b) { b.disabled = true; });
-        m.textContent = '正在准备支付…';
-        checkout(planId, m.getAttribute('data-method'), restore);
-      });
-    });
+    var plan = ALL[btn.getAttribute('data-plan')] || {};
+    openPay(plan);
   }
 
   SiteCrm.plans().then(function (plans) {
