@@ -483,7 +483,6 @@ section.band.soft { background: var(--soft); }
 }
 .plan .plan-cta { margin-top: auto; padding-top: var(--sp-5); display: grid; gap: var(--sp-3); }
 .plan .plan-cta .btn, .plan .plan-cta .ghost { width: 100%; }
-.pay-with { color: var(--faint); font-size: var(--fs-xs); text-align: center; }
 .blocked { color: var(--warn); font-size: var(--fs-sm); text-align: center; }
 
 /* 确认支付对话框：金额 + 支付方式都在这里，卡片本身不展开 */

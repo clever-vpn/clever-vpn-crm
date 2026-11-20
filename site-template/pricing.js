@@ -37,10 +37,6 @@
           + (multi ? ' data-pick="1"' : '') + '>'
           + SiteCrm.escape(p.cta) + '</button>'
       : '<button class="ghost" type="button" disabled>' + SiteCrm.escape(p.cta) + '</button>';
-    // 支持的支付方式必须先摆在按钮旁边：用户点之前就要知道能用什么付。
-    var pay = (p.methods && p.methods.length)
-      ? '<div class="pay-with">支持 ' + SiteCrm.escape(p.methods.join(' / ')) + '</div>'
-      : '';
     el.innerHTML =
       '<div class="row" style="justify-content:space-between;align-items:flex-start">'
       + '<div><p class="plan-name">' + SiteCrm.escape(p.name) + '</p>'
@@ -52,7 +48,7 @@
       + '</div>'
       + '<div class="per">' + (p.action === 'renewal' ? '续订价' : '实付价格') + '</div>'
       + '<ul class="spec">' + specs + '</ul>'
-      + '<div class="plan-cta">' + pay + cta
+      + '<div class="plan-cta">' + cta
       + (!p.buyable && p.reason
           ? '<div class="blocked">' + SiteCrm.escape(p.reason) + '</div>' : '')
       + '</div>';
