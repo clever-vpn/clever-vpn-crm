@@ -149,10 +149,16 @@
         location.assign('login.html?next=account.html');
         return;
       }
+      if ($('logout')) { $('logout').hidden = false; }
       renderMe(me);
       renderReferral(me.referral);
       return SiteCrm.orders({ limit: 20 }).then(renderOrders);
     }).catch(function (e) {
+      // 没登录（或会话过期）：直接去登录页，别停在一张空壳页上
+      if (e && (e.status === 401 || e.code === 'http_401' || e.code === 'unauthorized')) {
+        location.replace('login.html?next=account.html');
+        return;
+      }
       flash('err', '加载失败：' + (e.message || '请稍后重试'));
     });
   }

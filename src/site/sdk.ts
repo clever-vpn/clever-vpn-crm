@@ -78,8 +78,12 @@ export const SDK_JS = `(function () {
         try { data = text ? JSON.parse(text) : null; } catch (e) {}
         if (!res.ok) {
           var e = data && data.error;
-          throw crmError((e && e.code) || ("http_" + res.status),
+          var err = crmError((e && e.code) || ("http_" + res.status),
             (e && e.message) || defaultMessage(res.status));
+          // 状态码要留着：CRM 的 401 可能带业务码（如 unauthorized），
+          // 只按 code 判断会把"没登录"当成"请求失败"。
+          err.status = res.status;
+          throw err;
         }
         return data;
       });
@@ -196,7 +200,10 @@ export const SDK_JS = `(function () {
       return api("GET", "/me").then(function (me) {
         return me;
       }, function (e) {
-        if (e && e.code === "http_401") { setToken(""); return null; }
+        if (e && (e.status === 401 || e.code === "http_401" || e.code === "unauthorized")) {
+          setToken("");
+          return null;
+        }
         throw e;
       });
     },
