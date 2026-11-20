@@ -43,9 +43,15 @@ const config = {
   observability: { enabled: true },
   workers_dev: false,
   // 路由进配置：平台子域通配 + 自定义域回源（都已存在，声明式重述）
+  // 全部用 **Worker route**（不是 custom domain）：Cloudflare for SaaS 的文档要求
+  // fallback origin 是"originless 记录（AAAA 100::）+ route"。用 custom domain 时，
+  // 一旦某次部署没声明它，wrangler 会把那条 DNS 记录一起删掉 —— 现有租户的 CNAME
+  // 目标就断了（表现是 1016 Origin DNS error，实测踩过）。
   routes: [
     { pattern: `*.${siteRoot}/*`, zone_name: siteRoot },
-    { pattern: `origin-site.${baseDomain}`, custom_domain: true },
+    { pattern: `origin-site.${baseDomain}/*`, zone_name: baseDomain },
+    // 旧回源：还有租户 CNAME 指向它，保留兼容；新租户用 origin-site
+    { pattern: `origin.${baseDomain}/*`, zone_name: baseDomain },
   ],
   kv_namespaces: [{ binding: "HOSTS", id: hostsKvId }],
   d1_databases: [
