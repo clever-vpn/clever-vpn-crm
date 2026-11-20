@@ -58,6 +58,9 @@ jobs:
       - name: Render wrangler.router.jsonc
         env:
           HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+          # 平台子域按 slug 查 tenants（契约 cf-api-hosting §2）
+          REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
+          CRM_ROOT: ${{ vars.CRM_ROOT }}
         run: node scripts/render-router-config.mjs --input shards.json
 
       - run: npm ci

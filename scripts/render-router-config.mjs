@@ -10,7 +10,9 @@
  * 输出：`wrangler.router.jsonc`（gitignore）
  *
  * 必需环境变量：
- *   HOSTS_KV_ID   与 site-serve / shard 共用同一个 KV 命名空间
+ *   HOSTS_KV_ID     与 site-serve / shard 共用同一个 KV 命名空间
+ *   REGISTRY_D1_ID  registry 库（`{slug}.<CRM_ROOT>` 按 slug 查 tenants 用）
+ *   CRM_ROOT        租户后台域的父域（`clever-panel.win`）
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -26,8 +28,18 @@ const data = JSON.parse(readFileSync(input, "utf8"));
 const shards = Array.isArray(data.shards) ? data.shards : [];
 
 const hostsKvId = process.env.HOSTS_KV_ID ?? "";
+const registryD1 = process.env.REGISTRY_D1_ID ?? "";
+const crmRoot = String(process.env.CRM_ROOT ?? "").trim();
 if (!hostsKvId) {
   console.error("✘ 缺 HOSTS_KV_ID");
+  process.exit(1);
+}
+if (!registryD1) {
+  console.error("✘ 缺 REGISTRY_D1_ID（平台子域按 slug 查 tenants 要用）");
+  process.exit(1);
+}
+if (!crmRoot) {
+  console.error("✘ 缺 CRM_ROOT（否则认不出 {slug}.<CRM_ROOT>）");
   process.exit(1);
 }
 
@@ -43,6 +55,11 @@ const config = {
   compatibility_date: "2026-10-01",
   observability: { enabled: true },
   kv_namespaces: [{ binding: "HOSTS", id: hostsKvId }],
+  // 平台子域（`{slug}.<CRM_ROOT>`）**不在 host: 映射里**：按后缀取 slug 查这张表
+  d1_databases: [
+    { binding: "REGISTRY", database_name: "clever-vpn-registry-d1", database_id: registryD1 },
+  ],
+  vars: { ADMIN_ZONE: crmRoot },
   services: deployed.map((n) => ({
     binding: `SHARD_${n}`,
     service: `clever-vpn-crm-saas-shard-${n}`,

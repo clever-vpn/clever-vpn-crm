@@ -22,8 +22,12 @@ export interface HostMap {
 }
 
 export interface RouterEnv {
-  /** `host:*` → HostMap（与 site-serve 共用同一个命名空间） */
+  /** `host:*` → HostMap（自定义域）与 `slug:*`（平台子域的缓存） */
   HOSTS: KVNamespace;
+  /** 租户后台域的父域：`{slug}.<ADMIN_ZONE>` 按 slug 查 registry */
+  ADMIN_ZONE?: string;
+  /** registry D1（`tenants` 表）。自托管单租户部署不绑。 */
+  REGISTRY?: D1Database;
   /** `SHARD_<n>` → 该片 worker 的 service binding */
   [binding: string]: unknown;
 }
@@ -51,6 +55,25 @@ export function decide(map: HostMap | null, hasBinding: (binding: string) => boo
 const TTL_MS = 60_000;
 const memo = new Map<string, { value: HostMap | null; at: number }>();
 
+/** slug 的合法形状（与 cf-api / site-serve 同一口径） */
+const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+
+/** 平台子域 → slug；只认一级 `<slug>.<ADMIN_ZONE>` */
+export function platformSlug(host: string, zone: string | undefined): string | null {
+  const z = String(zone ?? "").trim().toLowerCase();
+  if (!z || !host.endsWith(`.${z}`)) return null;
+  const label = host.slice(0, host.length - z.length - 1);
+  if (!label || label.includes(".")) return null;
+  return SLUG_RE.test(label) ? label : null;
+}
+
+/**
+ * Host → 该租户在哪一片。顺序（契约 `cf-api-hosting` §2）：
+ *   1. `host:<host>` —— 租户自定义域；
+ *   2. `<slug>.<ADMIN_ZONE>` —— 平台子域，按 slug 查 registry（内存 → KV → D1）。
+ *
+ * 平台子域不进 `host:`，所以"绑了自定义域"不会让二级域失效。
+ */
 async function hostMapOf(env: RouterEnv, host: string): Promise<HostMap | null> {
   const hit = memo.get(host);
   const now = Date.now();
@@ -62,8 +85,60 @@ async function hostMapOf(env: RouterEnv, host: string): Promise<HostMap | null> 
   } catch {
     value = null; // KV 抖动当作"未知 host"，宁可 404 也不要乱转发
   }
+
+  if (!value) {
+    const slug = platformSlug(host, env.ADMIN_ZONE);
+    if (slug && env.REGISTRY) value = await platformHostOf(env, slug);
+  }
+
   memo.set(host, { value, at: now });
   return value;
+}
+
+/** 平台子域：内存 → KV `slug:`（cf-api 写）→ registry D1 */
+async function platformHostOf(env: RouterEnv, slug: string): Promise<HostMap | null> {
+  const key = `slug:${slug}`;
+  const cache = memo.get(key);
+  const now = Date.now();
+  if (cache && now - cache.at < TTL_MS) return cache.value;
+
+  const toMap = (row: Record<string, unknown> | null): HostMap | null => {
+    if (!row) return null;
+    const id = row.tenant_id ?? row.id;
+    const slot = Number(row.slot);
+    const shard = Number.isFinite(Number(row.shard))
+      ? Number(row.shard)
+      : Number.isFinite(slot)
+        ? Math.floor(slot / 2000)
+        : NaN;
+    if (id === undefined || id === null || !Number.isFinite(shard)) return null;
+    const status = String(row.status ?? "active");
+    if (status !== "active" && status !== "suspended") return null;
+    return { tenant_id: String(id), slot: Number.isFinite(slot) ? slot : 0, shard, status };
+  };
+
+  let map: HostMap | null = null;
+  try {
+    map = toMap((await env.HOSTS.get(key, "json")) as Record<string, unknown> | null);
+  } catch {
+    map = null;
+  }
+
+  if (!map) {
+    try {
+      const row = await env.REGISTRY!.prepare(
+        "SELECT id, slot, shard, status FROM tenants WHERE slug = ? LIMIT 1",
+      )
+        .bind(slug)
+        .first<Record<string, unknown>>();
+      map = toMap(row ?? null);
+    } catch {
+      map = null;
+    }
+  }
+
+  memo.set(key, { value: map, at: now });
+  return map;
 }
 
 const text = (body: string, status: number): Response =>

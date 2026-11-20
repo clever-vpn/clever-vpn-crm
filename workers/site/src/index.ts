@@ -5,7 +5,8 @@
  *   Host → KV[host:{host}] → tenant → KV[site:{tenant}:active] → R2 `art/<sha>/` 取文件
  *
  * 三条纪律：
- *  1. **零 D1**：最轻的路径不背包袱；要不要"哪个库"是 CRM 的事。
+ *  1. **D1 只在平台子域 miss 时出现**：自定义域走 `host:`（KV）；`{slug}.<SITE_ZONE>`
+ *     才按 slug 查 registry，而且先过内存（60 s）与 KV `slug:`（见 `platformHostOf`）。
  *  2. **缓存分层**：host 60 s、版本指针 5 s、未知域负缓存 5 s；内存缓存只是优化，
  *     冷启动必然 miss 一次 KV。
  *  3. **缓存按"文件名有没有指纹"分两档**：没指纹（`index.html`、`site.css`）一律
@@ -19,8 +20,20 @@
 export interface SiteEnv {
   HOSTS: KVNamespace;
   SITES: R2Bucket;
-  /** 租户后台域名的父域：`{tenant}.<ADMIN_ZONE>` */
+  /** 租户后台域名的父域：`{slug}.<ADMIN_ZONE>` */
   ADMIN_ZONE?: string;
+  /** 平台站点的父域：`{slug}.<SITE_ZONE>` —— 这个后缀的 host 按 slug 查 registry */
+  SITE_ZONE?: string;
+  /**
+   * registry D1（`tenants` 表）。
+   *
+   * 平台子域**不写 `host:` 映射**：它是"我们自己的域名"，由 `{slug}.<SITE_ZONE>`
+   * 推导出来，去 tenants 表查一次即可（缓存见 `platformHostOf`）。自定义域仍然走
+   * `host:`（那是租户的事实，必须登记）。
+   *
+   * 可选：自托管单租户部署不绑 registry，只走 `host:`。
+   */
+  REGISTRY?: D1Database;
   PLATFORM_VERSION?: string;
 }
 
@@ -96,20 +109,94 @@ function safePath(raw: string): string | null {
   return p.slice(1);
 }
 
-function resolveHost(env: SiteEnv, host: string): Promise<HostMap | null> {
-  const key = `host:${host}`;
+/** slug 的合法形状：与 cf-api `slugProblem()` 同一口径（一级标签、小写、可带连字符） */
+const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+
+/**
+ * 平台子域 → slug。只认**一级** `<slug>.<zone>`；`a.b.clever-link.win` 这种不认
+ * （避免"多级子域"被当成租户）。
+ */
+export function platformSlug(host: string, zone: string | undefined): string | null {
+  const z = String(zone ?? "").trim().toLowerCase();
+  if (!z || !host.endsWith(`.${z}`)) return null;
+  const label = host.slice(0, host.length - z.length - 1);
+  if (!label || label.includes(".")) return null;
+  return SLUG_RE.test(label) ? label : null;
+}
+
+/**
+ * 解析 Host。**顺序固定**（契约 `cf-api-hosting` §2）：
+ *
+ *   1. `host:<host>` —— 租户自定义域，登记过就用它；
+ *   2. `<slug>.<SITE_ZONE>` —— 平台子域，按 slug 查 registry（先内存、再 KV
+ *      `slug:<slug>`、最后 D1）。
+ *
+ * 平台子域不进 `host:`：它是派生的，不是租户的事实。这样"绑了自定义域"不会让
+ * 二级域失效，租户删掉自定义域也不用清理残留。
+ */
+async function resolveHost(env: SiteEnv, host: string): Promise<HostMap | null> {
+  const exact = `host:${host}`;
+  const hit = memo.get(exact);
+  if (hit && hit.expires > Date.now()) return hit.value as HostMap | null;
+
+  try {
+    const value = (await env.HOSTS.get(exact, "json")) as HostMap | null;
+    if (value) {
+      memo.set(exact, { value, expires: Date.now() + HOST_TTL });
+      return value;
+    }
+    memo.set(exact, { value: null, expires: Date.now() + NEGATIVE_TTL });
+  } catch {
+    memo.set(exact, { value: null, expires: Date.now() + NEGATIVE_TTL });
+  }
+
+  const slug = platformSlug(host, env.SITE_ZONE);
+  if (!slug || !env.REGISTRY) return null;
+  const map = await platformHostOf(env, slug);
+  if (map) memo.set(exact, { value: map, expires: Date.now() + HOST_TTL });
+  return map;
+}
+
+/** 平台子域的 tenant 查询：内存 60 s → KV `slug:`（由 cf-api 写）→ D1 */
+async function platformHostOf(env: SiteEnv, slug: string): Promise<HostMap | null> {
+  const key = `slug:${slug}`;
   const hit = memo.get(key);
-  if (hit && hit.expires > Date.now()) return Promise.resolve(hit.value as HostMap | null);
-  return env.HOSTS.get(key, "json")
-    .then((value) => {
-      const map = value as HostMap | null;
-      memo.set(key, { value: map, expires: Date.now() + (map ? HOST_TTL : NEGATIVE_TTL) });
+  if (hit && hit.expires > Date.now()) return hit.value as HostMap | null;
+
+  const admin = env.ADMIN_ZONE ? `${slug}.${env.ADMIN_ZONE}` : undefined;
+  const toMap = (row: { tenant_id?: unknown; id?: unknown; status?: unknown } | null): HostMap | null => {
+    if (!row) return null;
+    const id = row.tenant_id ?? row.id;
+    if (id === undefined || id === null) return null;
+    const status = String(row.status ?? "active");
+    if (status !== "active" && status !== "suspended") return null;
+    return { tenant_id: String(id), status, ...(admin ? { admin_host: admin } : {}) };
+  };
+
+  try {
+    const cached = await env.HOSTS.get(key, "json");
+    const map = toMap(cached as never);
+    if (map) {
+      memo.set(key, { value: map, expires: Date.now() + HOST_TTL });
       return map;
-    })
-    .catch(() => {
-      memo.set(key, { value: null, expires: Date.now() + NEGATIVE_TTL });
-      return null;
-    });
+    }
+  } catch {
+    // KV 抖动：继续问 D1
+  }
+
+  let map: HostMap | null = null;
+  try {
+    const row = await env.REGISTRY!.prepare(
+      "SELECT id, status FROM tenants WHERE slug = ? LIMIT 1",
+    )
+      .bind(slug)
+      .first<{ id: number; status: string }>();
+    map = toMap(row as never);
+  } catch {
+    map = null; // D1 抖动：当作未知 host（宁可 404，也不乱发别人的站）
+  }
+  memo.set(key, { value: map, expires: Date.now() + (map ? HOST_TTL : NEGATIVE_TTL) });
+  return map;
 }
 
 /**

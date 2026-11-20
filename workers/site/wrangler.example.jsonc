@@ -19,6 +19,14 @@
       "id": "REPLACE_WITH_KV_NAMESPACE_ID"
     }
   ],
+  // 平台子域 `{slug}.<SITE_ZONE>` 按 slug 查 registry（缓存见 workers/site）
+  "d1_databases": [
+    {
+      "binding": "REGISTRY",
+      "database_name": "clever-vpn-registry-d1",
+      "database_id": "REPLACE_WITH_REGISTRY_D1_ID"
+    }
+  ],
   "r2_buckets": [
     {
       // sites/{tenant}/versions/{n}/public/...
@@ -27,8 +35,10 @@
     }
   ],
   "vars": {
-    // 租户后台域名的父域：{tenant}.<ADMIN_ZONE>
+    // 租户后台域名的父域：{slug}.<ADMIN_ZONE>（站点里的 /_crm/config.js 用它）
     "ADMIN_ZONE": "app.example.com",
+    // 平台站点的父域：{slug}.<SITE_ZONE> —— 这个后缀的 host 走 slug 解析
+    "SITE_ZONE": "sites.example.com",
     "PLATFORM_VERSION": "dev"
   }
   // 域名绑定（不写在这里）：
