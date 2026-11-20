@@ -305,6 +305,13 @@ footer.site .legal {
   background: var(--surface); color: var(--text);
   font: inherit; font-size: var(--fs-base); outline: none;
 }
+.ctl {
+  min-height: 44px; padding: 0 var(--sp-3);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text);
+  font: inherit; font-size: var(--fs-base); outline: none;
+}
+.ctl:focus { border-color: var(--brand); }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--brand); }
 .field .hint { margin-top: var(--sp-2); }
 .row { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
@@ -484,6 +491,16 @@ section.band.soft { background: var(--soft); }
 .pay-pick .pay-what { font-size: var(--fs-sm); color: var(--dim); }
 .pay-pick .btn { width: 100%; }
 .pay-pick .cancel { width: 100%; min-height: 36px; }
+
+/* 目录（条款 / 隐私） */
+.toc {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-5);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--soft); font-size: var(--fs-sm);
+}
+.toc a { color: var(--dim); }
+.toc a:hover { color: var(--text); }
 
 /* 长文页（条款 / 隐私） */
 main.longform { max-width: 760px; margin-inline: auto; }
