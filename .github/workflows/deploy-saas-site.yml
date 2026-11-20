@@ -1,0 +1,76 @@
+# 部署 **site-serve**（客户站点的出口，零业务逻辑）。
+#
+# 以前它是**手工部署**的（线上那份停在 2026-11-08，代码后来改过也没跟上）。
+# 这个 workflow 把它并入 CI：
+#   · 配置由 `scripts/render-site-config.mjs` 渲染（KV / registry / 桶 / 路由）；
+#   · 路由 **声明式**：`*.SITE_ROOT/*` 平台子域 + `origin-site.<BASE>` 自定义域回源，
+#     不再到控制台手工加；
+#   · 冒烟只验证"worker 起来了"：对一个未登记的 host 返回 `unknown host` 就是对的
+#     （它绝不回落默认租户）。
+#
+# 契约：clever-vpn-docs/docs/contracts/cf-api-hosting.md §1.2 / §2
+name: deploy-saas-site
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "审计备注"
+        required: false
+        default: "manual"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy site-serve
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-saas-site
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+      HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+      REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
+      SITES_BUCKET: ${{ vars.SITES_BUCKET }}
+      SITE_ZONE: ${{ vars.SITES_ROOT }}
+      ADMIN_ZONE: ${{ vars.CRM_ROOT }}
+      SITE_ROOT: ${{ vars.SITES_ROOT }}
+      BASE_DOMAIN: ${{ vars.SAAS_BASE_DOMAIN || 'clever-vpn.org' }}
+      PLATFORM_VERSION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Load secrets from Bitwarden (SM)
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_CLOUDFLARE_API_TOKEN }} > CLOUDFLARE_API_TOKEN
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Render wrangler.site.jsonc
+        run: node scripts/render-site-config.mjs
+
+      - name: Deploy
+        run: npx wrangler deploy --config wrangler.site.jsonc
+
+      - name: Smoke（未登记 host 必须 404，且不是默认租户）
+        run: |
+          set -euo pipefail
+          BODY=$(curl -sS --max-time 15 -w '\n%{http_code}' "https://origin-site.${BASE_DOMAIN}/" || true)
+          CODE=$(printf '%s' "$BODY" | tail -1)
+          TEXT=$(printf '%s' "$BODY" | head -n -1)
+          echo "origin-site -> $CODE：$TEXT"
+          [[ "$CODE" == "404" ]] || { echo "::error::origin-site 不是 404（拿到 $CODE）"; exit 1; }
+          printf '%s' "$TEXT" | grep -q "unknown host" \
+            || { echo "::error::未登记 host 的响应不是 unknown host：$TEXT"; exit 1; }
+          echo "✓ site-serve 在 origin-site 上正常（未登记 host 一律 404）"
