@@ -140,9 +140,16 @@
       ALL[p.id] = p;
       box.appendChild(card(p));
     });
-  }).catch(function (e) {
-    $('plans').innerHTML = '';
-    flash('err', '加载套餐失败：' + (e.message || '请稍后重试'));
+  }).catch(function () {
+    // 设计过的失败态：不要甩原始错误，给一个能重试的卡片
+    $('plans').innerHTML =
+      '<div class="card empty"><p>套餐暂时加载不出来。</p>' +
+      '<p class="hint">可能是网络波动；刷新一下就能重试。</p>' +
+      '<button class="btn ghost sm" type="button" id="plans-retry">重新加载</button></div>';
+    var retry = document.getElementById('plans-retry');
+    if (retry) {
+      retry.addEventListener('click', function () { location.reload(); });
+    }
   });
 
   $('plans').addEventListener('click', function (ev) {
