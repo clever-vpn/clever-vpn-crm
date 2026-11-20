@@ -27,7 +27,7 @@ const need = (name) => {
 };
 
 const hostsKvId = need("HOSTS_KV_ID");
-const sitesBucket = String(env.SITES_BUCKET ?? "clever-sites").trim();
+const sitesBucket = String(env.SITES_BUCKET ?? "").trim() || "clever-sites";
 const registryD1 = need("REGISTRY_D1_ID");
 const siteZone = need("SITE_ZONE");
 const adminZone = need("ADMIN_ZONE");
