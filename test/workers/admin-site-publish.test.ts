@@ -18,7 +18,7 @@ import { artifactShaOf } from "../../src/site/deliver";
 import { activeKey, readPointer } from "../../src/site/publish";
 import { buildScope, readSiteSettings } from "../../src/site/settings";
 import { issueSiteAccess } from "../../src/site/access";
-import { seedSha } from "../../src/site/source";
+import { seedFiles, seedSha } from "../../src/site/source";
 
 const BASE = "https://crm.test";
 const TENANT = "0";
@@ -160,6 +160,32 @@ describe("后台发布", () => {
    * 后台点「发布站点」只能重发**租户设计过的模板**；没有模板就明确拒绝，
    * 让新站点必须走「打开设计器 → 发布」这一步。
    */
+  /**
+   * **设计器不受"种子不发布"的限制**：studio 发布前会先交付一份租户源包
+   * （`tpl/<sha>/`）。哪怕一个字都没改（内容与种子逐字节相同、sha 也相同），
+   * 那也是一份签收过的源包 —— 拦它等于"必须先随便改一个字才能发布第一版"。
+   */
+  it("设计器发一份**与种子逐字节相同**的源包 ⇒ 允许（有源包就不算起点模板）", async () => {
+    // 把种子原样交付一份（模拟"打开设计器立刻发布"）
+    const seed = await seedSha();
+    const prefix = `tpl/${seed.replace(/^sha256:/, "")}/`;
+    for (const f of seedFiles()) {
+      const body = typeof f.body === "string" ? f.body : new Uint8Array(f.body);
+      await SITES.put(`${prefix}${f.path}`, body as never);
+    }
+    (testEnv as unknown as Record<string, unknown>).APP_SECRET = "admin-site-test-key";
+    const token = (await issueSiteAccess(testEnv as never, TENANT))!;
+    const res = await worker.default.fetch(
+      new Request(`${BASE}/api/site/publish`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ trigger: "studio", source_sha: seed }),
+      }),
+    );
+    expect(res.status, "有租户源包就允许发布").toBe(200);
+    expect(await readPointer(testEnv, TENANT)).not.toBeNull();
+  });
+
   it("从没发布过（只有种子）⇒ 拒绝，不写产物、不切指针", async () => {
     const res = await call("/api/admin/site/publish", { method: "POST", body: {} });
     expect(res.status).toBe(409);
