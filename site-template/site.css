@@ -199,30 +199,64 @@ header.site nav a {
 header.site nav a:hover { color: var(--text); text-decoration: none; }
 header.site nav a[aria-current="page"] { color: var(--text); border-bottom-color: var(--brand); }
 
-/* 折叠菜单：窄屏把导航收进 <details>，不依赖 JS。
-   桌面不用它（导航直接铺开），所以只有 <720 才显示。 */
-.navmenu { display: none; position: relative; margin-left: auto; }
-.navmenu > summary {
-  list-style: none; cursor: pointer;
+/* ── 移动端菜单：全屏抽屉 ─────────────────────────────────────
+   标准移动菜单的样子：汉堡 → 抽屉从顶部滑下（带遮罩、锁滚动）、× 关闭、
+   链接竖排、底部一个主按钮。宽屏不用它（普通导航直接铺开）。 */
+.menu-btn {
+  display: none; margin-left: auto; width: 40px; height: 40px;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  padding: 6px 12px; font-size: var(--fs-sm); color: var(--text);
-  background: var(--surface); user-select: none;
+  background: var(--surface); cursor: pointer; padding: 0;
+  place-items: center;
 }
-.navmenu > summary::-webkit-details-marker { display: none; }
-.navmenu[open] > summary { border-color: var(--brand); color: var(--brand-ink); }
-.navpanel {
-  position: absolute; right: 0; top: calc(100% + 8px); z-index: 30;
-  min-width: 168px; padding: var(--sp-2);
+.menu-btn span,
+.menu-btn span::before,
+.menu-btn span::after {
+  display: block; width: 16px; height: 1.8px; border-radius: 2px;
+  background: var(--text); content: "";
+}
+.menu-btn span { position: relative; }
+.menu-btn span::before { position: absolute; top: -5px; }
+.menu-btn span::after { position: absolute; top: 5px; }
+
+.drawer {
+  display: none; position: fixed; inset: 0; z-index: 40;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  padding: var(--sp-4);
+}
+.drawer.open { display: flex; flex-direction: column; }
+.drawer-top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: var(--sp-3);
+}
+.drawer-top .brand { font-weight: 700; font-size: var(--fs-md); color: var(--text); }
+.drawer-close {
+  width: 40px; height: 40px; border: 0; background: none; cursor: pointer;
+  font-size: 26px; line-height: 1; color: var(--dim);
+}
+.drawer-close:hover { color: var(--text); }
+.drawer-nav {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  margin-top: var(--sp-4);
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow-lg);
-  display: grid; gap: 2px;
+  border-radius: var(--radius-lg); padding: var(--sp-3);
+  box-shadow: var(--shadow-lg);
 }
-.navpanel a {
-  padding: 9px 10px; border-radius: 6px;
-  color: var(--text); font-size: 15px; font-weight: 600;
+.drawer-nav a {
+  padding: var(--sp-3) var(--sp-3); border-radius: var(--radius-sm);
+  color: var(--text); font-size: var(--fs-md); font-weight: 600;
 }
-.navpanel a:hover { background: var(--soft); text-decoration: none; }
-.navpanel a[aria-current="page"] { background: var(--brand-soft); color: var(--brand-ink); }
+.drawer-nav a:hover { background: var(--soft); text-decoration: none; }
+.drawer-nav a[aria-current="page"] { background: var(--brand-soft); color: var(--brand-ink); }
+.drawer-cta { margin-top: auto; width: 100%; }
+body.menu-open { overflow: hidden; }
+
+@media (max-width: 719px) {
+  header.site nav { display: none; }
+  .menu-btn { display: grid; }
+  header.site .bar > .btn.sm { display: none; }
+}
 
 /* ── 4. 页脚 ─────────────────────────────────────────────────── */
 footer.site {
@@ -582,8 +616,6 @@ body.auth {
   .hero { padding-block: var(--sp-6) var(--sp-5); }
   .hero h1 { font-size: clamp(26px, 8vw, 32px); }
   header.site .bar { min-height: 58px; gap: var(--sp-3); }
-  header.site nav { display: none; }
-  .navmenu { display: block; }
   .cta-card { padding: var(--sp-5); }
   footer.site { padding-block: var(--sp-6) var(--sp-5); }
 }
