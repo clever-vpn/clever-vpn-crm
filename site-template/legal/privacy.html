@@ -22,19 +22,26 @@
           <a href="../help.html">帮助</a>
           <a href="../account.html">我的</a>
         </nav>
-        <details class="navmenu">
-          <summary aria-label="打开菜单">菜单</summary>
-          <div class="navpanel">
-            <a href="../index.html#features">特性</a>
-            <a href="../pricing.html">套餐</a>
-            <a href="../download.html">下载</a>
-            <a href="../help.html">帮助</a>
-            <a href="../account.html">我的</a>
-          </div>
-        </details>
+        
+        <button class="menu-btn" type="button" aria-label="打开菜单" aria-expanded="false" aria-controls="site-menu"><span></span></button>
         <a class="btn sm" href="../pricing.html">查看套餐</a>
       </div>
     </header>
+      <div class="drawer" id="site-menu" aria-hidden="true">
+        <div class="drawer-top">
+          <span class="brand">{{site.name}}</span>
+          <button class="drawer-close" type="button" aria-label="关闭菜单">×</button>
+        </div>
+        <nav class="drawer-nav" aria-label="移动导航">
+          <a href="../index.html#features">特性</a>
+          <a href="../pricing.html">套餐</a>
+          <a href="../download.html">下载</a>
+          <a href="../help.html">帮助</a>
+          <a href="../account.html">我的</a>
+        </nav>
+        <a class="btn drawer-cta" href="../pricing.html">查看套餐</a>
+      </div>
+
 
     <main class="wrap longform" style="max-width:760px">
       <h1>隐私政策</h1>
@@ -122,5 +129,6 @@
         </div>
       </div>
     </footer>
+      <script src="../site.js"></script>
   </body>
 </html>
