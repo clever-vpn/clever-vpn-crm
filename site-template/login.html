@@ -8,110 +8,60 @@
     <link rel="icon" type="image/png" href="assets/favicon.png" />
     <link rel="stylesheet" href="site.css" />
   </head>
-  <body>
-    <header class="site">
-      <div class="wrap bar">
-        <a class="brand" href="index.html">
-          <img class="mark" src="assets/logo.png" alt="" width="26" height="26" />
-          <span>{{site.name}}</span>
-        </a>
-        <nav aria-label="主导航">
-          <a href="index.html#features">特性</a>
-          <a href="pricing.html">套餐</a>
-          <a href="download.html">下载</a>
-          <a href="help.html">帮助</a>
-          <a href="account.html">我的</a>
-        </nav>
-        <details class="navmenu">
-          <summary aria-label="打开菜单">菜单</summary>
-          <div class="navpanel">
-            <a href="index.html#features">特性</a>
-            <a href="pricing.html">套餐</a>
-            <a href="download.html">下载</a>
-            <a href="help.html">帮助</a>
-            <a href="account.html">我的</a>
-          </div>
-        </details>
-        <a class="btn sm" href="pricing.html">查看套餐</a>
+  <body class="auth">
+    <main class="auth-page">
+      <div class="auth-top">
+        <a class="auth-home" href="index.html">← 返回 {{site.name}}</a>
       </div>
-    </header>
 
-    <main class="wrap">
-      <div class="narrow" style="margin-inline: auto">
-        <h1>登录 / 注册</h1>
-        <p class="lead">只需邮箱，无需密码。同一个账号在 App 里也能用。</p>
+      <div class="auth-card">
+        <a class="auth-logo" href="index.html" aria-label="{{site.name}}">
+          <img src="assets/logo.png" alt="" width="56" height="56" />
+        </a>
 
-        <div class="card">
-          <div class="stack">
-            <div class="field">
-              <label for="email">邮箱</label>
-              <div class="row">
-                <input id="email" class="grow" type="email" placeholder="you@example.com" autocomplete="email" />
-                <button id="send" type="button" class="btn ghost">发送验证码</button>
-              </div>
-              <div class="hint">收不到就等一分钟再试；邮件可能进了「垃圾邮件」。</div>
-            </div>
+        <h1 class="auth-title">登录</h1>
+        <p class="auth-sub">用邮箱收验证码登录，不需要密码。</p>
 
-            <div id="devcode" class="hint" hidden></div>
+        <div id="flash"></div>
+        <div id="devcode" class="hint" hidden></div>
 
-            <div class="field">
-              <label for="code">验证码</label>
-              <div class="row">
-                <input id="code" class="grow" type="text" placeholder="6 位验证码" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
-                <button id="verify" type="button" class="btn">登录</button>
-              </div>
-            </div>
+        <div class="field">
+          <label for="email">邮箱</label>
+          <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
+        </div>
 
-            <div class="field" style="margin-bottom: 0">
-              <label for="ref">邀请码（选填）</label>
-              <input id="ref" type="text" placeholder="朋友给你的码" />
-              <div class="hint">填了才有归因与首单奖励，不填照样注册。</div>
-            </div>
-
-            <div id="flash"></div>
+        <div id="code-wrap" hidden>
+          <div class="field">
+            <label for="code">验证码</label>
+            <input id="code" type="text" placeholder="6 位数字" inputmode="numeric"
+                   maxlength="6" autocomplete="one-time-code" />
           </div>
         </div>
 
-        <p class="hint" style="margin-top: var(--sp-4)">
+        <button id="send" class="btn" type="button">发送验证码</button>
+
+        <div class="auth-alt" id="alt" hidden>
+          <button id="again" class="linkish" type="button" disabled>重新发送</button>
+          <button id="back" class="linkish" type="button">换个邮箱</button>
+        </div>
+
+        <details class="auth-extra">
+          <summary>有邀请码？</summary>
+          <div class="field" style="margin-top: var(--sp-3)">
+            <label for="ref">邀请码（选填）</label>
+            <input id="ref" type="text" placeholder="朋友给你的码" />
+            <div class="hint">填了才有归因与首单奖励，不填照样登录。</div>
+          </div>
+        </details>
+
+        <p class="auth-foot">
           继续即表示你同意 <a href="legal/terms.html">服务条款</a> 与
           <a href="legal/privacy.html">隐私政策</a>。
         </p>
       </div>
-    </main>
 
-    <footer class="site">
-      <div class="wrap">
-        <div class="cols">
-          <div>
-            <div class="brand">{{site.name}}</div>
-            <p class="about">{{site.tagline}}</p>
-            <p class="contact">
-              <a data-if="site.contact_email" href="mailto:{{site.contact_email}}">联系我们</a>
-            </p>
-          </div>
-          <div>
-            <h4>产品</h4>
-            <ul>
-              <li><a href="pricing.html">套餐与价格</a></li>
-              <li><a href="download.html">下载客户端</a></li>
-              <li><a href="account.html">我的账号</a></li>
-              <li><a href="help.html">帮助中心</a></li>
-            </ul>
-          </div>
-          <div>
-            <h4>条款</h4>
-            <ul>
-              <li><a href="legal/terms.html">服务条款</a></li>
-              <li><a href="legal/privacy.html">隐私政策</a></li>
-            </ul>
-          </div>
-        </div>
-        <div class="legal">
-          <span>{{site.footer}}</span>
-          <span>支付与订阅服务由本网站提供</span>
-        </div>
-      </div>
-    </footer>
+      <div class="auth-legal">{{site.footer}}</div>
+    </main>
 
     <script src="/_crm/config.js"></script>
     <script src="/_crm/sdk.js"></script>

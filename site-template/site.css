@@ -108,6 +108,9 @@
 /* ── 2. 基础 ─────────────────────────────────────────────────── */
 * { box-sizing: border-box; }
 
+/* `[hidden]` 必须压过组件自己的 display：.auth-alt{display:flex} 之类会让 hidden 失效 */
+[hidden] { display: none !important; }
+
 html { scroll-behavior: smooth; }
 
 body {
@@ -513,6 +516,58 @@ main.longform .card { margin-top: var(--sp-5); }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-2) var(--sp-5); font-size: var(--fs-base); }
 .kv dt { color: var(--dim); }
 .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── 登录页：独立版式（没有站点头尾，居中一张卡） ────────────
+   参考的是"只有邮箱认证"的产品登录页：一个主按钮、两屏内容、
+   不解释"我们支持什么"，只留必要的一句。 */
+body.auth {
+  background:
+    radial-gradient(900px 480px at 50% -8%,
+      color-mix(in srgb, var(--brand) 12%, transparent), transparent 70%),
+    var(--bg);
+}
+.auth-page {
+  min-height: 100dvh;
+  display: grid; grid-template-rows: auto 1fr auto;
+  padding: var(--sp-5);
+}
+.auth-top { display: flex; justify-content: space-between; align-items: center; }
+.auth-home { color: var(--dim); font-size: var(--fs-sm); }
+.auth-home:hover { color: var(--text); text-decoration: none; }
+.auth-card {
+  width: min(420px, 100%); margin: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 20px; box-shadow: var(--shadow-lg);
+  padding: var(--sp-7) var(--sp-6) var(--sp-5);
+  text-align: center;
+}
+.auth-logo { display: inline-flex; margin-bottom: var(--sp-4); }
+.auth-logo img { width: 56px; height: 56px; border-radius: 14px; display: block; }
+.auth-title { font-size: var(--fs-xl); }
+.auth-sub { color: var(--dim); font-size: var(--fs-sm); margin: var(--sp-2) 0 var(--sp-5); }
+.auth-card .field { text-align: left; }
+.auth-card .btn { width: 100%; }
+.auth-card #flash:empty { display: none; }
+.auth-alt {
+  display: flex; justify-content: space-between; margin-top: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+.auth-alt .linkish {
+  background: none; border: 0; padding: 0; font: inherit;
+  color: var(--brand-ink); cursor: pointer;
+}
+.auth-alt .linkish:disabled { color: var(--faint); cursor: default; }
+.auth-extra {
+  margin-top: var(--sp-5); padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+  text-align: left; font-size: var(--fs-sm); color: var(--dim);
+}
+.auth-extra summary { cursor: pointer; list-style: none; }
+.auth-extra summary::-webkit-details-marker { display: none; }
+.auth-extra summary::after { content: " +"; color: var(--faint); }
+.auth-extra[open] summary::after { content: " –"; }
+.auth-foot { margin-top: var(--sp-5); font-size: var(--fs-xs); color: var(--faint); line-height: 1.6; }
+.auth-legal { text-align: center; font-size: var(--fs-xs); color: var(--faint); padding-top: var(--sp-4); }
 
 /* ── 7. 响应式（移动优先，只在断点里加东西） ────────────────── */
 @media (max-width: 719px) {
