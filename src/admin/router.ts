@@ -208,6 +208,9 @@ export async function handleAdminApi(
     const admin = await loadAdmin(env);
     return json({
       needs_setup: admin === null,
+      // 自托管（single）才有"首次初始化"；SaaS（multi）由 cf-api 在开通时种管理员，
+      // 这里只告诉前端"还没初始化"，绝不暴露 SETUP_TOKEN 之类部署期概念。
+      multi: env.MODE === "multi",
       setup_configured: Boolean(env.SETUP_TOKEN),
       // 前端据此决定显示哪些登录方式：**没有的能力不显示**，而不是显示了再报错
       methods: emailCodeAvailable(env) ? ["password", "email"] : ["password"],
@@ -220,6 +223,8 @@ export async function handleAdminApi(
 
   // ── 公开：首次初始化（一次性 SETUP_TOKEN） ──────────────────────────
   if (method === "POST" && path === "/setup") {
+    // SaaS 不开这条路径：管理员由 cf-api 开通时种（见 `POST /platform/tenants/:id/reseed-admin`）
+    if (env.MODE === "multi") return fail(404, "not_found");
     if (!env.SETUP_TOKEN) return fail(503, "setup_disabled", "SETUP_TOKEN 未配置");
     if (await loadAdmin(env)) return fail(409, "already_initialized");
     const body = await readBody(request);

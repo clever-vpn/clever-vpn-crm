@@ -67,6 +67,8 @@ export interface Me {
 
 export interface Bootstrap {
   needs_setup: boolean;
+  /** true = SaaS 分片：没有"首次初始化"，管理员由平台开通时种 */
+  multi?: boolean;
   setup_configured: boolean;
   /** 可用的登录方式；没有的能力前端就不显示 */
   methods: Array<"password" | "email">;
