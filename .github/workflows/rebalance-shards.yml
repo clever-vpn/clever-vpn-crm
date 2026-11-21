@@ -1,0 +1,150 @@
+# 改容量 + 重绑分片（**唯一**允许改 `shard:capacity` 的入口）
+#
+# `shard = floor(slot / capacity)` 是唯一公式，所以改容量会让**所有** slot→shard
+# 归属漂移。这个 workflow 做完整套：冻结开通 → 建缺的片 → 按新布局重发每个片 →
+# 重发 router（带新 CAPACITY）→ 写回容量 → 解冻。
+#
+# ⚠️ 断网窗口：从"第一个片按新布局发布"到"router 切换"之间，被换片的租户会 404/503
+#    （我们不做双绑，接受分钟级中断）。
+# ⚠️ 失败处理：任一步失败，集群可能停在中间状态 —— **重跑本 workflow**（公式确定、
+#    幂等收敛）。冻结有 30 分钟自动过期兜底。
+name: rebalance-shards
+
+on:
+  workflow_dispatch:
+    inputs:
+      capacity:
+        description: "每片容量（1..1000）"
+        required: true
+        type: string
+      reason:
+        description: "审计备注"
+        required: false
+        default: "rebalance"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CF_API_BASE: https://api.clever-vpn.org
+
+jobs:
+  rebalance:
+    name: rebalance to capacity ${{ inputs.capacity }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: rebalance-shards
+      cancel-in-progress: false
+    env:
+      CAPACITY: ${{ inputs.capacity }}
+      CRM_ROOT: ${{ vars.CRM_ROOT }}
+      HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+      REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
+      BASE_DOMAIN: ${{ vars.SAAS_BASE_DOMAIN || 'clever-vpn.org' }}
+      SITE_URL: ${{ vars.SITE_URL }}
+      ALLOW_MOCK_PAYMENTS: ${{ vars.ALLOW_MOCK_PAYMENTS }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Load secrets from Bitwarden (SM)
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_SERVICE_TOKEN }} > SERVICE_TOKEN
+            ${{ vars.BW_SECRET_ID_CLOUDFLARE_API_TOKEN }} > CLOUDFLARE_API_TOKEN
+
+      - name: Validate capacity
+        run: |
+          set -euo pipefail
+          if ! [[ "$CAPACITY" =~ ^[0-9]+$ ]] || (( CAPACITY < 1 || CAPACITY > 1000 )); then
+            echo "::error::capacity 必须是 1..1000 的整数（收到 $CAPACITY）"
+            exit 1
+          fi
+
+      # ---- 冻结：rebalance 期间不能开新租户、不能补池 ----
+      - name: Freeze provisioning
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"minutes\":30,\"reason\":\"rebalance:${{ inputs.reason }}\"}" \
+            "$CF_API_BASE/api/v2/platform/provisioning/freeze" | jq -c .
+
+      - name: Plan new layout
+        id: plan
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards?capacity=$CAPACITY" > summary.json
+          ready=$(jq -r '.shards_ready' summary.json)
+          needed=$(jq -r '[.shards[].shard] | max + 1' summary.json)
+          echo "ready=$ready needed=$needed capacity=$CAPACITY"
+          [[ "$needed" -le 500 ]] || { echo "::error::需要的片数 $needed > 500"; exit 1; }
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+      - run: npm run build:web
+      - run: npm run db:embed:check
+
+      # ---- 逐片按新布局发布（新片顺便登记 ready）----
+      - name: Deploy shards with new layout
+        run: |
+          set -euo pipefail
+          ready=${{ steps.plan.outputs.ready }}
+          needed=${{ steps.plan.outputs.needed }}
+          for n in $(seq 0 $((needed - 1))); do
+            echo "== shard-$n =="
+            curl -sS --fail-with-body \
+              -H "Authorization: Bearer $SERVICE_TOKEN" \
+              "$CF_API_BASE/api/v2/platform/shards/$n/manifest?capacity=$CAPACITY" > manifest.json
+            jq -r '"  绑定 \(.bindings|length) 条"' manifest.json
+            node scripts/render-shard-config.mjs --manifest manifest.json
+            npx wrangler deploy --config wrangler.shard.jsonc
+            if [[ "$n" -ge "$ready" ]]; then
+              curl -sS --fail-with-body -X POST \
+                -H "Authorization: Bearer $SERVICE_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"count\":$((n + 1))}" \
+                "$CF_API_BASE/api/v2/platform/shards/ready" | jq -c .
+            fi
+          done
+
+      # ---- router 切到新容量（窗口在这里结束）----
+      - name: Render router with new capacity
+        run: |
+          set -euo pipefail
+          node scripts/render-router-config.mjs \
+            --input summary.json \
+            --ready "${{ steps.plan.outputs.needed }}" \
+            --capacity "$CAPACITY"
+
+      - name: Deploy router
+        run: npx wrangler deploy --config wrangler.router.jsonc
+
+      # ---- 写回容量（下次 summary / 补池都按新值）----
+      - name: Persist capacity
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"capacity\":$CAPACITY}" \
+            "$CF_API_BASE/api/v2/platform/shards/capacity" | jq -c .
+
+      - name: Unfreeze provisioning
+        if: always()
+        run: |
+          curl -sS -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/provisioning/unfreeze" \
+            | jq -c '.' || echo "::warning::解冻失败 —— 冻结会在 30 分钟后自动过期"

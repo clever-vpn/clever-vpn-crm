@@ -17,13 +17,22 @@
 export interface HostMap {
   tenant_id: string;
   slot: number;
-  shard: number;
   status?: "active" | "suspended";
+  /** 该位号对应的 D1 uuid（shard 用它做运行期自检；router 不读） */
+  d1_uuid?: string;
 }
 
 export interface RouterEnv {
   /** `host:*` → HostMap（自定义域）与 `slug:*`（平台子域的缓存） */
   HOSTS: KVNamespace;
+  /**
+   * 每片容量（部署期 var，由 `deploy-saas-router` / `rebalance-shards` 从 cf-api 的
+   * `summary.capacity` 渲染进来）。`shard = floor(slot / capacity)`。
+   *
+   * 为什么是 var 而不是运行时读 KV：改容量时必须与各 shard 的绑定集**同一次渲染**，
+   * 否则 router 和 shard 会各用一套容量，路由到没绑定的片。
+   */
+  CAPACITY?: string;
   /** 租户后台域的父域：`{slug}.<ADMIN_ZONE>` 按 slug 查 registry */
   ADMIN_ZONE?: string;
   /** registry D1（`tenants` 表）。自托管单租户部署不绑。 */
@@ -43,10 +52,22 @@ export type RouteDecision =
  * 纯函数：主机名映射 + "这个片有没有绑定" → 该怎么做。
  * 单独抽出来是为了能单测（不用起 miniflare）。
  */
-export function decide(map: HostMap | null, hasBinding: (binding: string) => boolean): RouteDecision {
+export const DEFAULT_CAPACITY = 1000;
+
+/** 容量字符串 → 正整数（非法/缺省都退到默认值，router 不做业务校验） */
+export function capacityOf(raw: string | undefined): number {
+  const n = Number.parseInt(String(raw ?? "").trim(), 10);
+  return Number.isFinite(n) && n >= 1 ? n : DEFAULT_CAPACITY;
+}
+
+export function decide(
+  map: HostMap | null,
+  hasBinding: (binding: string) => boolean,
+  capacity: number = DEFAULT_CAPACITY,
+): RouteDecision {
   if (!map) return { kind: "not_found" };
   if (map.status === "suspended") return { kind: "gone" };
-  const binding = `SHARD_${map.shard}`;
+  const binding = `SHARD_${Math.floor(map.slot / capacity)}`;
   if (!hasBinding(binding)) return { kind: "no_binding", binding, map };
   return { kind: "forward", binding, map };
 }
@@ -106,15 +127,15 @@ async function platformHostOf(env: RouterEnv, slug: string): Promise<HostMap | n
     if (!row) return null;
     const id = row.tenant_id ?? row.id;
     const slot = Number(row.slot);
-    const shard = Number.isFinite(Number(row.shard))
-      ? Number(row.shard)
-      : Number.isFinite(slot)
-        ? Math.floor(slot / 2000)
-        : NaN;
-    if (id === undefined || id === null || !Number.isFinite(shard)) return null;
+    if (id === undefined || id === null || !Number.isFinite(slot)) return null;
     const status = String(row.status ?? "active");
     if (status !== "active" && status !== "suspended") return null;
-    return { tenant_id: String(id), slot: Number.isFinite(slot) ? slot : 0, shard, status };
+    return {
+      tenant_id: String(id),
+      slot,
+      status,
+      ...(typeof row.d1_uuid === "string" ? { d1_uuid: row.d1_uuid } : {}),
+    };
   };
 
   let map: HostMap | null = null;
@@ -157,7 +178,11 @@ export default {
     }
 
     const map = await hostMapOf(env, host);
-    const decision = decide(map, (b) => typeof env[b] === "object" && env[b] !== null);
+    const decision = decide(
+      map,
+      (b) => typeof env[b] === "object" && env[b] !== null,
+      capacityOf(env.CAPACITY),
+    );
 
     switch (decision.kind) {
       case "not_found":

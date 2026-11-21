@@ -27,6 +27,9 @@
  *     files: [{ name, sha256, sql, statement_count }], statement_count }
  *
  * 契约：`clever-vpn-docs/docs/contracts/cf-api-hosting.md` §4.5.4
+  *
+ * 现状（ADR 0007 Phase 2）：cf-api **不再消费**这个产物 —— 租户库由 shard 在第一次
+ * 访问时建表。这里主要给自托管/排障用，`release.yml` 也不再把它挂到 release 资产上。
  */
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";

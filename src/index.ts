@@ -135,13 +135,24 @@ export default {
      */
     if (modeOf(rawEnv) === "multi") {
       try {
-        await ensureTenantSchema(scoped.env.DB, scoped.slot);
+        await ensureTenantSchema(scoped.env.DB, scoped.slot, scoped.d1Uuid);
       } catch (error) {
         const code = error instanceof SchemaGateError ? error.code : "schema_migration_failed";
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[schema] slot=${scoped.slot} ${code}: ${message}`);
         return json({ error: code, message }, 503);
       }
+    }
+
+    /**
+     * **建表触发点**：cf-api 开通租户时发一个普通请求过来（经 `ROUTER` service binding），
+     * 门禁在上面已经跑完 ⇒ 空库到这里已经有表了。返回体只用于确认成功。
+     *
+     * 为什么是公开端点：它只对"当前 Host 解析到的那个库"做一次迁移检查，迁移完成后
+     * 由 per-slot memo 兜住（热路径零 I/O），和首页一样便宜。
+     */
+    if (url.pathname === "/__schema/ready") {
+      return json({ ok: true, mode: modeOf(rawEnv), slot: scoped.slot });
     }
 
     // 退订（邮件里点过来的链接）——不走 App CORS/会话，也不需要登录

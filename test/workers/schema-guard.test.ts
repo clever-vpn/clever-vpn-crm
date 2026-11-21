@@ -138,8 +138,9 @@ describe("门禁判据（文件名集合）", () => {
       ensureTenantSchema(db, 14),
       ensureTenantSchema(db, 14),
     ]);
-    // 冷路径固定两条读（sqlite_master 探测 + 台账），三次调用不叠加
-    expect(calls.prepare).toBe(2);
+    // 冷路径固定三条 prepare（sqlite_master 探针 + 同一 batch 里的台账/身份两条），
+    // 三次调用不叠加
+    expect(calls.prepare).toBe(3);
     expect(calls.batch).toBe(0);
   });
 
@@ -148,9 +149,9 @@ describe("门禁判据（文件名集合）", () => {
     const { db, calls } = countingDb();
 
     await ensureTenantSchema(db, 15);
-    expect(calls.prepare).toBe(2);
+    expect(calls.prepare).toBe(3);
     await ensureTenantSchema(db, 16);
-    expect(calls.prepare).toBe(4); // 换了 slot 就要重新判一次
+    expect(calls.prepare).toBe(6); // 换了 slot 就要重新判一次
   });
 });
 

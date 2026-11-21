@@ -11,27 +11,42 @@
 
 export type Mode = "single" | "multi";
 
-/** KV 里 `host:*` 的值（契约 §2.1） */
+/** KV 里 `host:*` / `slug:*` 的值（契约 §2.1） */
 export interface HostMap {
   tenant_id: string;
   slot: number;
-  shard?: number;
   status?: "active" | "suspended";
+  /**
+   * 期望的 D1 uuid。**运行期自检**用：拿它和库内 `d1_identity` 比对，
+   * 不一致说明这个 `DB_<slot>` 绑到了别的库（或库被重建后绑定没跟上）⇒ 503。
+   * 缺省时不校验（兼容还没回填的旧记录），只告警。
+   */
+  d1_uuid?: string;
 }
 
 /** 多租户绑定：由 shard 的 wrangler 配置程序化生成（`DB_0`…`DB_1999`） */
-type MultiEnv = { HOSTS?: KVNamespace } & Record<string, unknown>;
+type MultiEnv = { HOSTS?: KVNamespace; ADMIN_ZONE?: string } & Record<string, unknown>;
 
 const HOST_TTL_MS = 60_000;
 const memo = new Map<string, { value: HostMap | null; expires: number }>();
+
+/** 只认一级 `<slug>.<ADMIN_ZONE>`（与 router 同一口径） */
+const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+
+export function platformSlug(host: string, zone: string | undefined): string | null {
+  const z = String(zone ?? "").trim().toLowerCase();
+  if (!z || !host.endsWith(`.${z}`)) return null;
+  const label = host.slice(0, host.length - z.length - 1);
+  if (!label || label.includes(".")) return null;
+  return SLUG_RE.test(label) ? label : null;
+}
 
 export function modeOf(env: { MODE?: string }): Mode {
   return env.MODE === "multi" ? "multi" : "single";
 }
 
 /** isolate 内缓存：KV 里的值几乎不变，60 s 足够（契约 §3） */
-async function hostMapOf(kv: KVNamespace, host: string): Promise<HostMap | null> {
-  const key = `host:${host}`;
+async function mapOf(kv: KVNamespace, key: string): Promise<HostMap | null> {
   const hit = memo.get(key);
   const now = Date.now();
   if (hit && hit.expires > now) return hit.value;
@@ -49,6 +64,8 @@ export interface Scoped {
   env: { DB: D1Database } & Record<string, unknown>;
   tenantId: string;
   slot: number;
+  /** KV 里的期望 D1 uuid（由 schema-guard 与库内 `d1_identity` 比对） */
+  d1Uuid?: string;
 }
 
 export class TenantResolveError extends Error {
@@ -92,7 +109,13 @@ export async function scopeToTenant(
   }
 
   const host = new URL(request.url).hostname.toLowerCase();
-  const map = await hostMapOf(env.HOSTS, host);
+  // 与 router 同一口径：先查 `host:`，miss 再按平台子域取 `slug:`。
+  // 平台子域**不写 `host:`**（cf-api 只写 `slug:`），没有这条兜底新租户会 404。
+  let map = await mapOf(env.HOSTS, `host:${host}`);
+  if (!map) {
+    const slug = platformSlug(host, env.ADMIN_ZONE);
+    if (slug) map = await mapOf(env.HOSTS, `slug:${slug}`);
+  }
   if (!map) {
     throw new TenantResolveError("unknown_host", `未知域名：${host}`);
   }
@@ -114,7 +137,12 @@ export async function scopeToTenant(
   const scoped = Object.create(env) as Scoped["env"];
   scoped.DB = db;
 
-  return { env: scoped, tenantId: map.tenant_id, slot: map.slot };
+  return {
+    env: scoped,
+    tenantId: map.tenant_id,
+    slot: map.slot,
+    ...(map.d1_uuid ? { d1Uuid: map.d1_uuid } : {}),
+  };
 }
 
 /**

@@ -7,8 +7,13 @@ export interface Env {
    * 按 `host → slot` 从 `DB_<slot>` 里挑一个放进 `env.DB`。
    */
   MODE?: string;
-  /** multi 专用：`host:* → { tenant_id, slot, shard, status }`；也存站点指针 `site:<id>:active` */
+  /** multi 专用：`host:* / slug:* → { tenant_id, slot, status, d1_uuid }`；也存站点指针 `site:<id>:active` */
   HOSTS?: KVNamespace;
+  /**
+   * multi 专用：租户后台/站点的父域（`clever-panel.win` / `clever-link.win`）。
+   * shard 用它把 `{slug}.<ADMIN_ZONE>` 解析成 `slug:<slug>` —— 与 router 同一口径。
+   */
+  ADMIN_ZONE?: string;
   /**
    * 站点存储（R2）。三个前缀：
    *   `tpl/<sha>/`          租户源包（内容寻址）

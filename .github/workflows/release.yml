@@ -33,8 +33,7 @@ jobs:
         run: |
           cp dist/index.js crm-worker.mjs
           # 迁移资产（给 cf-api 建租户库用）：整文件 sql + 内容寻址 schema_version
-          node scripts/pack-migrations.mjs --dir migrations --out migrations.json
-          sha256sum crm-worker.mjs wrangler.example.jsonc migrations.json > checksums.txt
+          sha256sum crm-worker.mjs wrangler.example.jsonc > checksums.txt
           cat checksums.txt
 
       # 版本号不写进 bundle：托管侧上传时以 plain_text 绑定 CRM_CODE_VERSION，
@@ -46,4 +45,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
-            crm-worker.mjs wrangler.example.jsonc migrations.json checksums.txt
+            crm-worker.mjs wrangler.example.jsonc checksums.txt

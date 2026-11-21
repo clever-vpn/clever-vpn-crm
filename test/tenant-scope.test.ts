@@ -172,3 +172,31 @@ describe("启动自检 selfCheck", () => {
     expect(seen).toHaveLength(0);
   });
 });
+
+describe("scopeToTenant · 平台子域（slug 兜底）", () => {
+  it("host: 没有记录时，按 ADMIN_ZONE 取 slug 再读 slug:<slug>", async () => {
+    const env = {
+      MODE: "multi",
+      ADMIN_ZONE: "clever-panel.win",
+      DB_0: DB_A,
+      HOSTS: kvOf({
+        "slug:acme": { tenant_id: "t_acme", slot: 0 },
+      }),
+    } as Record<string, unknown>;
+    const scoped = await scopeToTenant(req("https://acme.clever-panel.win/"), env);
+    expect(scoped.tenantId).toBe("t_acme");
+    expect(scoped.slot).toBe(0);
+    expect(scoped.env.DB).toBe(DB_A);
+  });
+
+  it("多级子域不认（Universal SSL 只覆盖一级）", async () => {
+    const env = {
+      MODE: "multi",
+      ADMIN_ZONE: "clever-panel.win",
+      HOSTS: kvOf({ "slug:x.acme": { tenant_id: "t", slot: 0 } }),
+    } as Record<string, unknown>;
+    await expect(scopeToTenant(req("https://x.acme.clever-panel.win/"), env)).rejects.toMatchObject({
+      code: "unknown_host",
+    });
+  });
+});

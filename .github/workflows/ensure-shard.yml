@@ -93,6 +93,7 @@ jobs:
         if: steps.decide.outputs.needed == 'true'
         env:
           HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+          CRM_ROOT: ${{ vars.CRM_ROOT }}
           SITE_URL: ${{ vars.SITE_URL }}
           ALLOW_MOCK_PAYMENTS: ${{ vars.ALLOW_MOCK_PAYMENTS }}
         run: node scripts/render-shard-config.mjs --manifest manifest.json
@@ -151,19 +152,14 @@ jobs:
             "$CF_API_BASE/api/v2/platform/shards/ready" | jq -c .
 
       # ---- 4. 给新片补第一批池（带上 release tag，cf-api 据此跑迁移）----
+      # 补池不再需要 release tag：cf-api 建库时不跑迁移（ADR 0007 Phase 2），
+      # 租户库的 schema 由 shard 在第一次访问时补齐。
       - name: Seed pool on the new shard
         if: steps.decide.outputs.needed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
-          if [[ -z "$tag" ]]; then
-            echo "::warning::取不到 latest release tag，跳过首批补池（下次开通会自动补）"
-            exit 0
-          fi
           curl -sS --fail-with-body -X POST \
             -H "Authorization: Bearer $SERVICE_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"version\":\"$tag\"}" \
+            -d '{}' \
             "$CF_API_BASE/api/v2/platform/shards/${{ steps.decide.outputs.ready }}/pool" | jq -c .
