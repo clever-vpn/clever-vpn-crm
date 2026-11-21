@@ -98,10 +98,6 @@ export default {
           // 410 而不是 404：域名解析得到、只是这个租户被停用，说清楚好排障
           return new Response("站点已暂停", { status: 410 });
         }
-        if (error.code === "db_mismatch") {
-          // 503：这个 DB_<slot> 绑错库了，运维跑 reconcile 重绑即可，重试无意义
-          return json({ error: "db_binding_mismatch", message: error.message }, 503);
-        }
         return json(
           { error: error.code, message: error.message },
           error.code === "unknown_host" ? 404 : 500,
@@ -139,7 +135,7 @@ export default {
      */
     if (modeOf(rawEnv) === "multi") {
       try {
-        await ensureTenantSchema(scoped.env.DB, scoped.slot);
+        await ensureTenantSchema(scoped.env.DB, scoped.slot, scoped.d1Uuid);
       } catch (error) {
         const code = error instanceof SchemaGateError ? error.code : "schema_migration_failed";
         const message = error instanceof Error ? error.message : String(error);

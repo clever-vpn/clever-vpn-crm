@@ -21,6 +21,10 @@
  *      真正把"跑了一半"变成不可能的，是 ①＋② 同时满足 —— 全项目只有 `batch` 一处。
  *   3. **库比代码新就 503**，不猜兼容、不回滚 schema。旧 isolate 在新代码迁移后
  *      短暂看到"领先"是预期的，下次部署/回收即自愈。
+ *   4. **先确认"这个库是不是它该服务的那个"**：比对库内 `d1_identity` 与 KV 期望的
+ *      `d1_uuid`，不一致就 503 `db_binding_mismatch` —— 绑定指错库时宁可不服务，
+ *      也不能读到别的租户的数据。身份读与台账读放在同一个 `batch` 里，冷路径只多一次
+ *      探针、不多一次往返。
  *
  * 门禁只在 `MODE=multi` 生效：自部署（single）由 CI 在部署前
  * `wrangler d1 migrations apply --remote`，行为不变（见 `src/db.ts`）。
@@ -36,7 +40,7 @@ import type { EmbeddedMigrationFile } from "./migrations.generated";
  *
  * 改一个字，`sqlite_master` 就开始与 wrangler 建的库不一致：以后有人拿
  * `wrangler d1 migrations apply` 接手同一个库时，会认不出这张表而重跑整条链。
- * cf-api 侧同一段在 `packages/platform/src/core/d1-migrations/apply.ts`，两边有测试盯着。
+ * 注意：cf-api 侧的执行器已退役（ADR 0007 Phase 2），台账现在只由 shard 与 wrangler 维护。
  */
 const LEDGER_TABLE = "d1_migrations";
 const LEDGER_DDL = `CREATE TABLE IF NOT EXISTS "d1_migrations"(
@@ -45,16 +49,23 @@ const LEDGER_DDL = `CREATE TABLE IF NOT EXISTS "d1_migrations"(
 \t\tapplied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );`;
 
-/** 对齐成功后 5 分钟内不再读台账（热路径零 I/O） */
-const OK_TTL_MS = 5 * 60_000;
+/** 对齐成功后 30 分钟内不再读台账/身份（热路径零 I/O）。绑定变更只在 PATCH/部署时发生 */
+const OK_TTL_MS = 30 * 60_000;
 /** 领先只缓存 30 s：运维把库改回去/重新开通后，不该再等 5 分钟才恢复 */
 const AHEAD_TTL_MS = 30_000;
+/** 身份不一致只缓存 60 s：重绑（reconcile）后应尽快恢复，而不是等半小时 */
+const MISMATCH_TTL_MS = 60_000;
+
+/** 库内身份表：cf-api 建库时写入，运行期用它自检"这个 DB_<slot> 指向的库对不对" */
+const IDENTITY_TABLE = "d1_identity";
 
 interface MemoEntry {
   ok: boolean;
   at: number;
-  /** 领先时的完整错误（含具体文件名）：TTL 内重复请求也拿到同一条能照做的信息 */
+  /** 失败时的完整错误：TTL 内重复请求也拿到同一条能照做的信息 */
   error?: SchemaGateError;
+  /** 失败结论的缓存时长（按错误类型区分） */
+  badTtlMs?: number;
 }
 
 /** per-slot 结论缓存。slot 在 `scopeToTenant` 里解析出来，与 `DB_<slot>` 一一对应 */
@@ -66,11 +77,12 @@ const inflight = new Map<number, Promise<void>>();
  * 门禁失败：带一个**能直接当接口错误码**的 code。
  *
  * `schema_ahead`          库里有这份代码不认识的迁移（比代码新）——拒绝服务，等新代码；
- * `schema_migration_failed` 补迁移失败，批次已回滚、台账未记 —— 下次请求重试。
+ * `schema_migration_failed` 补迁移失败，批次已回滚、台账未记 —— 下次请求重试；
+ * `db_binding_mismatch`   这个 `DB_<slot>` 指向的库不是它该服务的那个（库内身份 ≠ KV 期望）。
  */
 export class SchemaGateError extends Error {
   constructor(
-    readonly code: "schema_ahead" | "schema_migration_failed",
+    readonly code: "schema_ahead" | "schema_migration_failed" | "db_binding_mismatch",
     message: string,
   ) {
     super(message);
@@ -79,31 +91,94 @@ export class SchemaGateError extends Error {
 }
 
 /**
- * 门禁入口：保证 `db` 的 schema 与这份代码对齐。
+ * 门禁入口：保证 `db` 的 schema 与这份代码对齐，并做**库身份自检**。
  *
- * 热路径（5 分钟内判过 OK）：一次 `Map.get`，零 I/O、零 await 前的异步操作。
- * 冷路径：读一次台账 → 缺则逐文件 `batch` → 记结论。
+ * `expectedD1Uuid` 来自 KV（`HostMap.d1_uuid`，cf-api 写）。给了就必须与库内
+ * `d1_identity` 一致；不一致说明绑定指错了库 ⇒ 拒绝服务（宁可 503 也不读别人的数据）。
+ *
+ * 热路径（30 分钟内判过 OK）：一次 `Map.get`，零 I/O。
+ * 冷路径：一次探针（两张表在不在）→ 台账 + 身份**同一次 batch** → 缺则逐文件 `batch`。
  */
-export async function ensureTenantSchema(db: D1Database, slot: number): Promise<void> {
+export async function ensureTenantSchema(
+  db: D1Database,
+  slot: number,
+  expectedD1Uuid?: string,
+): Promise<void> {
   const hit = memo.get(slot);
   if (hit) {
     if (hit.ok) {
       if (Date.now() - hit.at < OK_TTL_MS) return;
-    } else if (Date.now() - hit.at < AHEAD_TTL_MS && hit.error) {
+    } else if (hit.error && Date.now() - hit.at < (hit.badTtlMs ?? AHEAD_TTL_MS)) {
       throw hit.error;
     }
   }
 
   let running = inflight.get(slot);
   if (!running) {
-    running = checkAndMigrate(db, slot).finally(() => inflight.delete(slot));
+    running = checkAndMigrate(db, slot, expectedD1Uuid).finally(() => inflight.delete(slot));
     inflight.set(slot, running);
   }
   await running;
 }
 
-async function checkAndMigrate(db: D1Database, slot: number): Promise<void> {
-  const applied = await ledgerNames(db);
+async function checkAndMigrate(
+  db: D1Database,
+  slot: number,
+  expectedD1Uuid?: string,
+): Promise<void> {
+  // ① 一次探针：台账表与身份表是否存在（一条 SELECT，永不因缺表报错）
+  const probe = await db
+    .prepare(
+      `SELECT
+         (SELECT name FROM sqlite_master WHERE type='table' AND name = ?) AS ledger,
+         (SELECT name FROM sqlite_master WHERE type='table' AND name = ?) AS identity`,
+    )
+    .bind(LEDGER_TABLE, IDENTITY_TABLE)
+    .first<{ ledger: string | null; identity: string | null }>();
+  const hasLedger = probe?.ledger === LEDGER_TABLE;
+  const hasIdentity = probe?.identity === IDENTITY_TABLE;
+
+  let applied: Set<string>;
+  let actual: string | null = null;
+
+  if (hasLedger && hasIdentity) {
+    // ② 台账 + 身份放同一个 batch：冷路径少一次往返
+    const results = await db.batch([
+      db.prepare(`SELECT "name" FROM "${LEDGER_TABLE}" ORDER BY "id"`),
+      db.prepare(`SELECT d1_uuid FROM ${IDENTITY_TABLE} LIMIT 1`),
+    ]);
+    const ledgerRows = ((results[0]?.results ?? []) as { name: unknown }[]).map((r) => String(r.name));
+    const identityRows = (results[1]?.results ?? []) as { d1_uuid?: unknown }[];
+    applied = new Set(ledgerRows);
+    actual = identityRows[0]?.d1_uuid != null ? String(identityRows[0].d1_uuid) : null;
+  } else if (hasLedger) {
+    applied = await ledgerNames(db);
+  } else {
+    await db.prepare(LEDGER_DDL).run();
+    applied = new Set();
+  }
+
+  if (!(hasLedger && hasIdentity) && hasIdentity) {
+    try {
+      const row = await db
+        .prepare(`SELECT d1_uuid FROM ${IDENTITY_TABLE} LIMIT 1`)
+        .first<{ d1_uuid: string }>();
+      actual = row?.d1_uuid ?? null;
+    } catch {
+      actual = null;
+    }
+  }
+
+  // ③ 身份比对放在迁移之前：库都不对，就不要在里面建表/写数据
+  if (expectedD1Uuid && actual !== expectedD1Uuid) {
+    const error = new SchemaGateError(
+      "db_binding_mismatch",
+      `DB_${slot} 指向的库不是它该服务的那个（期望 ${expectedD1Uuid}，库内 ${actual ?? "未知"}）——` +
+        `请对该片跑 reconcile 重绑`,
+    );
+    memo.set(slot, { ok: false, at: Date.now(), error, badTtlMs: MISMATCH_TTL_MS });
+    throw error;
+  }
 
   /**
    * 领先判定：台账里有**这份代码不认识**的名字。

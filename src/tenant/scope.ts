@@ -30,12 +30,6 @@ type MultiEnv = { HOSTS?: KVNamespace; ADMIN_ZONE?: string } & Record<string, un
 const HOST_TTL_MS = 60_000;
 const memo = new Map<string, { value: HostMap | null; expires: number }>();
 
-/** 每个 slot 的身份校验结论：成功 5 min、失败 60 s（失败要尽快再试） */
-const identityMemo = new Map<number, { ok: boolean; at: number; actual: string | null }>();
-const identityInflight = new Map<number, Promise<void>>();
-const IDENTITY_OK_TTL = 5 * 60_000;
-const IDENTITY_BAD_TTL = 60_000;
-
 /** 只认一级 `<slug>.<ADMIN_ZONE>`（与 router 同一口径） */
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
@@ -70,16 +64,13 @@ export interface Scoped {
   env: { DB: D1Database } & Record<string, unknown>;
   tenantId: string;
   slot: number;
+  /** KV 里的期望 D1 uuid（由 schema-guard 与库内 `d1_identity` 比对） */
+  d1Uuid?: string;
 }
 
 export class TenantResolveError extends Error {
   constructor(
-    readonly code:
-    | "unknown_host"
-    | "not_configured"
-    | "missing_db"
-    | "suspended"
-    | "db_mismatch",
+    readonly code: "unknown_host" | "not_configured" | "missing_db" | "suspended",
     message: string,
   ) {
     super(message);
@@ -94,67 +85,6 @@ export class TenantResolveError extends Error {
  * `TenantResolveError`，由入口翻译成明确的 5xx/4xx —— **绝不回落到默认租户**
  * （contracts/cf-api-hosting.md §8）。
  */
-/**
- * 库身份自检 —— **一个 slot 每 isolate 只查一次**（成功 5 min / 失败 60 s）。
- *
- * 为什么必须做：Worker 运行时拿不到 `DB_<slot>` 的 uuid，只能读库内
- * `d1_identity`（cf-api 建库时写的）。比对不一致 ⇒ 说明绑定指错了库：
- * 宁可 503，也不能静默读到别人的数据。
- */
-async function ensureDbIdentity(db: D1Database, slot: number, expected: string): Promise<void> {
-  const now = Date.now();
-  const hit = identityMemo.get(slot);
-  if (hit && now - hit.at < (hit.ok ? IDENTITY_OK_TTL : IDENTITY_BAD_TTL)) {
-    if (!hit.ok) {
-      throw new TenantResolveError(
-        "db_mismatch",
-        `DB_${slot} 绑定的库不是它该服务的那个（期望 ${expected}，实际 ${hit.actual ?? "未知"}）`,
-      );
-    }
-    return;
-  }
-
-  const running = identityInflight.get(slot);
-  if (running) {
-    await running;
-    const again = identityMemo.get(slot);
-    if (again && !again.ok) {
-      throw new TenantResolveError(
-        "db_mismatch",
-        `DB_${slot} 绑定的库不是它该服务的那个（期望 ${expected}，实际 ${again.actual ?? "未知"}）`,
-      );
-    }
-    return;
-  }
-
-  const task = (async () => {
-    let actual: string | null = null;
-    try {
-      const row = await db.prepare("SELECT d1_uuid FROM d1_identity LIMIT 1").first<{ d1_uuid: string }>();
-      actual = row?.d1_uuid ?? null;
-    } catch {
-      // 表不存在（还没写身份）也按不一致处理：strict 模式
-      actual = null;
-    }
-    const ok = actual === expected;
-    identityMemo.set(slot, { ok, at: Date.now(), actual });
-    if (!ok) {
-      console.error(
-        `[tenant] 库身份不一致 slot=${slot} expected=${expected} actual=${actual ?? "(none)"}`,
-      );
-    }
-  })().finally(() => identityInflight.delete(slot));
-
-  identityInflight.set(slot, task);
-  await task;
-  if (!identityMemo.get(slot)?.ok) {
-    throw new TenantResolveError(
-      "db_mismatch",
-      `DB_${slot} 绑定的库不是它该服务的那个（期望 ${expected}，实际 ${identityMemo.get(slot)?.actual ?? "未知"}）`,
-    );
-  }
-}
-
 export async function scopeToTenant(
   request: Request,
   env: MultiEnv & { DB?: D1Database; MODE?: string; CRM_TENANT_ID?: string },
@@ -202,15 +132,17 @@ export async function scopeToTenant(
     );
   }
 
-  // 绑定自检：这个 DB_<slot> 真的指向 slot 该有的那个库吗？
-  if (map.d1_uuid) await ensureDbIdentity(db, map.slot, map.d1_uuid);
-
   // 不用 `{...env}`：一个 shard 的绑定可能有上千条（DB_0…DB_N + secret + KV），
   // 每个请求复制一遍是纯浪费。用原型链把 DB 盖在上面，其余绑定原样穿透。
   const scoped = Object.create(env) as Scoped["env"];
   scoped.DB = db;
 
-  return { env: scoped, tenantId: map.tenant_id, slot: map.slot };
+  return {
+    env: scoped,
+    tenantId: map.tenant_id,
+    slot: map.slot,
+    ...(map.d1_uuid ? { d1Uuid: map.d1_uuid } : {}),
+  };
 }
 
 /**
@@ -261,8 +193,6 @@ export function ensureConfig(env: Record<string, unknown>): ConfigCheck {
 /** 仅供测试：清掉 isolate 缓存 */
 export function __clearScopeCache(): void {
   memo.clear();
-  identityMemo.clear();
-  identityInflight.clear();
 }
 
 /** 仅供测试：重置自检的一次性标记 */
