@@ -40,6 +40,15 @@ npm run check:migrations  # 迁移链自检（结构 / 不可变 / 漂移）
 - `wrangler.jsonc` 里 `migrations_dir` = `migrations-dev`（本地）；CI 渲染配置时
   改回 `migrations`（`scripts/render-config.mjs`），所以部署永远用生产链。
 
+### 基线（2026-11-21 压缩）
+
+CRM 尚未正式发布，历史上有 19 个递增迁移（`0000_baseline` + 18 个 drizzle 自动命名）。
+2026-11-21 一次性压成**一条基线** `migrations/0000_baseline.sql`（从 `src/db/schema.ts`
+全量生成），旧 tag `v0.1.0/v0.1.1` 一并删除。
+
+之后所有变更都在它之上 `npm run db:generate -- --name <语义名>` 追加，**不要改已发布的文件**。
+`npm run check:migrations` 的"不可变"段以**最近一次 tag** 为界：没有 tag 时允许重写整条链。
+
 ### 应用方式
 
 | 环境 | 谁执行 | 命令 |

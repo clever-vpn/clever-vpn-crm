@@ -61,8 +61,18 @@ CREATE TABLE `audit_log` (
 );
 --> statement-breakpoint
 CREATE INDEX `idx_audit_log_at` ON `audit_log` (`at`);--> statement-breakpoint
+CREATE TABLE `cf_api` (
+	`id` integer PRIMARY KEY NOT NULL,
+	`base_url` text DEFAULT '' NOT NULL,
+	`token_enc` text DEFAULT '' NOT NULL,
+	`verified_at` text,
+	`last_error` text,
+	`_updated_at` text DEFAULT '' NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE `customers` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`uuid` text NOT NULL,
 	`email` text NOT NULL,
 	`password_hash` text,
 	`display_name` text,
@@ -74,6 +84,7 @@ CREATE TABLE `customers` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `customers_email_unique` ON `customers` (`email`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_customers_referral_code` ON `customers` (`referral_code`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_customers_uuid` ON `customers` (`uuid`);--> statement-breakpoint
 CREATE TABLE `email_codes` (
 	`email` text PRIMARY KEY NOT NULL,
 	`code_hash` text NOT NULL,
@@ -121,6 +132,7 @@ CREATE TABLE `orders` (
 	`provider_order_no` text,
 	`provider_trade_no` text,
 	`pay_url` text,
+	`iap_key` text,
 	`raw_create` text,
 	`raw_notify` text,
 	`expires_at` text,
@@ -146,6 +158,7 @@ CREATE UNIQUE INDEX `orders_code_unique` ON `orders` (`code`);--> statement-brea
 CREATE UNIQUE INDEX `orders_provider_order_no_unique` ON `orders` (`provider_order_no`);--> statement-breakpoint
 CREATE INDEX `idx_orders_customer` ON `orders` (`customer_id`,`id`);--> statement-breakpoint
 CREATE INDEX `idx_orders_poll` ON `orders` (`status`,`next_poll_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_orders_iap_key` ON `orders` (`iap_key`);--> statement-breakpoint
 CREATE INDEX `idx_orders_status` ON `orders` (`status`,`created_at`);--> statement-breakpoint
 CREATE INDEX `idx_orders_gateway` ON `orders` (`gateway_id`,`status`);--> statement-breakpoint
 CREATE TABLE `payment_gateways` (
@@ -272,12 +285,13 @@ CREATE TABLE `promotions` (
 	`max_uses` integer,
 	`max_uses_per_customer` integer DEFAULT 1 NOT NULL,
 	`cooldown_hours` integer,
-	`plan_id` text,
 	`notify` integer DEFAULT 0 NOT NULL,
 	`badge_label` text,
 	`visible` integer DEFAULT 1 NOT NULL,
 	`referrer_reward_type` text,
 	`referrer_reward_value` real,
+	`referee_reward_type` text,
+	`referee_reward_value` real,
 	`status` text DEFAULT 'draft' NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
@@ -303,6 +317,24 @@ CREATE INDEX `idx_redemptions_promotion` ON `redemptions` (`promotion_id`);--> s
 CREATE INDEX `idx_redemptions_code` ON `redemptions` (`code_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_redemptions_code_customer` ON `redemptions` (`code_id`,`customer_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_redemptions_promo_customer` ON `redemptions` (`promotion_id`,`customer_id`);--> statement-breakpoint
+CREATE TABLE `referral_rewards` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`referral_id` integer NOT NULL,
+	`referrer_id` integer NOT NULL,
+	`role` text DEFAULT 'referrer' NOT NULL,
+	`promotion_id` integer NOT NULL,
+	`rewards_json` text NOT NULL,
+	`promotion_snapshot` text,
+	`state` text DEFAULT 'pending' NOT NULL,
+	`claiming_at` text,
+	`claimed_at` text,
+	`redemption_id` integer,
+	`granted_json` text,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_referral_rewards_referral` ON `referral_rewards` (`referral_id`,`role`);--> statement-breakpoint
+CREATE INDEX `idx_referral_rewards_referrer` ON `referral_rewards` (`referrer_id`);--> statement-breakpoint
 CREATE TABLE `referrals` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`customer_id` integer NOT NULL,
@@ -336,6 +368,71 @@ CREATE TABLE `settings` (
 	`updated_at` text NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE `site_assets` (
+	`id` text PRIMARY KEY NOT NULL,
+	`tenant_id` text NOT NULL,
+	`kind` text DEFAULT 'content' NOT NULL,
+	`name` text DEFAULT '' NOT NULL,
+	`mime` text NOT NULL,
+	`bytes` integer DEFAULT 0 NOT NULL,
+	`sha256` text NOT NULL,
+	`description` text DEFAULT '' NOT NULL,
+	`width` integer DEFAULT 0 NOT NULL,
+	`height` integer DEFAULT 0 NOT NULL,
+	`created_at` text DEFAULT '' NOT NULL,
+	`deleted_at` text
+);
+--> statement-breakpoint
+CREATE TABLE `site_pointer_log` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`tenant_id` text DEFAULT '' NOT NULL,
+	`from_n` integer,
+	`to_n` integer NOT NULL,
+	`reason` text NOT NULL,
+	`created_by` text,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `idx_site_pointer_log_tenant_at` ON `site_pointer_log` (`tenant_id`,`created_at`);--> statement-breakpoint
+CREATE TABLE `site_releases` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`tenant_id` text DEFAULT '' NOT NULL,
+	`seq` integer NOT NULL,
+	`source_sha` text NOT NULL,
+	`artifact_sha` text NOT NULL,
+	`seed_sha` text DEFAULT '' NOT NULL,
+	`files` integer NOT NULL,
+	`bytes` integer NOT NULL,
+	`idem_key` text DEFAULT '' NOT NULL,
+	`created_by` text,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_site_releases_tenant_seq` ON `site_releases` (`tenant_id`,`seq`);--> statement-breakpoint
+CREATE INDEX `idx_site_releases_tenant_source` ON `site_releases` (`tenant_id`,`source_sha`);--> statement-breakpoint
+CREATE TABLE `site_settings` (
+	`id` integer PRIMARY KEY NOT NULL,
+	`values` text DEFAULT '{}' NOT NULL,
+	`collections` text DEFAULT '{}' NOT NULL,
+	`rev` integer DEFAULT 0 NOT NULL,
+	`updated_at` text DEFAULT '' NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `store_channels` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`platform` text NOT NULL,
+	`endpoint` text,
+	`identifier` text NOT NULL,
+	`environment` text DEFAULT 'production' NOT NULL,
+	`secret_enc` text,
+	`status` text DEFAULT 'draft' NOT NULL,
+	`last_ok_at` text,
+	`last_error` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_store_channels_platform` ON `store_channels` (`platform`);--> statement-breakpoint
 CREATE TABLE `subscription_changes` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`at` text NOT NULL,

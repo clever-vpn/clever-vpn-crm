@@ -1,1 +1,0 @@
-ALTER TABLE `promotions` DROP COLUMN `plan_id`;
