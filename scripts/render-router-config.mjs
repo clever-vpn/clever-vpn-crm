@@ -6,7 +6,8 @@
  * `SHARD_<n>`。片数的唯一来源是 `shards_ready`（cf-api 的 `CONFIG_KV`，
  * 建片 workflow 在"shard 部署完 + router 部署完"之后才写它）。
  *
- * 输入：`GET /api/v2/platform/shards` 的原样 JSON（`{ shards_ready, shards: [...] }`）
+ * 输入：`GET /api/v2/platform/shards` 的原样 JSON（`{ shards_ready, capacity, shards: [...] }`）
+ * `--capacity N` 可覆盖（rebalance 流程在写回容量之前用它提前渲染）。
  * 输出：`wrangler.router.jsonc`（gitignore）
  *
  * 为什么不再看 `deployed` 标记：**registry 不存分片状态**（代码版本、存在性都在
@@ -58,6 +59,11 @@ if (!Number.isInteger(ready) || ready < 1) {
 }
 const deployed = Array.from({ length: ready }, (_, i) => i);
 
+// 容量：本轮渲染要用的 `floor(slot / capacity)` 分母。必须与 shard 配置同一次渲染，
+// 否则 router 和 shard 会各用一套容量。
+const capRaw = Number(arg("capacity", data.capacity ?? 1000));
+const capacity = Number.isInteger(capRaw) && capRaw >= 1 ? capRaw : 1000;
+
 const config = {
   name: "clever-vpn-crm-router",
   // ⚠️ `main` 相对**配置文件**所在目录（这里是仓库根），不是相对本脚本：
@@ -71,7 +77,7 @@ const config = {
   d1_databases: [
     { binding: "REGISTRY", database_name: "clever-vpn-registry-d1", database_id: registryD1 },
   ],
-  vars: { ADMIN_ZONE: crmRoot },
+  vars: { ADMIN_ZONE: crmRoot, CAPACITY: String(capacity) },
   // 两条 route 缺一不可：
   //   · `*.CRM_ROOT/*` 是平台子域（租户后台域）——**曾经漏掉，部署即把整片租户后台解绑**；
   //   · `origin-crm.*` 是 CRM 自定义域的回源（originless 记录 + route）。
@@ -90,4 +96,4 @@ writeFileSync(
   `// ⚠️ 自动生成，不要提交。来源：cf-api 的 GET /platform/shards（shards_ready）\n${JSON.stringify(config, null, 2)}\n`,
 );
 
-console.error(`✔ router：绑定 ${deployed.length} 个分片（${deployed.join(", ")}）`);
+console.error(`✔ router：绑定 ${deployed.length} 个分片（${deployed.join(", ")}），capacity=${capacity}`);

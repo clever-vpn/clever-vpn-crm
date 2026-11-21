@@ -98,6 +98,10 @@ export default {
           // 410 而不是 404：域名解析得到、只是这个租户被停用，说清楚好排障
           return new Response("站点已暂停", { status: 410 });
         }
+        if (error.code === "db_mismatch") {
+          // 503：这个 DB_<slot> 绑错库了，运维跑 reconcile 重绑即可，重试无意义
+          return json({ error: "db_binding_mismatch", message: error.message }, 503);
+        }
         return json(
           { error: error.code, message: error.message },
           error.code === "unknown_host" ? 404 : 500,
@@ -142,6 +146,17 @@ export default {
         console.error(`[schema] slot=${scoped.slot} ${code}: ${message}`);
         return json({ error: code, message }, 503);
       }
+    }
+
+    /**
+     * **建表触发点**：cf-api 开通租户时发一个普通请求过来（经 `ROUTER` service binding），
+     * 门禁在上面已经跑完 ⇒ 空库到这里已经有表了。返回体只用于确认成功。
+     *
+     * 为什么是公开端点：它只对"当前 Host 解析到的那个库"做一次迁移检查，迁移完成后
+     * 由 per-slot memo 兜住（热路径零 I/O），和首页一样便宜。
+     */
+    if (url.pathname === "/__schema/ready") {
+      return json({ ok: true, mode: modeOf(rawEnv), slot: scoped.slot });
     }
 
     // 退订（邮件里点过来的链接）——不走 App CORS/会话，也不需要登录

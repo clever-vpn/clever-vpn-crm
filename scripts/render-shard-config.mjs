@@ -72,6 +72,9 @@ const d1Bindings = manifest.bindings.map((b) => ({
 const vars = {
   MODE: "multi",
   SHARD: String(manifest.shard),
+  // shard 用它把 `{slug}.<CRM_ROOT>` 解析成 `slug:<slug>`（与 router 同一口径）：
+  // 平台子域不写 `host:`，只写 `slug:`，shard 侧必须能兜底，否则新租户 404。
+  ADMIN_ZONE: process.env.CRM_ROOT ?? "",
   CF_API_BASE: process.env.CF_API_BASE ?? "https://api.clever-vpn.org",
   CRM_CODE_VERSION: process.env.CRM_CODE_VERSION ?? "dev",
   CRM_CONTRACT_VERSION: process.env.CRM_CONTRACT_VERSION ?? "19",

@@ -11,27 +11,48 @@
 
 export type Mode = "single" | "multi";
 
-/** KV 里 `host:*` 的值（契约 §2.1） */
+/** KV 里 `host:*` / `slug:*` 的值（契约 §2.1） */
 export interface HostMap {
   tenant_id: string;
   slot: number;
-  shard?: number;
   status?: "active" | "suspended";
+  /**
+   * 期望的 D1 uuid。**运行期自检**用：拿它和库内 `d1_identity` 比对，
+   * 不一致说明这个 `DB_<slot>` 绑到了别的库（或库被重建后绑定没跟上）⇒ 503。
+   * 缺省时不校验（兼容还没回填的旧记录），只告警。
+   */
+  d1_uuid?: string;
 }
 
 /** 多租户绑定：由 shard 的 wrangler 配置程序化生成（`DB_0`…`DB_1999`） */
-type MultiEnv = { HOSTS?: KVNamespace } & Record<string, unknown>;
+type MultiEnv = { HOSTS?: KVNamespace; ADMIN_ZONE?: string } & Record<string, unknown>;
 
 const HOST_TTL_MS = 60_000;
 const memo = new Map<string, { value: HostMap | null; expires: number }>();
+
+/** 每个 slot 的身份校验结论：成功 5 min、失败 60 s（失败要尽快再试） */
+const identityMemo = new Map<number, { ok: boolean; at: number; actual: string | null }>();
+const identityInflight = new Map<number, Promise<void>>();
+const IDENTITY_OK_TTL = 5 * 60_000;
+const IDENTITY_BAD_TTL = 60_000;
+
+/** 只认一级 `<slug>.<ADMIN_ZONE>`（与 router 同一口径） */
+const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+
+export function platformSlug(host: string, zone: string | undefined): string | null {
+  const z = String(zone ?? "").trim().toLowerCase();
+  if (!z || !host.endsWith(`.${z}`)) return null;
+  const label = host.slice(0, host.length - z.length - 1);
+  if (!label || label.includes(".")) return null;
+  return SLUG_RE.test(label) ? label : null;
+}
 
 export function modeOf(env: { MODE?: string }): Mode {
   return env.MODE === "multi" ? "multi" : "single";
 }
 
 /** isolate 内缓存：KV 里的值几乎不变，60 s 足够（契约 §3） */
-async function hostMapOf(kv: KVNamespace, host: string): Promise<HostMap | null> {
-  const key = `host:${host}`;
+async function mapOf(kv: KVNamespace, key: string): Promise<HostMap | null> {
   const hit = memo.get(key);
   const now = Date.now();
   if (hit && hit.expires > now) return hit.value;
@@ -53,7 +74,12 @@ export interface Scoped {
 
 export class TenantResolveError extends Error {
   constructor(
-    readonly code: "unknown_host" | "not_configured" | "missing_db" | "suspended",
+    readonly code:
+    | "unknown_host"
+    | "not_configured"
+    | "missing_db"
+    | "suspended"
+    | "db_mismatch",
     message: string,
   ) {
     super(message);
@@ -68,6 +94,67 @@ export class TenantResolveError extends Error {
  * `TenantResolveError`，由入口翻译成明确的 5xx/4xx —— **绝不回落到默认租户**
  * （contracts/cf-api-hosting.md §8）。
  */
+/**
+ * 库身份自检 —— **一个 slot 每 isolate 只查一次**（成功 5 min / 失败 60 s）。
+ *
+ * 为什么必须做：Worker 运行时拿不到 `DB_<slot>` 的 uuid，只能读库内
+ * `d1_identity`（cf-api 建库时写的）。比对不一致 ⇒ 说明绑定指错了库：
+ * 宁可 503，也不能静默读到别人的数据。
+ */
+async function ensureDbIdentity(db: D1Database, slot: number, expected: string): Promise<void> {
+  const now = Date.now();
+  const hit = identityMemo.get(slot);
+  if (hit && now - hit.at < (hit.ok ? IDENTITY_OK_TTL : IDENTITY_BAD_TTL)) {
+    if (!hit.ok) {
+      throw new TenantResolveError(
+        "db_mismatch",
+        `DB_${slot} 绑定的库不是它该服务的那个（期望 ${expected}，实际 ${hit.actual ?? "未知"}）`,
+      );
+    }
+    return;
+  }
+
+  const running = identityInflight.get(slot);
+  if (running) {
+    await running;
+    const again = identityMemo.get(slot);
+    if (again && !again.ok) {
+      throw new TenantResolveError(
+        "db_mismatch",
+        `DB_${slot} 绑定的库不是它该服务的那个（期望 ${expected}，实际 ${again.actual ?? "未知"}）`,
+      );
+    }
+    return;
+  }
+
+  const task = (async () => {
+    let actual: string | null = null;
+    try {
+      const row = await db.prepare("SELECT d1_uuid FROM d1_identity LIMIT 1").first<{ d1_uuid: string }>();
+      actual = row?.d1_uuid ?? null;
+    } catch {
+      // 表不存在（还没写身份）也按不一致处理：strict 模式
+      actual = null;
+    }
+    const ok = actual === expected;
+    identityMemo.set(slot, { ok, at: Date.now(), actual });
+    if (!ok) {
+      console.error(
+        `[tenant] 库身份不一致 slot=${slot} expected=${expected} actual=${actual ?? "(none)"}`,
+      );
+    }
+  })().finally(() => identityInflight.delete(slot));
+
+  identityInflight.set(slot, task);
+  await task;
+  if (!identityMemo.get(slot)?.ok) {
+    throw new TenantResolveError(
+      "db_mismatch",
+      `DB_${slot} 绑定的库不是它该服务的那个（期望 ${expected}，实际 ${identityMemo.get(slot)?.actual ?? "未知"}）`,
+    );
+  }
+}
+
 export async function scopeToTenant(
   request: Request,
   env: MultiEnv & { DB?: D1Database; MODE?: string; CRM_TENANT_ID?: string },
@@ -92,7 +179,13 @@ export async function scopeToTenant(
   }
 
   const host = new URL(request.url).hostname.toLowerCase();
-  const map = await hostMapOf(env.HOSTS, host);
+  // 与 router 同一口径：先查 `host:`，miss 再按平台子域取 `slug:`。
+  // 平台子域**不写 `host:`**（cf-api 只写 `slug:`），没有这条兜底新租户会 404。
+  let map = await mapOf(env.HOSTS, `host:${host}`);
+  if (!map) {
+    const slug = platformSlug(host, env.ADMIN_ZONE);
+    if (slug) map = await mapOf(env.HOSTS, `slug:${slug}`);
+  }
   if (!map) {
     throw new TenantResolveError("unknown_host", `未知域名：${host}`);
   }
@@ -108,6 +201,9 @@ export async function scopeToTenant(
       `绑定缺失：host 解析到 slot=${map.slot}，但没有 env.DB_${map.slot}`,
     );
   }
+
+  // 绑定自检：这个 DB_<slot> 真的指向 slot 该有的那个库吗？
+  if (map.d1_uuid) await ensureDbIdentity(db, map.slot, map.d1_uuid);
 
   // 不用 `{...env}`：一个 shard 的绑定可能有上千条（DB_0…DB_N + secret + KV），
   // 每个请求复制一遍是纯浪费。用原型链把 DB 盖在上面，其余绑定原样穿透。
@@ -165,6 +261,8 @@ export function ensureConfig(env: Record<string, unknown>): ConfigCheck {
 /** 仅供测试：清掉 isolate 缓存 */
 export function __clearScopeCache(): void {
   memo.clear();
+  identityMemo.clear();
+  identityInflight.clear();
 }
 
 /** 仅供测试：重置自检的一次性标记 */
