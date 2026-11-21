@@ -9,12 +9,13 @@
  * 输出（一个文件，gitignore）：
  *   wrangler.shard.jsonc  —— 给 `wrangler deploy --config`
  *
- * ⚠️ 不再产出 `settings.json`（曾用于部署后 `PATCH …/settings` 刷新绑定），原因：
- * Workers 里 **`vars` 就是 `plain_text` 类型的 binding**，而 PATCH settings 的
- * `bindings` 是**整体替换** —— 只提交 KV+D1，会把 MODE / SHARD 等 vars 全部删掉，
- * 于是 worker 退回 `MODE=single` 且没有 `DB`，第一次请求就 500。实测踩过。
- * 刷新绑定改用"拿最新清单再 `wrangler deploy` 一次"：同一条代码路径、保留 secrets、
- * 也保留 vars。
+ * 本脚本**只给 CI 发代码用**：配置里的 `d1_databases` 是"部署那一刻清单里的全部
+ * 位号"。绑定落地不再靠它 —— cf-api 用 `PATCH …/settings` 写（见 cf-api 的
+ * `modules/shards/bindings.ts`），写完回读核对，CI 这边只调用 reconcile。
+ *
+ * ⚠️ 为什么 CI 的配置仍然必须带全量绑定：`wrangler deploy` 是**整份替换**，配置里
+ * 不写就会把绑定删掉。历史上曾用部署后 `PATCH …/settings` 刷新绑定，但那份 payload
+ * 只写了 KV+D1，把 `vars`（= plain_text binding）和 `assets` 一起抹掉了 —— 实测踩过。
  *
  * 用法（由 `.github/workflows/deploy-saas.yml` 调用）：
  *   node scripts/render-shard-config.mjs --manifest manifest.json

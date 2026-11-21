@@ -1,0 +1,169 @@
+# 建下一片 —— 只有当 cf-api 说"已建好的片连池子都填不满"时才动。
+#
+# 频率：每天一次 + 手工。**没有按位号触发的调用**（GitHub 的调用次数要省着用）。
+# 正常情况下这个 workflow 10 秒内退出。
+#
+# 顺序（缺一不可）：
+#   1. 部署 shard-N（空配置，没有 D1 绑定）
+#   2. 部署 router（`--ready N+1`，把 SHARD_N 接上）
+#   3. 告诉 cf-api `shards_ready = N+1` —— 这之后 cf-api 才允许往新片补池
+#   4. 用最新 release tag 给新片补第一批池（cf-api 会顺带把绑定 PATCH 上去）
+#
+# 为什么 router 要在 ready 之前：cf-api 只往"已就绪"的片里补池；如果先 ready
+# 再部署 router，中间会有"位号可分配但 router 不认识这个片"的 503 窗口。
+name: ensure-shard
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "审计备注"
+        required: false
+        default: "manual"
+        type: string
+  schedule:
+    # 每天 04:17 UTC 检查一次容量（2000 租户/片，极低频）
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CF_API_BASE: https://api.clever-vpn.org
+
+jobs:
+  ensure:
+    name: ensure capacity
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ensure-shard
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Load secrets from Bitwarden (SM)
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_SERVICE_TOKEN }} > SERVICE_TOKEN
+            ${{ vars.BW_SECRET_ID_CLOUDFLARE_API_TOKEN }} > CLOUDFLARE_API_TOKEN
+
+      # 新片没有 secret ⇒ 加解密/HMAC 全不可用。这一步必须跟 deployment 同一个 job。
+      - name: Load APP_SECRET from Bitwarden (SM)
+        if: vars.BW_SECRET_ID_APP_SECRET != ''
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_APP_SECRET }} > APP_SECRET
+
+      - name: Check capacity
+        id: decide
+        run: |
+          set -euo pipefail
+          resp=$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards")
+          echo "$resp" | jq -c '{shards_ready, capacity_left, pool_target, needs_shard, reason}'
+          echo "$resp" > summary.json
+          echo "ready=$(jq -r '.shards_ready' <<<"$resp")" >> "$GITHUB_OUTPUT"
+          echo "needed=$(jq -r '.needs_shard' <<<"$resp")" >> "$GITHUB_OUTPUT"
+
+      - name: Nothing to do
+        if: steps.decide.outputs.needed != 'true'
+        run: echo "✔ 容量足够，不建新片"
+
+      # ---- 1. 部署 shard-N（空配置：还没有任何位号）----
+      - name: Fetch empty manifest for the new shard
+        if: steps.decide.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards/${{ steps.decide.outputs.ready }}/manifest" > manifest.json
+          jq -r '"\(.worker)：绑定 \(.bindings|length) 条（新片，应为 0）"' manifest.json
+
+      - name: Render wrangler.shard.jsonc
+        if: steps.decide.outputs.needed == 'true'
+        env:
+          HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+          SITE_URL: ${{ vars.SITE_URL }}
+          ALLOW_MOCK_PAYMENTS: ${{ vars.ALLOW_MOCK_PAYMENTS }}
+        run: node scripts/render-shard-config.mjs --manifest manifest.json
+
+      - run: npm ci
+        if: steps.decide.outputs.needed == 'true'
+
+      - run: npm run build:web
+        if: steps.decide.outputs.needed == 'true'
+
+      - run: npm run db:embed:check
+        if: steps.decide.outputs.needed == 'true'
+
+      - name: Deploy new shard
+        if: steps.decide.outputs.needed == 'true'
+        run: npx wrangler deploy --config wrangler.shard.jsonc
+
+      - name: Sync APP_SECRET to new shard
+        if: steps.decide.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_SECRET:-}" ]]; then
+            echo "::warning::APP_SECRET 未配置 —— 新片上的签名与加密都不可用"
+            exit 0
+          fi
+          printf '%s' "$APP_SECRET" | npx wrangler secret put APP_SECRET --config wrangler.shard.jsonc
+          echo "✔ APP_SECRET 已写入（值不打印）"
+
+      # ---- 2. 部署 router（比 cf-api 先知道新片）----
+      - name: Render wrangler.router.jsonc
+        if: steps.decide.outputs.needed == 'true'
+        env:
+          HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+          REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
+          CRM_ROOT: ${{ vars.CRM_ROOT }}
+          BASE_DOMAIN: ${{ vars.SAAS_BASE_DOMAIN || 'clever-vpn.org' }}
+        run: |
+          set -euo pipefail
+          next=$(( ${{ steps.decide.outputs.ready }} + 1 ))
+          node scripts/render-router-config.mjs --input summary.json --ready "$next"
+
+      - name: Deploy router
+        if: steps.decide.outputs.needed == 'true'
+        run: npx wrangler deploy --config wrangler.router.jsonc
+
+      # ---- 3. 登记新片 ----
+      - name: Mark shard ready
+        if: steps.decide.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          next=$(( ${{ steps.decide.outputs.ready }} + 1 ))
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"count\":$next}" \
+            "$CF_API_BASE/api/v2/platform/shards/ready" | jq -c .
+
+      # ---- 4. 给新片补第一批池（带上 release tag，cf-api 据此跑迁移）----
+      - name: Seed pool on the new shard
+        if: steps.decide.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [[ -z "$tag" ]]; then
+            echo "::warning::取不到 latest release tag，跳过首批补池（下次开通会自动补）"
+            exit 0
+          fi
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"version\":\"$tag\"}" \
+            "$CF_API_BASE/api/v2/platform/shards/${{ steps.decide.outputs.ready }}/pool" | jq -c .

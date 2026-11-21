@@ -1,7 +1,9 @@
 # 部署 **SaaS router** —— 租户后台域的入口（`{slug}.{CRM_ROOT}` / `crm.brand.com`）
 #
-# 它只做 Host → KV → 转发到对应 shard 的 service binding。片数变化时必须重新跑本
-# workflow（service binding 是部署期静态的）。
+# 它只做 Host → KV → 转发到对应 shard 的 service binding。service binding 是部署期
+# 静态的，所以片数变化时必须重新部署它 —— 但**不需要手动跑**：建片 workflow
+# （ensure-shard）和发布 workflow（deploy-saas-shard）都会跟发 router。
+# 这里保留只是为了"只想改路由/域名"时手工重发一次；每周 cron 是兜底。
 #
 # 契约：clever-vpn-docs/docs/contracts/cf-api-hosting.md §1.1 / §2
 name: deploy-saas-router

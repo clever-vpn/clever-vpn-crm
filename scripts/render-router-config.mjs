@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 /**
- * 用 cf-api 的分片列表渲染 **router** 的部署配置。
+ * 用 cf-api 的水位概览渲染 **router** 的部署配置。
  *
  * service binding 是部署期静态的 ⇒ 片数变了必须重新部署 router 才会多一条
- * `SHARD_<n>`。清单来源与 shard 部署同一个端点（`GET /platform/shards`），
- * 两份规则不存在。
+ * `SHARD_<n>`。片数的唯一来源是 `shards_ready`（cf-api 的 `CONFIG_KV`，
+ * 建片 workflow 在"shard 部署完 + router 部署完"之后才写它）。
  *
- * 输入：`GET /api/v2/platform/shards` 的原样 JSON（`shards[].deployed` 为真才绑）
+ * 输入：`GET /api/v2/platform/shards` 的原样 JSON（`{ shards_ready, shards: [...] }`）
  * 输出：`wrangler.router.jsonc`（gitignore）
+ *
+ * 为什么不再看 `deployed` 标记：**registry 不存分片状态**（代码版本、存在性都在
+ * Cloudflare）。`shards_ready = N` 的语义就是"shard-0 .. shard-(N-1) 都已经建好
+ * 并且接进了 router"，照着绑就行。
  *
  * 必需环境变量：
  *   HOSTS_KV_ID     与 site-serve / shard 共用同一个 KV 命名空间
@@ -45,8 +49,14 @@ if (!crmRoot) {
   process.exit(1);
 }
 
-// 只绑「已部署」的片：没部署过的片绑上去，请求会被打到不存在的 service
-const deployed = shards.filter((s) => s.deployed).map((s) => s.shard).sort((a, b) => a - b);
+// 片数只认 `shards_ready`；`--ready N` 给建片流程用（router 要比 cf-api 先知道新片）
+const override = Number(arg("ready", 0));
+const ready = Math.max(Number(data.shards_ready ?? 0), Number.isFinite(override) ? override : 0);
+if (!Number.isInteger(ready) || ready < 1) {
+  console.error(`✘ shards_ready 必须 ≥1（收到 ${JSON.stringify(data.shards_ready)}）`);
+  process.exit(1);
+}
+const deployed = Array.from({ length: ready }, (_, i) => i);
 
 const config = {
   name: "clever-vpn-crm-router",
@@ -77,10 +87,7 @@ const config = {
 
 writeFileSync(
   "wrangler.router.jsonc",
-  `// ⚠️ 自动生成，不要提交。来源：cf-api 的 GET /platform/shards\n${JSON.stringify(config, null, 2)}\n`,
+  `// ⚠️ 自动生成，不要提交。来源：cf-api 的 GET /platform/shards（shards_ready）\n${JSON.stringify(config, null, 2)}\n`,
 );
 
-console.error(`✔ router：绑定 ${deployed.length} 个分片（${deployed.join(", ") || "无"}）`);
-if (deployed.length === 0) {
-  console.error("⚠️ 一个片都没有 ⇒ router 会把所有后台域返回 404（先部署 shard-0）");
-}
+console.error(`✔ router：绑定 ${deployed.length} 个分片（${deployed.join(", ")}）`);
