@@ -144,8 +144,9 @@ async function checkAndMigrate(db: D1Database, slot: number): Promise<void> {
 /**
  * 应用一个文件：**DDL + 台账 INSERT 同一次 `batch`**。
  *
- * `batch` 是 D1 唯一的事务边界（见文件头规则 2）。因此失败时整文件回滚、台账不变，
- * 重试从同一个文件再来 —— 不存在"记了账却没跑完"或"跑了一半"的中间态。
+ * 这是 Worker 侧唯一能把「多语句 + 带参数的台账 INSERT」放进同一个事务的原语
+ * （见文件头规则 2）。因此失败时整文件回滚、台账不变，重试从同一个文件再来 ——
+ * 不存在"记了账却没跑完"或"跑了一半"的中间态。
  */
 async function applyFile(db: D1Database, file: EmbeddedMigrationFile): Promise<void> {
   const statements = [
@@ -176,8 +177,8 @@ async function applyFile(db: D1Database, file: EmbeddedMigrationFile): Promise<v
 /**
  * 读台账里的文件名集合；表还不存在就建空台账并返回空集。
  *
- * 空库有两种正常来源：池里刚建出来的库、按计划清空重开的库（见 worklog
- * `2026-11-21-crm-lazy-migrations`）。两者都该"从第一个文件开始跑"，不是错误。
+ * 空库有两种正常来源：池里刚建出来的库、按计划清空重开的库（压基线之前留下的旧台账
+ * 一律重开，不写兼容补丁）。两者都该"从第一个文件开始跑"，不是错误。
  */
 async function ledgerNames(db: D1Database): Promise<Set<string>> {
   const exists = await db
