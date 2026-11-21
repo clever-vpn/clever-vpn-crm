@@ -24,11 +24,13 @@ npm run db:generate     # drizzle-kit generate → migrations/（生产链）
 npm run db:reset        # 重建 dev 链 + 重置本地库 + 应用（开发日常用这个）
 npm run db:migrate:local  # 应用 dev 链（不清库）
 npm run check:migrations  # 迁移链自检（结构 / 不可变 / 漂移）
+npm run db:embed        # 把 migrations/ 内嵌进 Worker（分片门禁的期望值）
+npm run db:embed:check  # 只校验生成文件是否最新（CI 跑这个，不写文件）
 ```
 
 | 目录 | 用途 | 入库 | 谁生成 / 谁应用 |
 |---|---|---|---|
-| `migrations/` | **生产链**：追加式、不可变的历史 | ✅ | `drizzle-kit generate` → CI 应用 |
+| `migrations/` | **生产链**：追加式、不可变的历史 | ✅ | `drizzle-kit generate` → 应用方见下方「应用方式」（自部署=CI，分片=shard 门禁） |
 | `migrations-dev/` | **开发链**：全量 schema + dev 种子 | ❌（gitignore） | `scripts/reset-db.sh` 每次重建 |
 
 两套是**同一份 schema**的两种形态：生产链是"从零到今的每一步"，开发链是"现在长什么样"。
@@ -51,13 +53,17 @@ CRM 尚未正式发布，历史上有 19 个递增迁移（`0000_baseline` + 18 
 
 ### 应用方式
 
-| 环境 | 谁执行 | 命令 |
+| 环境 | 谁执行 | 怎么做 |
 |---|---|---|
 | 本地开发 | 你 | `npm run db:reset`（或 `db:migrate:local`） |
-| 线上/自托管 | **GitHub Actions** | deploy.yml 里的「应用数据库迁移」步骤：`wrangler d1 migrations apply DB --remote`，**在 `wrangler deploy` 之前** |
+| 自部署（`MODE=single`） | **GitHub Actions** | deploy.yml 里的「应用数据库迁移」步骤：`wrangler d1 migrations apply DB --remote`，**在 `wrangler deploy` 之前**。整个库只有一个 + 部署唯一路径是 CI ⇒ 失败要在 CI 里红叉，而不是等用户访问时 500 |
+| 托管分片（`MODE=multi`） | **CRM shard 自己** | `src/db/schema-guard.ts`：租户**第一次请求**时按需补齐（一个文件一个 `batch`，DDL 与台账同批）；库比代码新 ⇒ 503 `schema_ahead` |
 
-Worker 自己**不再执行任何 DDL**（`src/db.ts` 只做一次只读探测：核心表不存在就报错，
-提示去跑迁移）。理由：部署唯一路径是 CI，迁移失败要在 CI 里红叉，而不是等用户访问时 500。
+两种模式的分工是**有意的**：自部署一个库、一次部署；托管一片几百上千个库，逐库扫既慢
+又与发布耦合。谁持有这个库的绑定，谁就在它被访问时执行 —— 这是同一条理由的两面。
+
+`src/db.ts` 只剩一次**只读探测**（核心表不存在就报错提示去跑迁移），它是兜底，不是
+迁移判据：判据只有一处，即租户库的 `d1_migrations` 台账 + 内嵌 bundle 的文件名集合。
 
 ### dev 种子
 
@@ -154,19 +160,38 @@ release tag 为基线强制这一点），只能新增下一条。
 
 ## 4. 升级路径（重要）
 
-- **全新库**：`wrangler d1 migrations apply` 会按顺序跑完所有迁移。
-- **已存在的老库**（`d1_migrations` 为空但表已存在）：`0000_baseline.sql` 会重复建表失败。
-  处置方式（一次性）：
+三种库，三种处置。**没有"自动猜历史"这条路。**
 
-  ```bash
-  # 以远程库为例；本地库去掉 --remote
-  npx wrangler d1 execute clever-vpn-crm --remote --command \
-    "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL);
-     INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0000_baseline.sql');"
-  ```
+### 4.1 托管分片（`MODE=multi`）
+
+| 库的状态 | 门禁的判断 | 处置 |
+|---|---|---|
+| 空库（池里新建 / 清空重开后） | 台账不存在 ⇒ 视为空集 | 第一次请求里 `batch` 跑完整条链 |
+| 台账 = 这条链的前缀 | 缺几个文件 | 一个文件一个 `batch` 补齐；已记账的不动 |
+| 台账里有代码不认识的名字 | **库比代码新** | **503 `schema_ahead`**，不服务、不撞表 |
+
+> 压基线（2026-11-21）**之前**建过的库，台账是旧的 19 条 —— 按集合判据就是"领先"，
+> 会被拒绝服务。CRM 尚未发布，这些库一律**清空重开**（回收 / 重新开通 / 删库重建），
+> **不写兼容补丁**：猜"那 19 条大概是哪些文件"等于给每个库写一段一次性历史，猜错的
+> 代价是数据，而不是一个报错。
+
+### 4.2 自部署（`MODE=single`）
+
+- **全新库**：`wrangler d1 migrations apply` 按顺序跑完所有迁移。
+- **表已存在但台账为空的老库**：`0000_baseline.sql` 会重复建表失败。一次性处置：
+
+```bash
+# 以远程库为例；本地库去掉 --remote
+npx wrangler d1 execute clever-vpn-crm --remote --command \
+  "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL);
+   INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0000_baseline.sql');"
+```
 
   之后正常 `migrations apply`，只会跑增量。
-- **本地库**：直接 `npm run db:reset`（删 `.wrangler/state/v3/d1` 重建），不需要上面的手工步骤。
+
+### 4.3 本地库
+
+直接 `npm run db:reset`（删 `.wrangler/state/v3/d1` 重建），不需要上面的手工步骤。
 
 ## 5. 已知取舍
 

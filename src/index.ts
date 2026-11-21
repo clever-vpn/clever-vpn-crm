@@ -14,6 +14,7 @@
  */
 
 import { ensureSchema } from "./db";
+import { SchemaGateError, ensureTenantSchema } from "./db/schema-guard";
 import { isSpaDeepLink, panelRoute } from "./panel-route";
 import type { Env } from "./env";
 import { handleAppApi } from "./app/router";
@@ -114,6 +115,33 @@ export default {
         tenant: scoped.tenantId || null,
         config: { ok: config.ok, problems: config.problems, dbs: config.dbs },
       });
+    }
+
+    /**
+     * **多租户的 schema 门禁**：迁移在 CRM shard 里按需执行（`src/db/schema-guard.ts`）。
+     *
+     * 为什么在这里：分片里每个租户一个库，唯一知道"这个库该是什么 schema"的，就是
+     * 正在服务它的这份代码。cf-api 只在**建库/重置**时执行租户 SQL（Phase 2 再搬），
+     * 而"升级"跟着请求走：该租户第一次被访问时补齐，之后 5 分钟零 I/O。
+     *
+     * 为什么在 `/__version` **之后**：库比代码新的时候，`/__version` 正是排障要先看的
+     * 端点（代码版本 / 契约版本 / 配置自检），不能连它一起挡掉。
+     *
+     * 为什么 single 跳过：自部署由 CI 在部署前 `wrangler d1 migrations apply --remote`
+     * 完成，行为与之前完全一致。
+     *
+     * 失败一律 503：`schema_ahead`（库比代码新，等新代码）/ `schema_migration_failed`
+     * （补迁移失败，批次已回滚、台账未记，下次请求重试）。两者都不是客户端能修的。
+     */
+    if (modeOf(rawEnv) === "multi") {
+      try {
+        await ensureTenantSchema(scoped.env.DB, scoped.slot);
+      } catch (error) {
+        const code = error instanceof SchemaGateError ? error.code : "schema_migration_failed";
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[schema] slot=${scoped.slot} ${code}: ${message}`);
+        return json({ error: code, message }, 503);
+      }
     }
 
     // 退订（邮件里点过来的链接）——不走 App CORS/会话，也不需要登录
