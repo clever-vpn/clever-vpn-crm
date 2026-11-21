@@ -1,58 +1,45 @@
-# 部署 **SaaS 分片（shard-N）** —— 代码走 CI，绑定走 cf-api
+# 部署 **SaaS 分片（shard-N）** —— 只负责**代码**；绑定由 cf-api 自己写。
 #
-# 命名约定：`deploy-saas-<用途>.yml`。带 `saas` 的前提是"只有托管模式才用"，
-# 因为同一份代码在单租户自部署里走的是 `deploy.yml`（租户 fork 自己跑）。
-#   deploy-saas-shard.yml   本文件：shard-N
-#   deploy-saas-site.yml    site-serve（站点出口，零 D1）
-#   deploy-saas-router.yml  router（*.根域名 → shard，service binding）
+# 一次发布 = 对每个已建好的片做四件事：
+#   stale（清 bound_at，部署期间这些位号暂不可分配）
+#   → 取清单 → 部署代码（含当时清单里的全部 DB_<slot>）
+#   → reconcile（cf-api 用 PATCH settings 把绑定拉回一致并回读核对，写完恢复 bound_at）
 #
-# 契约：clever-vpn-docs/docs/contracts/cf-api-hosting.md §4.5
+# 为什么不再 pause/resume、不再双重部署：绑定不再由这里负责落地。CI 的整份 deploy
+# 仍然是"全量替换"，所以它照样要带上清单；但任何偏差都由 reconcile 在几秒内修好，
+# 不需要冻结开通，也不需要再部署一次。
 #
-# 为什么是这个形状：
-#   1. `wrangler deploy` 是**连绑定一起提交**的。若 CI 取完清单再部署，期间 cf-api
-#      又 PATCH 加了一条 DB_<slot>，旧清单会把那条绑定抹掉 = 静默解绑、该租户立刻
-#      500。所以 deploy 前后各取一次清单，最后以 registry 为准再 PATCH 一次。
-#   2. 部署期间**暂停开通**（pause），只挡开通/补池，不挡服务。
-#   3. `resume` 必须 `if: always()`，否则部署失败就把开通永久锁在外面；暂停本身还有
-#      90 分钟自动过期兜底（workflow 被取消时唯一的救援）。
-#   4. 要发哪些片**由 cf-api 判定**（GET /platform/shards 的 next_shard），本文件不
-#      算水位 —— 两处规则必然漂移。
+# 契约：clever-vpn-docs/docs/contracts/services/cf-api/hosting.md §4.5
 name: deploy-saas-shard
 
 on:
   workflow_dispatch:
     inputs:
-      shard:
-        description: "要部署的分片号（留空 = 让 cf-api 判断该发哪些片）"
-        required: false
-        default: ""
-        type: string
       reason:
-        description: "审计备注（会写进 registry 的 pause_reason）"
+        description: "审计备注"
         required: false
         default: "manual"
         type: string
-
-  schedule:
-    # 每天 04:17 UTC 检查一次是否要加新片（2000 租户/片，低频）
-    - cron: "17 4 * * *"
+      shard:
+        description: "只发这一片（留空 = 全部已建好的片）"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
 
 env:
   CF_API_BASE: https://api.clever-vpn.org
-  # 分片脚本名与库名的推导在 cf-api 侧（manifest.worker / bindings），这里不重复
 
 jobs:
-  # ---- 1. 问 cf-api：该发哪些片 ----
+  # ---- 1. 问 cf-api：现在有哪些片 ----
   plan:
     name: plan
     runs-on: ubuntu-latest
     outputs:
-      has_work: ${{ steps.decide.outputs.has_work }}
       matrix: ${{ steps.decide.outputs.matrix }}
-      reason: ${{ steps.decide.outputs.reason }}
+      has_work: ${{ steps.decide.outputs.has_work }}
     steps:
       - name: Load SERVICE_TOKEN from Bitwarden (SM)
         uses: bitwarden/sm-action@v3.0.0
@@ -61,85 +48,30 @@ jobs:
           secrets: |
             ${{ vars.BW_SECRET_ID_SERVICE_TOKEN }} > SERVICE_TOKEN
 
-      - name: Ask cf-api which shards to deploy
+      - name: Fetch shard summary
         id: decide
         env:
           SHARD_INPUT: ${{ inputs.shard }}
-          # 补池要读 latest release 的 tag：`gh` 没有 token 会 401（实测）
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [[ -z "${SERVICE_TOKEN:-}" ]]; then
-            echo "::error::SERVICE_TOKEN 为空（检查 BW_SECRET_ID_SERVICE_TOKEN）"
-            exit 1
-          fi
-
           resp=$(curl -sS --fail-with-body \
             -H "Authorization: Bearer $SERVICE_TOKEN" \
             "$CF_API_BASE/api/v2/platform/shards")
-          echo "cf-api: $resp"
+          echo "$resp" | jq -c '{shards_ready, needs_shard, capacity_left, shards: [.shards[] | {shard, assigned, pooled}]}'
 
-          if [[ -n "$SHARD_INPUT" ]]; then
-            # 人工指定：不猜，直接发这一片
+          if [[ -n "${SHARD_INPUT:-}" ]]; then
             list=$(jq -c --arg s "$SHARD_INPUT" '[{shard: ($s|tonumber)}]' <<<"$resp")
-            echo "reason=manual: $SHARD_INPUT" >> "$GITHUB_OUTPUT"
           else
-            # 自动模式：下一片（容量水位到了）+ 任何"有绑定却没版本记录"的片
-            list=$(jq -c '
-              ([.next_shard] | map(select(. != null)))
-              + ([.shards[] | select(.deployed == false) | .shard])
-              | unique | map({shard: .})
-            ' <<<"$resp")
-            jq -r '.reason' <<<"$resp" > /tmp/reason.txt
-            echo "reason=$(cat /tmp/reason.txt)" >> "$GITHUB_OUTPUT"
+            # 一次发布要让**所有已建好的片**都跑到同一版代码
+            list=$(jq -c '[.shards[] | {shard}]' <<<"$resp")
           fi
-
-          # ---- 自动补池：池子低于目标就补；新片（next_shard）先补再发 ----
-          # 关闭 Panel 会把位号**原地重置**回池（cf-api 侧），所以正常 churn 不耗池；
-          # 这里管的是"池子被吃空 / 新片刚建出来"这两种情况。
-          # **必须在任何 pause 之前**：`pool.ensure` 在暂停期间直接 409
-          # （那道闸门是"部署期间不改绑定"）。
-          version=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
-          if [[ -z "$version" ]]; then
-            echo "::warning::取不到 latest release tag，跳过本轮补池（不影响部署）"
-          fi
-          target=$(jq -r '.pool_target // 10' <<<"$resp")
-          : > /tmp/touched.txt
-          # 人工指定了片就只补那一片；否则补所有低于目标的片 + 新片
-          candidates=$(jq -r --argjson t "$target" --arg only "$SHARD_INPUT" '
-            (if $only == "" then
-               ([.shards[] | select(.pooled < $t) | .shard] + [.next_shard | select(. != null)])
-             else
-               [($only | tonumber)]
-             end) | unique | .[]' <<<"$resp")
-          for shard in ${candidates:-}; do
-            [[ -z "$version" ]] && break
-            jq -n --arg v "$version" '{version: $v}' > /tmp/pool-req.json
-            if ! out=$(curl -sS --fail-with-body -X POST \
-                 -H "Authorization: Bearer $SERVICE_TOKEN" \
-                 -H "Content-Type: application/json" \
-                 -d @/tmp/pool-req.json \
-                 "$CF_API_BASE/api/v2/platform/shards/$shard/pool"); then
-              echo "::warning::shard-$shard 补池失败（部署窗口内会被拒绝，下次再来）"
-              continue
-            fi
-            created=$(jq '.created | length' <<<"$out")
-            echo "shard-$shard 补池 version=${version} created=${created} pooled=$(jq -r .pooled <<<"$out")"
-            # 新库要靠一次部署才会被绑定 ⇒ 必须把这一片加入部署清单
-            if [[ "$created" -gt 0 ]]; then echo "$shard" >> /tmp/touched.txt; fi
-          done
-          if [[ -s /tmp/touched.txt ]]; then
-            extra=$(jq -R . /tmp/touched.txt | jq -s -c 'unique | map({shard: (. | tonumber)})')
-            list=$(jq -c --argjson extra "$extra" '. + $extra | unique_by(.shard)' <<<"$list")
-          fi
-
-          echo "matrix={\"include\":$list}" >> "$GITHUB_OUTPUT"
           count=$(jq 'length' <<<"$list")
+          echo "matrix={\"include\":$list}" >> "$GITHUB_OUTPUT"
           if [[ "$count" -gt 0 ]]; then
             echo "has_work=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_work=false" >> "$GITHUB_OUTPUT"
-            echo "无需部署（cf-api: $(jq -r '.reason' <<<"$resp")）"
+            echo "::warning::cf-api 说一片都没有（先跑 ensure-shard 建 shard-0）"
           fi
 
   # ---- 2. 逐片部署 ----
@@ -148,7 +80,6 @@ jobs:
     needs: plan
     if: needs.plan.outputs.has_work == 'true'
     runs-on: ubuntu-latest
-    # 同一片不允许并发部署（重复 PATCH settings 会互相覆盖）
     concurrency:
       group: deploy-saas-shard-${{ matrix.shard }}
       cancel-in-progress: false
@@ -158,10 +89,6 @@ jobs:
     env:
       SHARD: ${{ matrix.shard }}
       WORKER: clever-vpn-crm-saas-shard-${{ matrix.shard }}
-      CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
-      # 这些必须在**作业级**：渲染配置与"刷新绑定"两步都会跑
-      # scripts/render-shard-config.mjs，只在一步里给会导致后一步崩
-      # （实测：Refresh bindings 报「缺 HOSTS_KV_ID」）
       HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
       CRM_CODE_VERSION: ${{ github.sha }}
       SITE_URL: ${{ vars.SITE_URL }}
@@ -182,8 +109,7 @@ jobs:
             ${{ vars.BW_SECRET_ID_CLOUDFLARE_API_TOKEN }} > CLOUDFLARE_API_TOKEN
 
       # APP_SECRET —— **唯一的主密钥**：HMAC（退订链接 / mock 回调）+ AES-GCM
-      # （网关密钥 / 商店凭据 / cf-api token）。两个用途用派生后不同的字节。
-      # ⚠️ 定了就不能再换：换掉 = 已发出的退订链接失效 + 已存的密钥全部解不开。
+      # （网关密钥 / 商店凭据 / cf-api token）。定了就不能再换。
       - name: Load APP_SECRET from Bitwarden (SM)
         if: vars.BW_SECRET_ID_APP_SECRET != ''
         uses: bitwarden/sm-action@v3.0.0
@@ -192,16 +118,13 @@ jobs:
           secrets: |
             ${{ vars.BW_SECRET_ID_APP_SECRET }} > APP_SECRET
 
-      # ---- 2.1 暂停开通（挡开通与补池，不挡服务）----
-      - name: Pause provisioning
-        id: pause
+      # ---- 2.1 先把这一片的 bound_at 清掉：部署窗口内不把租户放进正在换绑定的片 ----
+      - name: Mark bindings stale
         run: |
           set -euo pipefail
           curl -sS --fail-with-body -X POST \
             -H "Authorization: Bearer $SERVICE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"minutes\":90,\"reason\":\"deploy:${{ github.run_id }}\"}" \
-            "$CF_API_BASE/api/v2/platform/shards/$SHARD/pause"
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/stale" | jq -c .
 
       # ---- 2.2 取清单 → 渲染配置 ----
       - name: Fetch manifest
@@ -210,43 +133,22 @@ jobs:
           curl -sS --fail-with-body \
             -H "Authorization: Bearer $SERVICE_TOKEN" \
             "$CF_API_BASE/api/v2/platform/shards/$SHARD/manifest" > manifest.json
-          jq -r '"\(.worker) 现有绑定 \(.bindings|length) 条"' manifest.json
+          jq -r '"\(.worker) 绑定 \(.bindings|length) 条（已分配 \(.slots|length) + 池中 \(.pooled|length)）"' manifest.json
 
-      - name: Render wrangler.shard.jsonc + settings.json
+      - name: Render wrangler.shard.jsonc
         env:
-          # 想临时关掉测试网关：把仓库变量 ALLOW_MOCK_PAYMENTS 设成 false
           ALLOW_MOCK_PAYMENTS: ${{ vars.ALLOW_MOCK_PAYMENTS }}
         run: node scripts/render-shard-config.mjs --manifest manifest.json
-
-      # ---- 2.2.1 迁移：**这里不做**，由 shard 自己按需做 ----
-      # 租户库的升级在 shard 里按需执行（`src/db/schema-guard.ts`）：租户**下一次请求**
-      # 时对齐台账，一个文件一个 `batch`（DDL + 台账同批），库比代码新就 503。
-      #
-      # 原来这里是对 manifest 里每个库逐库 `wrangler d1 migrations apply`。删掉的理由
-      # 不是原子性（wrangler 把"整文件 + 台账"拼成一次提交，走 D1 的 /query 事务），
-      # 是三条更实际的问题：
-      #   1. **成本**：单库实测 ~5.1 s（空跑也 5 s：每次 npx 冷启动 + 3 次 API 往返），
-      #      2,000 租户/片的稳态成本 ≈ 2.8 小时，且随租户数线性增长；
-      #   2. **时机**：它在 `wrangler deploy` **之前**跑完 —— 整个部署窗口里是"新 schema
-      #      + 旧代码"。按需迁移恰好相反：谁需要新 schema，就是新代码在服务它的那一刻；
-      #   3. **覆盖不全**：只有"被部署到的那一片"的绑定会被扫到；池里还没绑的、别的片
-      #      的，本来就不该在这一步处理。
-      #
-      # 迁移本身的校验没丢：`npm test` 会把整条链 apply 到一份全新的库上
-      # （test/workers/apply-migrations.ts），`db:embed:check` 保证内嵌的就是提交的那份
-      # DDL，`schema-guard.test.ts` 覆盖 74 条语句的整批 `batch` 与失败回滚。
 
       # ---- 2.3 构建 + 部署 ----
       - run: npm ci
       - run: npm run build:web
-      # 内嵌 bundle 必须与 `migrations/` 一致（分片懒升级的判据就是它）。
-      # 这里用 `:check` 而不是 `db:embed`：后者会就地改写工作区 —— CI 里跑等于
-      # "部署了仓库里不存在的那份 DDL"，事后没人能复现线上是什么。
+      # 内嵌 bundle 必须与 `migrations/` 一致（分片懒升级的判据就是它）
       - run: npm run db:embed:check
       - name: Deploy worker
         run: npx wrangler deploy --config wrangler.shard.jsonc
 
-      # ---- 2.3.1 同步 APP_SECRET（worker 已存在；wrangler deploy 不会动 secrets）----
+      # ---- 2.3.1 同步 APP_SECRET（wrangler deploy 不会动 secrets）----
       - name: Sync APP_SECRET to shard
         run: |
           set -euo pipefail
@@ -257,60 +159,86 @@ jobs:
           printf '%s' "$APP_SECRET" | npx wrangler secret put APP_SECRET --config wrangler.shard.jsonc
           echo "✔ APP_SECRET 已写入（值不打印）"
 
-      # ---- 2.4 以 registry 为准再刷一次绑定 ----
-      # 做法是「拿最新清单再 wrangler deploy 一次」，**不是** PATCH settings。
-      # 原因：Workers 里 vars 就是 plain_text 类型的 binding，而 PATCH settings 的
-      # bindings 是整体替换 —— 只提交 KV+D1 会把 MODE/SHARD 等 vars 全删掉，worker
-      # 直接退回 MODE=single 且无 DB（实测踩过）。re-deploy 走同一条代码路径，既刷
-      # 绑定又保留 vars 与 secrets。
-      - name: Refresh bindings from registry (re-deploy)
+      # ---- 2.4 绑定回填 + 核对（**唯一可信的核对在 cf-api 里**）----
+      # 502 = 回读核对没通过（缺绑定 / MODE 丢了 / ASSETS 丢了），必须让 job 失败
+      - name: Reconcile bindings
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/reconcile" | jq -c .
+
+      # 部署失败时也要把 bound_at 拉回来，否则这一片的开通会一直 409
+      - name: Reconcile after failure (best effort)
+        if: failure()
+        run: |
+          curl -sS -X POST \
+            -H "Authorization: Bearer $SERVICE_TOKEN" \
+            "$CF_API_BASE/api/v2/platform/shards/$SHARD/reconcile" \
+            | jq -c '.' || echo "::warning::reconcile 失败 —— 手工 POST /platform/shards/$SHARD/reconcile"
+  # ---- 3. router 跟发 ----
+  router:
+    name: deploy router
+    needs: deploy
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-saas-router
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Load secrets from Bitwarden (SM)
+        uses: bitwarden/sm-action@v3.0.0
+        with:
+          access_token: ${{ secrets.BW_SM_ACCESS_TOKEN }}
+          secrets: |
+            ${{ vars.BW_SECRET_ID_SERVICE_TOKEN }} > SERVICE_TOKEN
+            ${{ vars.BW_SECRET_ID_CLOUDFLARE_API_TOKEN }} > CLOUDFLARE_API_TOKEN
+
+      - name: Fetch summary
         run: |
           set -euo pipefail
           curl -sS --fail-with-body \
             -H "Authorization: Bearer $SERVICE_TOKEN" \
-            "$CF_API_BASE/api/v2/platform/shards/$SHARD/manifest" > manifest.final.json
-          node scripts/render-shard-config.mjs --manifest manifest.final.json >/dev/null
-          npx wrangler deploy --config wrangler.shard.jsonc
+            "$CF_API_BASE/api/v2/platform/shards" > shards.json
+          jq -c '{shards_ready, needs_shard}' shards.json
 
-      # ---- 2.4.1 核对：按**名字**核对关键绑定，而不是只比数量 ----
-      # （只比数量会在"数量相同但内容被换掉"时静默通过 —— 上一次就是 1 == 1）
-      - name: Verify key bindings
+      - name: Render wrangler.router.jsonc
+        env:
+          HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
+          REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
+          CRM_ROOT: ${{ vars.CRM_ROOT }}
+          BASE_DOMAIN: ${{ vars.SAAS_BASE_DOMAIN || 'clever-vpn.org' }}
+        run: node scripts/render-router-config.mjs --input shards.json
+
+      - run: npm ci
+
+      - name: Deploy router
+        run: npx wrangler deploy --config wrangler.router.jsonc
+
+      - name: Smoke test (via wildcard route)
+        env:
+          CRM_ROOT: ${{ vars.CRM_ROOT }}
         run: |
           set -euo pipefail
-          json=$(curl -sS --fail-with-body \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/$WORKER/settings")
-          names=$(jq -r '.result.bindings[].name' <<<"$json" | sort | tr '\n' ' ')
-          echo "现状 bindings：$names"
-          for want in HOSTS MODE SHARD; do
-            jq -e --arg n "$want" '.result.bindings[] | select(.name == $n)' <<<"$json" >/dev/null \
-              || { echo "::error::缺绑定 $want（很可能被 PATCH settings 抹掉了）"; exit 1; }
+          if [[ -z "${CRM_ROOT:-}" ]]; then
+            echo "::notice::未配置 CRM_ROOT 变量，跳过冒烟测试"
+            exit 0
+          fi
+          url="https://route-check.${CRM_ROOT}/__router/health"
+          for i in $(seq 1 10); do
+            body=$(curl -sS -m 8 "$url" || true)
+            if jq -e '.ok == true' <<<"$body" >/dev/null 2>&1; then
+              echo "✔ router 健康：$body"
+              exit 0
+            fi
+            echo "第 $i 次：$body"
+            sleep 3
           done
-          # vars 必须是 plain_text，否则等于没有
-          jq -e '.result.bindings[] | select(.name == "MODE" and .type == "plain_text" and .text == "multi")' <<<"$json" >/dev/null \
-            || { echo "::error::MODE 不是 plain_text=multi"; exit 1; }
-          d1=$(jq '[.result.bindings[] | select(.type == "d1")] | length' <<<"$json")
-          want_d1=$(jq '.bindings | length' manifest.final.json)
-          echo "D1 绑定：期望 $want_d1 / 实际 $d1"
-          [[ "$want_d1" == "$d1" ]] || { echo "::error::D1 绑定数量不一致（漏绑 = 静默解绑）"; exit 1; }
-
-      # ---- 2.5 回写版本（cron 据此不再重发这一片）----
-      - name: Record deployed version
-        run: |
-          set -euo pipefail
-          curl -sS --fail-with-body -X POST \
-            -H "Authorization: Bearer $SERVICE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"code_version\":\"${{ github.sha }}\"}" \
-            "$CF_API_BASE/api/v2/platform/shards/$SHARD/deployed"
-
-      # ---- 2.6 恢复开通（无论前面成败都要跑）----
-      - name: Resume provisioning
-        if: always() && steps.pause.outcome == 'success'
-        run: |
-          curl -sS --fail-with-body -X POST \
-            -H "Authorization: Bearer $SERVICE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"reason\":\"deploy:done:${{ github.run_id }}\"}" \
-            "$CF_API_BASE/api/v2/platform/shards/$SHARD/resume" \
-            || echo "::warning::resume 失败 —— 暂停会在 90 分钟后自动过期"
+          echo "::error::router 冒烟失败（最近一次响应：$body）"
+          exit 1
