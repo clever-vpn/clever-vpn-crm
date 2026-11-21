@@ -10,9 +10,10 @@
  * 设计依据：`docs/domain.md`（六条不变量）。改表先改那边。
  *
  * 生成迁移：`npm run db:generate` → `migrations/*.sql`（开发库走 `migrations-dev/`，见 `docs/schema.md`）
- * 应用迁移：本地 `npm run db:migrate:local`；线上由 `deploy.yml` 在部署前
- * 执行 `wrangler d1 migrations apply --remote`。**Worker 不做自迁移** —— 缺表时
- * `src/db.ts` 会直接报错并提示跑哪条命令。
+ * 应用迁移：本地 `npm run db:migrate:local`；自部署（single）由 `deploy.yml` 在部署前
+ * 执行 `wrangler d1 migrations apply --remote`；托管分片（multi）由 CRM 自己在租户
+ * 第一次请求时按需执行（`src/db/schema-guard.ts`）。这段注释只讲表怎么来的，不讲
+ * 迁移怎么跑 —— 见 `docs/schema.md` §1「应用方式」。
  */
 import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";

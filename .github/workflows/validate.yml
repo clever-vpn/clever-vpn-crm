@@ -25,6 +25,10 @@ jobs:
       # 种子现在**随部署走**（打进 Worker）：改了 site-template/ 却忘了重新生成，
       # 线上新租户拿到的还是旧骨架 —— 编译期与单测都看不见这种事。
       - run: npm run seed:check
+      # 内嵌迁移 bundle 是分片门禁的**期望值**（`src/db/schema-guard.ts`）：
+      # 改了 `migrations/` 却没跑 `npm run db:embed`，线上就是"新代码 + 旧 DDL"，
+      # 而且编译期、单测都看不见。
+      - run: npm run db:embed:check
       - name: 迁移链自检（结构 / 不可变 / 与 schema 同步）
         run: npm run check:migrations
       - run: npm test

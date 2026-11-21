@@ -63,9 +63,11 @@
 ```
 src/index.ts          Worker 入口（/health、/__version、/api/* 路由）
 src/admin/            管理后台 API（认证 / 2FA / 会话 / 审计）
-src/db.ts             数据库就绪探测（迁移由 CI 执行）
+src/db.ts             数据库就绪探测（只读兜底；迁移谁执行见 docs/schema.md §1）
 src/db/schema.ts      Drizzle schema（表结构的唯一来源）
-migrations/           生产迁移链（drizzle-kit 生成，CI 应用）
+src/db/schema-guard.ts 多租户门禁：租户第一次请求时按需迁移（single 不启用）
+src/db/migrations.generated.ts 内嵌迁移 bundle（npm run db:embed 生成，勿手改）
+migrations/           生产迁移链（drizzle-kit 生成；自部署由 CI 应用）
 migrations-dev/       开发迁移链（reset 脚本生成，不入库）
 web/                  管理后台 SPA（React + Vite，产物 web/dist/admin）
 site-template/       官网静态站模板（独立部署，不进 CRM 构建；见其 README）

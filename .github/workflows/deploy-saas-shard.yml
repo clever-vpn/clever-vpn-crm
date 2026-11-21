@@ -218,23 +218,31 @@ jobs:
           ALLOW_MOCK_PAYMENTS: ${{ vars.ALLOW_MOCK_PAYMENTS }}
         run: node scripts/render-shard-config.mjs --manifest manifest.json
 
-      # ---- 2.2.1 迁移扇出：**先迁移、再部署** ----
-      # 分片里所有租户共用一份代码，但每个租户一个 D1；漏迁移的表现是
-      # "新功能一上线就 500（no such table）"，而不是部署失败。
-      # `d1_migrations` 表记录已应用项，重复执行安全；迁移只允许向后兼容的追加。
-      - name: Apply tenant migrations（逐库）
-        run: |
-          set -euo pipefail
-          mapfile -t DBS < <(jq -r '.bindings[].database_name' manifest.json)
-          echo "将在 ${#DBS[@]} 个库上应用迁移：${DBS[*]}"
-          for db in "${DBS[@]}"; do
-            echo "── $db"
-            npx wrangler d1 migrations apply "$db" --remote --config wrangler.shard.jsonc
-          done
+      # ---- 2.2.1 迁移：**这里不做**，由 shard 自己按需做 ----
+      # 租户库的升级在 shard 里按需执行（`src/db/schema-guard.ts`）：租户**下一次请求**
+      # 时对齐台账，一个文件一个 `batch`（DDL + 台账同批），库比代码新就 503。
+      #
+      # 原来这里是对 manifest 里每个库逐库 `wrangler d1 migrations apply`。删掉的理由
+      # 不是原子性（wrangler 把"整文件 + 台账"拼成一次提交，走 D1 的 /query 事务），
+      # 是三条更实际的问题：
+      #   1. **成本**：单库实测 ~5.1 s（空跑也 5 s：每次 npx 冷启动 + 3 次 API 往返），
+      #      2,000 租户/片的稳态成本 ≈ 2.8 小时，且随租户数线性增长；
+      #   2. **时机**：它在 `wrangler deploy` **之前**跑完 —— 整个部署窗口里是"新 schema
+      #      + 旧代码"。按需迁移恰好相反：谁需要新 schema，就是新代码在服务它的那一刻；
+      #   3. **覆盖不全**：只有"被部署到的那一片"的绑定会被扫到；池里还没绑的、别的片
+      #      的，本来就不该在这一步处理。
+      #
+      # 迁移本身的校验没丢：`npm test` 会把整条链 apply 到一份全新的库上
+      # （test/workers/apply-migrations.ts），`db:embed:check` 保证内嵌的就是提交的那份
+      # DDL，`schema-guard.test.ts` 覆盖 74 条语句的整批 `batch` 与失败回滚。
 
       # ---- 2.3 构建 + 部署 ----
       - run: npm ci
       - run: npm run build:web
+      # 内嵌 bundle 必须与 `migrations/` 一致（分片懒升级的判据就是它）。
+      # 这里用 `:check` 而不是 `db:embed`：后者会就地改写工作区 —— CI 里跑等于
+      # "部署了仓库里不存在的那份 DDL"，事后没人能复现线上是什么。
+      - run: npm run db:embed:check
       - name: Deploy worker
         run: npx wrangler deploy --config wrangler.shard.jsonc
 
