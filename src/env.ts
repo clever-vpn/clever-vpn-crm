@@ -14,6 +14,8 @@ export interface Env {
    * shard 用它把 `{slug}.<ADMIN_ZONE>` 解析成 `slug:<slug>` —— 与 router 同一口径。
    */
   ADMIN_ZONE?: string;
+  /** 平台站点的父域：`{slug}.<SITES_ROOT>` —— 发布后给租户的"点开看线上"链接 */
+  SITES_ROOT?: string;
   /**
    * 站点存储（R2）。三个前缀：
    *   `tpl/<sha>/`          租户源包（内容寻址）

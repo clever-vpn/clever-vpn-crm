@@ -42,7 +42,7 @@ import { handleUnsubscribe } from "./notices/unsubscribe";
 import { sendPendingNotices } from "./notices/store";
 import { pollPendingOrders } from "./payments/poll";
 import { getNumberSetting, setSetting } from "./settings";
-import { TenantResolveError, ensureConfig, modeOf, scopeToTenant } from "./tenant/scope";
+import { TenantResolveError, ensureConfig, modeOf, platformSlug, scopeToTenant } from "./tenant/scope";
 import type { Scoped } from "./tenant/scope";
 
 /** 每小时重活的门：距上次执行 ≥55 分钟就允许跑（漏了下一 tick 自动补，不用等整点） */
@@ -63,6 +63,22 @@ async function markHourlyRun(env: Env, now: Date): Promise<void> {
 export type { Env };
 
 /** 管理后台是 SPA：构建产物落在 `admin/` 前缀下，**入口是 `/`** */
+/**
+ * 站点对外地址：优先 `SITE_URL`；多租户下用后台域里的 slug 拼 `{SITES_ROOT}`。
+ *
+ * 为什么用后台域而不是 site 域：这个响应是 studio 调 `/api/site/deliver` 时拿的，
+ * 请求的 Host 是租户的后台域（`{slug}.<ADMIN_ZONE>`），slug 就在里面。
+ */
+function siteUrlOf(env: Env, request: Request): string | null {
+  const explicit = (env.SITE_URL ?? "").trim().replace(/\/+$/, "");
+  if (explicit) return explicit;
+  if (modeOf(env) !== "multi") return null;
+  const slug = platformSlug(new URL(request.url).hostname.toLowerCase(), env.ADMIN_ZONE);
+  const root = (env.SITES_ROOT ?? "").trim();
+  if (!slug || !root) return null;
+  return `https://${slug}.${root}`;
+}
+
 const ADMIN_INDEX = "/admin/index.html";
 
 
@@ -417,11 +433,14 @@ export default {
           /**
            * **站点对外地址**（契约 §6.4）：studio 拿它给租户一个「点开看线上」的链接。
            *
-           * 来源只能是 `SITE_URL`（部署配置：自部署时就是给 site-serve 绑的那个域名）。
-           * 没配就回 `null` —— **绝不拿 CRM 自己的 origin 冒充**：那个地址打开的是后台，
-           * 不是租户的网站，做成链接就是把租户导到错的地方。
+           * 两级来源：
+           *   1. `SITE_URL`（自部署：给 site-serve 绑的那个域名）；
+           *   2. 多租户：`https://{slug}.<SITES_ROOT>`，slug 从**后台域**取
+           *      （`{slug}.<ADMIN_ZONE>`，与 site-serve / router 同一口径）。
+           * 都拿不到就回 `null` —— **绝不拿 CRM 自己的 origin 冒充**：那个地址打开的是
+           * 后台，不是租户的网站，做成链接就是把租户导到错的地方。
            */
-          public_url: (env.SITE_URL ?? "").trim().replace(/\/+$/, "") || null,
+          public_url: siteUrlOf(env, request),
           source_sha: published.sourceSha,
           artifact_sha: published.artifactSha,
           seed_sha: published.seedSha,

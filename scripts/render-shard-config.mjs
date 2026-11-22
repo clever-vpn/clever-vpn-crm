@@ -80,6 +80,8 @@ const vars = {
   CRM_CONTRACT_VERSION: process.env.CRM_CONTRACT_VERSION ?? "19",
   ENVIRONMENT: "production",
   SITE_URL: process.env.SITE_URL ?? "",
+  // 多租户站点的父域：发布后给租户的「点开看线上」链接 = https://{slug}.<SITES_ROOT>
+  SITES_ROOT: process.env.SITES_ROOT ?? "",
   // 站点设计器入口：租户后台的「打开设计器」按钮靠它（缺了会 500 studio_not_configured）
   STUDIO_SITE_URL: process.env.STUDIO_SITE_URL ?? "",
   // 发信人：域名须已在本账号完成 Email Sending 验证（与 cf-api 用同一个）

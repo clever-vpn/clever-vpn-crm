@@ -21,7 +21,7 @@
  *   3. 写失败不留指针：指针由调用方在 bake 成功**之后**才切。
  */
 import { SITE_LIMITS } from "./limits";
-import { isTextPath, readSource, seedFiles, seedSha } from "./source";
+import { contentTypeOfPath, isTextPath, readSource, seedFiles, seedSha } from "./source";
 import { RETURN_HTML, SDK_JS } from "./sdk";
 import { renderTemplate } from "./render";
 import { isInternalSetting } from "./settings";
@@ -157,7 +157,7 @@ export async function bakeSite(
         sha256: await sha256Hex(new Uint8Array(file.body)),
         bytes: file.body.byteLength,
       });
-      rendered.push([file.path, file.body, "application/octet-stream"]);
+      rendered.push([file.path, file.body, contentTypeOfPath(file.path)]);
       continue;
     }
     const text = new TextDecoder().decode(new Uint8Array(file.body));
@@ -182,7 +182,9 @@ export async function bakeSite(
       : r.html;
     const bytes = enc.encode(body);
     entries.push({ path: file.path, sha256: await sha256Hex(bytes), bytes: bytes.byteLength });
-    rendered.push([file.path, body, "text/plain; charset=utf-8"]);
+    // 类型必须按扩展名给：全写 text/plain 会让浏览器把整页 HTML 当源码显示。
+    // 真实事故：第一次发布后线上 `index.html` 的 Content-Type 是 text/plain。
+    rendered.push([file.path, body, contentTypeOfPath(file.path)]);
   }
 
   // 平台文件也算进产物（`/_crm/config.js` 里是租户的 CRM 地址，换域名 artifact 就得换）
