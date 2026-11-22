@@ -54,7 +54,7 @@ gh workflow run deploy-saas-site.yml   -f tag=v2.0.0
 |---|---|
 | `gh release list -L 1` | 最新 tag = 本次版本 |
 | `curl https://<slug>.clever-panel.win/__version` | `code == tag` |
-| `curl https://origin-crm.clever-vpn.org/__version` | `version == tag` |
+| `curl https://origin-crm.clever-vpn.org/__router/version` | `version == tag` |
 | `curl https://origin-site.clever-vpn.org/__site/version` | `platform == tag` |
 | `gh run view <id> --log` | 无 ERROR |
 
