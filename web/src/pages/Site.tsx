@@ -27,7 +27,6 @@ import {
   ApiError,
   type DownloadItem,
   type SiteCollections,
-  type SiteDomainView,
   type SiteMeta,
   type SitePalette,
   type SiteStateView,
@@ -45,13 +44,12 @@ import {
 } from "../site-fields";
 
 /**
- * 网站：三个页签，一屏一件事。
+ * 网站：两个页签，一屏一件事（域名是独立页面，见 `pages/Domains.tsx`）。
  *
  *   发布   → 主按钮是「打开设计器」（改内容的正路）；「发布站点」是次要动作
  *            （改完设置要重新发布时用）
  *   站点设置 → 由 CRM 的 capabilities 生成（`src/site/meta.ts` 那份清单），
  *            **保存不等于发布**：品牌值是发布时烘焙进静态文件的
- *   域名   → **只有 SaaS（multi）模式才有**；自部署由租户自己在 Cloudflare 挂
  *
  * 三条刻意的取舍（评审时别改回去）：
  *
@@ -85,7 +83,6 @@ export default function Site() {
   /** 当前**生效**的渲染作用域：颜色留空时是跟随主题的那一套（表单回填用） */
   const [scope, setScope] = useState<Record<string, unknown> | null>(null);
   const [meta, setMeta] = useState<SiteMeta | null>(null);
-  const [domain, setDomain] = useState<SiteDomainView | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [issues, setIssues] = useState<string[]>([]);
@@ -98,16 +95,14 @@ export default function Site() {
 
   const load = useCallback(async () => {
     try {
-      const [s, st, d, m] = await Promise.all([
+      const [s, st, m] = await Promise.all([
         api.site(),
         api.siteSettings(),
-        api.siteDomain(),
         api.siteMeta(),
       ]);
       setState(s);
       setSettings(st.settings);
       setScope(st.scope ?? null);
-      setDomain(d);
       setMeta(m);
     } catch (e) {
       message.error(e instanceof ApiError ? e.message : "读不到站点状态");
@@ -736,41 +731,6 @@ export default function Site() {
     </Card>
   );
 
-  const domainTab = (
-    <Card title="站点域名">
-      {domain === null ? (
-        <Typography.Text type="secondary">加载中…</Typography.Text>
-      ) : domain.supported ? (
-        <Space direction="vertical" style={{ width: "100%" }}>
-          <Alert
-            type="info"
-            showIcon
-            message="托管模式：域名由平台代为绑定"
-            description={domain.reason}
-          />
-          <Typography.Text type="secondary">
-            绑定流程：填域名 → 按提示加一条解析记录 → 平台自动签发证书（通常 5 分钟，最多 24
-            小时）。
-          </Typography.Text>
-        </Space>
-      ) : (
-        <Space direction="vertical" style={{ width: "100%" }}>
-          <Alert
-            type="info"
-            showIcon
-            message="自部署模式：域名由你自己管理"
-            description={domain.reason}
-          />
-          <Typography.Text type="secondary">
-            具体做法：在 Cloudflare 里给 <code>site-serve</code> 这个 Worker 添加 Custom
-            Domain，并让 <code>KV[host:你的域名]</code> 指向
-            <code>{'{ tenant_id, slot, status }'}</code>。
-          </Typography.Text>
-        </Space>
-      )}
-    </Card>
-  );
-
   return (
     <Tabs
       activeKey={tab}
@@ -778,7 +738,6 @@ export default function Site() {
       items={[
         { key: "publish", label: "发布", children: publishTab },
         { key: "settings", label: "站点设置", children: settingsTab },
-        { key: "domain", label: "域名", children: domainTab },
       ]}
     />
   );

@@ -73,7 +73,11 @@ export async function platformAuth(env: Env): Promise<{ base: string; token: str
   return { base: creds.base, token: creds.token };
 }
 
-async function call(env: Env, path: string, init: RequestInit = {}): Promise<Response> {
+export async function platformRequest(
+  env: Env,
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
   const { base, token } = await platformAuth(env);
 
   const controller = new AbortController();
@@ -95,12 +99,15 @@ async function call(env: Env, path: string, init: RequestInit = {}): Promise<Res
   }
 }
 
-async function expectJson<T>(res: Response): Promise<T> {
+export async function platformJson<T>(res: Response): Promise<T> {
   const text = await res.text();
   if (!res.ok) {
     let message = text;
     try {
-      message = (JSON.parse(text) as { error?: string }).error ?? text;
+      const body = JSON.parse(text) as { error?: string; message?: string };
+      // cf-api 的租户错误是 `{error, message}`：优先给人看的 message，
+      // 没有 message 时才退回 error 码（老端点只有 error）。
+      message = body.message ?? body.error ?? text;
     } catch {
       /* 非 JSON 响应（网关错误页等） */
     }
@@ -114,23 +121,23 @@ export async function findCustomerByAuthId(env: Env, authId: string): Promise<Pl
   const qs = new URLSearchParams();
   qs.set("filters[auth_id][$eq]", authId);
   qs.set("pagination[limit]", "1");
-  const res = await call(env, `/api/v1/customers?${qs.toString()}`);
-  const data = await expectJson<{ items?: PlatformCustomer[] } | PlatformCustomer[]>(res);
+  const res = await platformRequest(env, `/api/v1/customers?${qs.toString()}`);
+  const data = await platformJson<{ items?: PlatformCustomer[] } | PlatformCustomer[]>(res);
   const items = Array.isArray(data) ? data : (data.items ?? []);
   return items[0] ?? null;
 }
 
 export async function getCustomer(env: Env, id: number): Promise<PlatformCustomer> {
-  const res = await call(env, `/api/v1/customers/${id}`);
-  return expectJson<PlatformCustomer>(res);
+  const res = await platformRequest(env, `/api/v1/customers/${id}`);
+  return platformJson<PlatformCustomer>(res);
 }
 
 export async function createCustomer(env: Env, input: CreateCustomerInput): Promise<PlatformCustomer> {
-  const res = await call(env, "/api/v1/customers", {
+  const res = await platformRequest(env, "/api/v1/customers", {
     method: "POST",
     body: JSON.stringify(input),
   });
-  return expectJson<PlatformCustomer>(res);
+  return platformJson<PlatformCustomer>(res);
 }
 
 /** 只改控制参数。`licence_limit` 不在此列（平台会静默丢弃，见 `crm-api.md` §3.2） */
@@ -139,15 +146,15 @@ export async function updateCustomer(
   id: number,
   patch: Record<string, unknown>,
 ): Promise<PlatformCustomer> {
-  const res = await call(env, `/api/v1/customers/${id}`, {
+  const res = await platformRequest(env, `/api/v1/customers/${id}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
-  return expectJson<PlatformCustomer>(res);
+  return platformJson<PlatformCustomer>(res);
 }
 
 /** 软删；旧 `code` 立即失效，其 licences 被级联软删（`crm-api.md` §5.1） */
 export async function deleteCustomer(env: Env, id: number): Promise<void> {
-  const res = await call(env, `/api/v1/customers/${id}`, { method: "DELETE" });
-  if (!res.ok) await expectJson<unknown>(res);
+  const res = await platformRequest(env, `/api/v1/customers/${id}`, { method: "DELETE" });
+  if (!res.ok) await platformJson<unknown>(res);
 }

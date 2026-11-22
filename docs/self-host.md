@@ -139,7 +139,11 @@ curl -s https://<worker>.workers.dev/__version   # code/contract/tenant
 ## 4. 绑定域名（可选）
 
 在你自己的 Cloudflare zone 里给这个 Worker 添加 **Custom Domain**（不是 route），
-证书由 Cloudflare 自动签发。
+证书由 Cloudflare 自动签发。这是**后台域名**。
+
+品牌网站域名同理：给 `site-serve` 那个 Worker 添加 Custom Domain，并让
+`KV[host:<域名>]` 指向 `{ tenant_id, slot, status }`。自部署没有「平台代绑」，
+后台的「域名」页只显示这些说明。
 
 ## 5. 升级
 

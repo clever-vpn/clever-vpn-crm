@@ -22,11 +22,13 @@ import {
   InboxOutlined,
   MenuOutlined,
   GlobalOutlined,
+  LinkOutlined,
   SettingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
 import { api, type Me } from "../api";
 import ComingSoon from "./ComingSoon";
+import Domains from "./Domains";
 import { PANEL_BASE, stripPanelBase } from "./panelBase";
 import Customers from "./Customers";
 import Gateways from "./Gateways";
@@ -66,6 +68,7 @@ const NAV: NavItem[] = [
   { key: "/orders", href: "/orders", label: "订单", icon: <FileTextOutlined /> },
   { key: "/plans", href: "/plans", label: "套餐", icon: <AppstoreOutlined /> },
   { key: "/site", href: "/site", label: "网站", icon: <GlobalOutlined /> },
+  { key: "/domains", href: "/domains", label: "域名", icon: <LinkOutlined /> },
   {
     key: "/payments",
     label: "支付",
@@ -181,6 +184,8 @@ export default function Shell({
       <Plans />
     ) : path === "/site" ? (
       <Site />
+    ) : path === "/domains" ? (
+      <Domains />
     ) : path === "/payments/gateways" ? (
       <Gateways />
     ) : path === "/payments/stores" ? (

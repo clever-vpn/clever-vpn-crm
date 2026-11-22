@@ -122,7 +122,12 @@ site:<tenant>:active   { template_seq, artifact_sha,         写：本仓发布 
 ## 5. 域名
 
 - **`MODE=single`（自部署）**：域名不归本仓管。租户在 Cloudflare 里给 `site-serve`
-  加 Custom Domain，并自己写 `KV[host:<域名>]`。
-- **`MODE=multi`（SaaS）**：域名动作一律走 cf-api（它才持有云凭据）。cf-api 的
-  三个端点（申请 / 查询状态 / 解绑）**尚未实现**，所以 `GET /api/admin/site/domain`
-  在托管模式下如实返回 `available: false`。
+  加 Custom Domain，给 CRM Worker 加后台 Custom Domain，并自己写 `KV[host:<域名>]`。
+- **`MODE=multi`（SaaS）**：域名动作一律走 cf-api（它才持有云凭据，契约
+  `cf-api/hosting.md` §5.6）。CRM 后台「域名」页 → `/api/admin/domains*` → cf-api
+  `/api/v2/crms/domains*`。两种 kind：
+  - `site`：品牌网站（`brand.com` / `www.brand.com`），CNAME 到 `origin-site.<SAAS_ZONE>`；
+  - `crm`：后台登录域（`crm.brand.com`），同一 CNAME 目标 + per-hostname
+    `custom_origin_server=origin-crm.<SAAS_ZONE>`。
+- 托管绑定由 cf-api 写 registry `tenant_hosts` 与 `HOSTS` KV；CRM 只存 cf-api token，
+  **不直接调 Cloudflare**。自部署的页面只展示说明，不出现「添加」按钮。

@@ -255,13 +255,48 @@ export interface SiteSettingsView {
   updatedAt: string | null;
 }
 
-export interface SiteDomainView {
-  /** multi（SaaS）才有域名绑定；自部署为 false */
+export type DomainKind = "site" | "crm";
+export type DomainState = "pending" | "active" | "failed";
+
+export interface DomainDnsRecord {
+  type: "TXT" | "CNAME";
+  name: string;
+  value: string;
+  status?: string;
+}
+
+export interface DomainDns {
+  target: string;
+  ownership: DomainDnsRecord | null;
+  validation: DomainDnsRecord[];
+  dcv: DomainDnsRecord[];
+}
+
+/** 与 cf-api `/api/v2/crms/domains` 的 `DomainView` 一致 */
+export interface DomainView {
+  hostname: string;
+  kind: DomainKind | string;
+  state: DomainState;
+  enabled: boolean;
+  hostname_status: string | null;
+  cert_status: string | null;
+  cf_hostname_id: string | null;
+  created_at: string | null;
+  verified_at: string | null;
+  last_checked_at: string | null;
+  last_error: string | null;
+  dns: DomainDns | null;
+}
+
+export interface DomainsView {
+  /** multi（SaaS）才有托管绑定；自部署为 false */
   supported: boolean;
   mode: string;
-  /** supported=true 但平台侧还没实现时为 false */
-  available?: boolean;
-  reason: string;
+  reason?: string;
+  slug?: string;
+  defaults?: { crm: string; site: string };
+  target?: string;
+  domains?: DomainView[];
 }
 
 /** cf-api 对接状态（**不含明文 token**） */
@@ -336,7 +371,22 @@ export const api = {
           unused_settings?: string[];
         }
     >("PUT", "/site/settings", input),
-  siteDomain: () => call<SiteDomainView>("GET", "/site/domain"),
+  /** 自定义域名：`refresh=true` 会让 cf-api 回源 Cloudflare 刷新状态 */
+  domains: (refresh = true) =>
+    call<DomainsView>("GET", `/domains${refresh ? "?refresh=1" : ""}`),
+  addDomain: (input: { hostname: string; kind: DomainKind }) =>
+    call<{ supported: true; domain: DomainView }>("POST", "/domains", input),
+  retryDomain: (hostname: string) =>
+    call<{ supported: true; domain: DomainView }>(
+      "POST",
+      `/domains/${encodeURIComponent(hostname)}/retry`,
+      {},
+    ),
+  removeDomain: (hostname: string) =>
+    call<{ supported: true; ok: true; deleted: boolean }>(
+      "DELETE",
+      `/domains/${encodeURIComponent(hostname)}`,
+    ),
   siteRollback: (version: number) =>
     call<{ ok: true; active: number }>("POST", "/site/rollback", { version }),
   me: () => call<Me>("GET", "/me"),
