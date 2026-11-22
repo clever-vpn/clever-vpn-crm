@@ -54,6 +54,12 @@ const fmtTime = (iso: string | null): string => {
     : `${d.toLocaleDateString()} ${d.toLocaleTimeString().slice(0, 5)}`;
 };
 
+const fmtDate = (iso: string | null): string => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+};
+
 const copy = (text: string): void => {
   if (!navigator.clipboard) {
     message.info(text);
@@ -129,27 +135,28 @@ function DomainSection({
       width: 150,
       render: (state: DomainView["state"], d: DomainView) => {
         const meta = STATE_META[state] ?? STATE_META.pending;
+        const detail =
+          state === "active"
+            ? d.cert_expires_at
+              ? `证书有效期至 ${fmtDate(d.cert_expires_at)}`
+              : "证书已生效"
+            : state === "pending"
+              ? "正在验证域名和证书"
+              : "请打开「解析记录」查看原因";
         return (
           <div>
             <Tag color={meta.color}>{meta.text}</Tag>
-            <div style={{ fontSize: 11, color: "#8593a8", marginTop: 2 }}>
-              {d.hostname_status ?? "—"} / {d.cert_status ?? "—"}
-            </div>
-            {!d.dcv_available && (
-              <div style={{ fontSize: 11, color: "#d64545", marginTop: 2 }}>
-                未拿到 DCV 委派
-              </div>
-            )}
+            <div style={{ fontSize: 11, color: "#8593a8", marginTop: 2 }}>{detail}</div>
           </div>
         );
       },
     },
     {
-      title: "证书到期",
+      title: "证书有效期至",
       dataIndex: "cert_expires_at",
       key: "cert_expires_at",
-      width: 130,
-      render: (v: string | null) => (v ? fmtTime(v) : "—"),
+      width: 140,
+      render: (v: string | null) => (v ? fmtDate(v) : "—"),
     },
     {
       title: "添加时间",
@@ -388,47 +395,55 @@ function DnsModal({
           type="info"
           showIcon
           message="平台还没返回解析记录"
-          description="Cloudflare 的 DCV 记录有时会晚几秒生成；点「刷新状态」再打开。"
+          description="证书续期记录有时会晚几秒生成；点「刷新状态」再打开。"
         />
       ) : (
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Alert
             type="info"
             showIcon
-            message="证书统一走 DCV Delegation"
-            description="只需要加一条 _acme-challenge CNAME（DNS only / 灰云），一次配置自动续期；不要加同名 TXT。"
+            message="证书会自动续期"
+            description="只需要在 DNS 里加一条 CNAME 记录（自动续期用），不要删除；不要加同名 TXT。"
           />
 
           <div>
-            <Typography.Title level={5}>1. 流量</Typography.Title>
+            <Typography.Title level={5}>1. 网站访问记录</Typography.Title>
             <DnsRecordsTable records={traffic} />
           </div>
 
           <div>
-            <Typography.Title level={5}>2. 证书验证（DCV Delegation）</Typography.Title>
+            <Typography.Title level={5}>2. 证书自动续期记录</Typography.Title>
             {dcv.length > 0 ? (
               <>
                 <DnsRecordsTable records={dcv} />
                 <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                  <strong>必须设为 DNS only（灰云）</strong>，并且不要删除；删除后证书无法自动续期。
+                  如果域名在 Cloudflare，请把这条记录的代理关掉（灰色云朵）；不要删除，删除后证书无法自动续期。
                 </Typography.Paragraph>
               </>
             ) : (
-              <Alert
-                type="warning"
-                showIcon
-                message="DCV 委派记录还没生成"
-                description="Cloudflare 是异步生成的，通常几秒。点「刷新状态」再看；如果长时间没有，先解除绑定再重新添加。不要用手动 TXT 代替。"
-              />
+              domain?.state === "active" ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  message="证书已生效，不需要再改 DNS"
+                  description="当前证书仍在有效期内；自动续期记录以后可以再补。"
+                />
+              ) : (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="证书续期记录正在生成"
+                  description="通常几秒。点「刷新状态」再看；如果长时间没有，先解除绑定再重新添加。"
+                />
+              )
             )}
           </div>
 
           {ownership.length > 0 && (
             <div>
-              <Typography.Title level={5}>3. 归属验证（仅首次，通常不需要）</Typography.Title>
+              <Typography.Title level={5}>3. 域名归属验证（通常不需要）</Typography.Title>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-                Cloudflare 会先尝试 HTTP 归属验证；如果 5 分钟后 Hostname status 仍是 Pending，
-                再加下面这条 TXT。Hostname active 后可以删除。
+                先等 5 分钟，如果状态还是「等待验证」，再加下面这条 TXT；生效后可以删除。
               </Typography.Paragraph>
               <DnsRecordsTable records={ownership} />
             </div>
@@ -534,8 +549,8 @@ export default function Domains() {
       <Alert
         type="info"
         showIcon
-        message="自定义域名由平台代为申请证书，DNS 仍在你的域名服务商处"
-        description="证书统一走 DCV Delegation：加一条 _acme-challenge CNAME（DNS only / 灰云，不要删除），自动续期；不要加同名 TXT。原来的默认地址一直可用。"
+        message="自定义域名由平台自动申请和续期证书"
+        description="绑定后只需要在 DNS 里加一条 CNAME 记录（自动续期用），不要删除；不需要加 TXT。原来的默认地址一直可用。"
       />
 
       {data?.defaults && (
