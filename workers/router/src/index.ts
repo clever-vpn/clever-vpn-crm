@@ -100,16 +100,16 @@ async function hostMapOf(env: RouterEnv, host: string): Promise<HostMap | null> 
   const now = Date.now();
   if (hit && now - hit.at < TTL_MS) return hit.value;
 
+  // 平台子域优先（推导值），自定义域才看 `host:`：旧开通可能还留着平台子域的行
   let value: HostMap | null = null;
-  try {
-    value = (await env.HOSTS.get(`host:${host}`, "json")) as HostMap | null;
-  } catch {
-    value = null; // KV 抖动当作"未知 host"，宁可 404 也不要乱转发
-  }
-
+  const slug = platformSlug(host, env.ADMIN_ZONE);
+  if (slug && env.REGISTRY) value = await platformHostOf(env, slug);
   if (!value) {
-    const slug = platformSlug(host, env.ADMIN_ZONE);
-    if (slug && env.REGISTRY) value = await platformHostOf(env, slug);
+    try {
+      value = (await env.HOSTS.get(`host:${host}`, "json")) as HostMap | null;
+    } catch {
+      value = null; // KV 抖动当作"未知 host"，宁可 404 也不要乱转发
+    }
   }
 
   memo.set(host, { value, at: now });

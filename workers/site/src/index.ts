@@ -139,22 +139,26 @@ async function resolveHost(env: SiteEnv, host: string): Promise<HostMap | null> 
   const hit = memo.get(exact);
   if (hit && hit.expires > Date.now()) return hit.value as HostMap | null;
 
-  try {
-    const value = (await env.HOSTS.get(exact, "json")) as HostMap | null;
-    if (value) {
-      memo.set(exact, { value, expires: Date.now() + HOST_TTL });
-      return value;
+  // ① 平台子域**优先**：它是从 slug 推导出来的，`host:` 里若还留着旧开通写的一行
+  //    （没有 admin_host，且把 slug 记成了 tenant_id）会把 `/_crm/config.js` 指错后台。
+  const slug = platformSlug(host, env.SITE_ZONE);
+  if (slug && env.REGISTRY) {
+    const map = await platformHostOf(env, slug);
+    if (map) {
+      memo.set(exact, { value: map, expires: Date.now() + HOST_TTL });
+      return map;
     }
-    memo.set(exact, { value: null, expires: Date.now() + NEGATIVE_TTL });
-  } catch {
-    memo.set(exact, { value: null, expires: Date.now() + NEGATIVE_TTL });
   }
 
-  const slug = platformSlug(host, env.SITE_ZONE);
-  if (!slug || !env.REGISTRY) return null;
-  const map = await platformHostOf(env, slug);
-  if (map) memo.set(exact, { value: map, expires: Date.now() + HOST_TTL });
-  return map;
+  // ② 自定义域：以 `host:` 为准
+  try {
+    const value = (await env.HOSTS.get(exact, "json")) as HostMap | null;
+    memo.set(exact, { value, expires: Date.now() + (value ? HOST_TTL : NEGATIVE_TTL) });
+    return value;
+  } catch {
+    memo.set(exact, { value: null, expires: Date.now() + NEGATIVE_TTL });
+    return null;
+  }
 }
 
 /** 平台子域的 tenant 查询：内存 60 s → KV `slug:`（由 cf-api 写）→ D1 */
