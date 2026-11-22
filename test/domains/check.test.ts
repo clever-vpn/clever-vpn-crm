@@ -73,6 +73,24 @@ function fakeFetch(opts: {
 }
 
 describe("runDomainCheck", () => {
+  it("NS 在 zone apex 上也能识别（www 本身没有 NS）", async () => {
+    const check = await runDomainCheck(
+      raw(),
+      {
+        fetch: fakeFetch({
+          head: 200,
+          dns: [
+            answer("brand.com", "NS", "ada.ns.cloudflare.com"),
+            answer("www.brand.com", "CNAME", "origin-site.clever-vpn.org"),
+            answer("_acme-challenge.www.brand.com", "CNAME", "www.brand.com.abc.dcv.cloudflare.com"),
+          ],
+        }),
+      },
+    );
+    expect(check.provider).toBe("cloudflare");
+    expect(check.status).toBe("ready");
+  });
+
   it("全部完成 ⇒ ready", async () => {
     const check = await runDomainCheck(
       raw(),
