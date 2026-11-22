@@ -131,3 +131,6 @@ site:<tenant>:active   { template_seq, artifact_sha,         写：本仓发布 
     `custom_origin_server=origin-crm.<SAAS_ZONE>`。
 - 托管绑定由 cf-api 写 registry `tenant_hosts` 与 `HOSTS` KV；CRM 只存 cf-api token，
   **不直接调 Cloudflare**。自部署的页面只展示说明，不出现「添加」按钮。
+- **证书验证统一走 DCV Delegation**：后台只展示 `_acme-challenge` CNAME（DNS only），
+  不提供手动 TXT 路径；归属验证优先 HTTP，`_cf-custom-hostname` TXT 只在 pending 时作为
+  备用展示。新建 hostname 拿不到 DCV 委派记录会被 cf-api 拒绝（`cf_dcv_not_available`）。

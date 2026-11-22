@@ -135,9 +135,21 @@ function DomainSection({
             <div style={{ fontSize: 11, color: "#8593a8", marginTop: 2 }}>
               {d.hostname_status ?? "—"} / {d.cert_status ?? "—"}
             </div>
+            {!d.dcv_available && (
+              <div style={{ fontSize: 11, color: "#d64545", marginTop: 2 }}>
+                未拿到 DCV 委派
+              </div>
+            )}
           </div>
         );
       },
+    },
+    {
+      title: "证书到期",
+      dataIndex: "cert_expires_at",
+      key: "cert_expires_at",
+      width: 130,
+      render: (v: string | null) => (v ? fmtTime(v) : "—"),
     },
     {
       title: "添加时间",
@@ -310,6 +322,40 @@ function AddDomainModal({
   );
 }
 
+function DnsRecordsTable({ records }: { records: DomainDnsRecord[] }) {
+  return (
+    <Table
+      rowKey={(r) => `${r.type}:${r.name}:${r.value}`}
+      size="small"
+      pagination={false}
+      dataSource={records}
+      columns={[
+        { title: "类型", dataIndex: "type", width: 80 },
+        {
+          title: "主机记录",
+          dataIndex: "name",
+          render: (v: string) => <code style={{ wordBreak: "break-all" }}>{v}</code>,
+        },
+        {
+          title: "记录值",
+          dataIndex: "value",
+          render: (v: string) => <code style={{ wordBreak: "break-all" }}>{v}</code>,
+        },
+        {
+          title: "",
+          key: "copy",
+          width: 70,
+          render: (_: unknown, r: DomainDnsRecord) => (
+            <Button size="small" onClick={() => copy(r.value)}>
+              复制
+            </Button>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
 function DnsModal({
   domain,
   onClose,
@@ -318,18 +364,22 @@ function DnsModal({
   onClose: () => void;
 }) {
   const dns = domain?.dns;
-  const records: DomainDnsRecord[] = [];
-  if (dns) {
-    records.push({ type: "CNAME", name: domain!.hostname, value: dns.target });
-    if (dns.ownership) records.push(dns.ownership);
-    records.push(...dns.validation, ...dns.dcv);
-  }
+  const traffic: DomainDnsRecord[] =
+    dns && domain
+      ? [{ type: "CNAME", name: domain.hostname, value: dns.target }]
+      : [];
+  const dcv = dns?.dcv ?? [];
+  // 归属 TXT 只在 Hostname 还没 active 时是备用；HTTP 能过就不用加
+  const ownership =
+    dns?.ownership && domain && domain.hostname_status !== "active"
+      ? [dns.ownership]
+      : [];
 
   return (
     <Modal
       open={domain !== null}
       title={domain ? `解析记录 · ${domain.hostname}` : "解析记录"}
-      width={720}
+      width={760}
       onCancel={onClose}
       footer={<Button onClick={onClose}>关闭</Button>}
     >
@@ -338,56 +388,57 @@ function DnsModal({
           type="info"
           showIcon
           message="平台还没返回解析记录"
-          description="Cloudflare 的 validation_records 有时会晚几秒生成；点「刷新状态」再打开。"
+          description="Cloudflare 的 DCV 记录有时会晚几秒生成；点「刷新状态」再打开。"
         />
       ) : (
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Alert
             type="info"
             showIcon
-            message="在你的 DNS 服务商处添加以下记录"
-            description="DNS 生效通常 5 分钟，证书最多 24 小时。改完回到列表点「刷新状态」。"
+            message="证书统一走 DCV Delegation"
+            description="只需要加一条 _acme-challenge CNAME（DNS only / 灰云），一次配置自动续期；不要加同名 TXT。"
           />
-          <Table
-            rowKey={(r) => `${r.type}:${r.name}:${r.value}`}
-            size="small"
-            pagination={false}
-            dataSource={records}
-            columns={[
-              { title: "类型", dataIndex: "type", width: 80 },
-              {
-                title: "主机记录",
-                dataIndex: "name",
-                render: (v: string) => <code style={{ wordBreak: "break-all" }}>{v}</code>,
-              },
-              {
-                title: "记录值",
-                dataIndex: "value",
-                render: (v: string) => <code style={{ wordBreak: "break-all" }}>{v}</code>,
-              },
-              {
-                title: "",
-                key: "copy",
-                width: 70,
-                render: (_: unknown, r: DomainDnsRecord) => (
-                  <Button size="small" onClick={() => copy(r.value)}>
-                    复制
-                  </Button>
-                ),
-              },
-            ]}
-          />
+
+          <div>
+            <Typography.Title level={5}>1. 流量</Typography.Title>
+            <DnsRecordsTable records={traffic} />
+          </div>
+
+          <div>
+            <Typography.Title level={5}>2. 证书验证（DCV Delegation）</Typography.Title>
+            {dcv.length > 0 ? (
+              <>
+                <DnsRecordsTable records={dcv} />
+                <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                  <strong>必须设为 DNS only（灰云）</strong>，并且不要删除；删除后证书无法自动续期。
+                </Typography.Paragraph>
+              </>
+            ) : (
+              <Alert
+                type="error"
+                showIcon
+                message="平台没有返回 DCV 委派记录"
+                description="无法保证证书自动续期。请联系平台检查 DCV Delegation 配置；不要用手动 TXT 代替。"
+              />
+            )}
+          </div>
+
+          {ownership.length > 0 && (
+            <div>
+              <Typography.Title level={5}>3. 归属验证（仅首次，通常不需要）</Typography.Title>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                Cloudflare 会先尝试 HTTP 归属验证；如果 5 分钟后 Hostname status 仍是 Pending，
+                再加下面这条 TXT。Hostname active 后可以删除。
+              </Typography.Paragraph>
+              <DnsRecordsTable records={ownership} />
+            </div>
+          )}
+
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
             <strong>根域名（如 example.com）：</strong>首选把 DNS 托管到 Cloudflare，然后加一条
             A 记录 <code>@ → 192.0.2.1</code>（开启代理）。如果继续用现在的 DNS 服务商，需要它支持
             CNAME 展平 / ALIAS；注册商通常不允许根域直接 CNAME。
           </Typography.Paragraph>
-          {dns.dcv.length > 0 && (
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              <strong>推荐用 DCV Delegation：</strong>把 <code>_acme-challenge</code> 按上表的 CNAME
-              指过去，之后证书续期自动完成；如果已经加过同名的 TXT 记录，先删掉冲突的 TXT。
-            </Typography.Paragraph>
-          )}
         </Space>
       )}
     </Modal>
@@ -484,7 +535,7 @@ export default function Domains() {
         type="info"
         showIcon
         message="自定义域名由平台代为申请证书，DNS 仍在你的域名服务商处"
-        description="新增域名后按提示添加解析记录；通常 5 分钟生效，证书最多 24 小时。原来的默认地址一直可用。"
+        description="证书统一走 DCV Delegation：加一条 _acme-challenge CNAME（DNS only / 灰云，不要删除），自动续期；不要加同名 TXT。原来的默认地址一直可用。"
       />
 
       {data?.defaults && (
