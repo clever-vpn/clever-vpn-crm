@@ -77,7 +77,11 @@ const config = {
   d1_databases: [
     { binding: "REGISTRY", database_name: "clever-vpn-registry-d1", database_id: registryD1 },
   ],
-  vars: { ADMIN_ZONE: crmRoot, CAPACITY: String(capacity) },
+  vars: {
+    ADMIN_ZONE: crmRoot,
+    CAPACITY: String(capacity),
+    PLATFORM_VERSION: process.env.PLATFORM_VERSION ?? "dev",
+  },
   // 两条 route 缺一不可：
   //   · `*.CRM_ROOT/*` 是平台子域（租户后台域）——**曾经漏掉，部署即把整片租户后台解绑**；
   //   · `origin-crm.*` 是 CRM 自定义域的回源（originless 记录 + route）。
