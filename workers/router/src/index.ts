@@ -172,8 +172,9 @@ export default {
     const url = new URL(request.url);
     const host = url.hostname.toLowerCase();
 
-    // 自己的版本（发布后核验"tag == 线上"用，不需要 KV）
-    if (url.pathname === "/__version") {
+    // 自己的版本（发布后核验"tag == 线上"用，不需要 KV）。
+    // 路径必须带 `__router/` 前缀：`/__version` 属于**租户的 shard**，router 不能截胡。
+    if (url.pathname === "/__router/version") {
       return new Response(
         JSON.stringify({ service: "clever-vpn-crm-router", version: env.PLATFORM_VERSION ?? "dev" }),
         { headers: { "Content-Type": "application/json" } },
