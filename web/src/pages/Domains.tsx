@@ -135,18 +135,27 @@ function DomainSection({
       width: 150,
       render: (state: DomainView["state"], d: DomainView) => {
         const meta = STATE_META[state] ?? STATE_META.pending;
+        const activeNoDcv = state === "active" && !d.dcv_available;
         const detail =
           state === "active"
             ? d.cert_expires_at
               ? `证书有效期至 ${fmtDate(d.cert_expires_at)}`
               : "证书已生效"
             : state === "pending"
-              ? "正在验证域名和证书"
-              : "请打开「解析记录」查看原因";
+              ? "需要完成 DNS 配置"
+              : "验证失败，请点「重新验证」";
         return (
           <div>
             <Tag color={meta.color}>{meta.text}</Tag>
-            <div style={{ fontSize: 11, color: "#8593a8", marginTop: 2 }}>{detail}</div>
+            <div
+              style={{
+                fontSize: 11,
+                marginTop: 2,
+                color: activeNoDcv ? "#b45309" : "#8593a8",
+              }}
+            >
+              {activeNoDcv ? `${detail} · 自动续期待处理` : detail}
+            </div>
           </div>
         );
       },
@@ -156,7 +165,8 @@ function DomainSection({
       dataIndex: "cert_expires_at",
       key: "cert_expires_at",
       width: 140,
-      render: (v: string | null) => (v ? fmtDate(v) : "—"),
+      render: (v: string | null, d: DomainView) =>
+        v ? fmtDate(v) : d.state === "active" ? "有效期内" : "—",
     },
     {
       title: "添加时间",
@@ -371,16 +381,66 @@ function DnsModal({
   onClose: () => void;
 }) {
   const dns = domain?.dns;
+  const state = domain?.state;
   const traffic: DomainDnsRecord[] =
     dns && domain
       ? [{ type: "CNAME", name: domain.hostname, value: dns.target }]
       : [];
   const dcv = dns?.dcv ?? [];
+  const hasDcv = dcv.length > 0;
   // 归属 TXT 只在 Hostname 还没 active 时是备用；HTTP 能过就不用加
   const ownership =
     dns?.ownership && domain && domain.hostname_status !== "active"
       ? [dns.ownership]
       : [];
+
+  const banner = !dns ? (
+    <Alert
+      type="info"
+      showIcon
+      message="暂时读不到解析记录"
+      description="请点「刷新状态」再打开；多次仍然失败，请联系客服。"
+    />
+  ) : state === "active" ? (
+    hasDcv ? (
+      <Alert
+        type="success"
+        showIcon
+        message="一切正常，无需操作"
+        description="网站可以正常访问。证书到期会自动续期，不需要再改 DNS。"
+      />
+    ) : (
+      <Alert
+        type="warning"
+        showIcon
+        message="网站正常，但自动续期还没配置"
+        description="当前证书仍然有效，网站不受影响；但证书到期前需要处理。请联系客服，不要删除现有 DNS 记录。"
+      />
+    )
+  ) : state === "pending" ? (
+    hasDcv ? (
+      <Alert
+        type="info"
+        showIcon
+        message="还需要一步：完成 DNS 配置"
+        description="请添加下面第 2 节的 CNAME，然后点「刷新状态」。之后系统会自动续期，不需要再操作。"
+      />
+    ) : (
+      <Alert
+        type="info"
+        showIcon
+        message="正在生成证书续期记录"
+        description="请稍后点「刷新状态」；10 分钟后仍然没有，请联系客服。"
+      />
+    )
+  ) : (
+    <Alert
+      type="error"
+      showIcon
+      message="验证失败，需要处理"
+      description="请关闭后点「重新验证」；仍然失败请联系客服，并把下面的记录一并提供。"
+    />
+  );
 
   return (
     <Modal
@@ -390,72 +450,69 @@ function DnsModal({
       onCancel={onClose}
       footer={<Button onClick={onClose}>关闭</Button>}
     >
-      {!dns ? (
-        <Alert
-          type="info"
-          showIcon
-          message="平台还没返回解析记录"
-          description="证书续期记录有时会晚几秒生成；点「刷新状态」再打开。"
-        />
-      ) : (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-          <Alert
-            type="info"
-            showIcon
-            message="证书会自动续期"
-            description="只需要在 DNS 里加一条 CNAME 记录（自动续期用），不要删除；不要加同名 TXT。"
-          />
+      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        {banner}
 
-          <div>
-            <Typography.Title level={5}>1. 网站访问记录</Typography.Title>
-            <DnsRecordsTable records={traffic} />
-          </div>
+        {dns && (
+          <>
+            <div>
+              <Typography.Title level={5}>1. 网站访问记录</Typography.Title>
+              <DnsRecordsTable records={traffic} />
+              <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                <strong>域名在 Cloudflare：</strong>把这条记录设为「已代理」（橙色云朵）。
+                <br />
+                <strong>不在 Cloudflare：</strong>直接使用这条 CNAME，不需要代理。
+              </Typography.Paragraph>
+            </div>
 
-          <div>
-            <Typography.Title level={5}>2. 证书自动续期记录</Typography.Title>
-            {dcv.length > 0 ? (
-              <>
-                <DnsRecordsTable records={dcv} />
-                <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                  如果域名在 Cloudflare，请把这条记录的代理关掉（灰色云朵）；不要删除，删除后证书无法自动续期。
-                </Typography.Paragraph>
-              </>
-            ) : (
-              domain?.state === "active" ? (
-                <Alert
-                  type="success"
-                  showIcon
-                  message="证书已生效，不需要再改 DNS"
-                  description="当前证书仍在有效期内；自动续期记录以后可以再补。"
-                />
-              ) : (
+            <div>
+              <Typography.Title level={5}>2. 证书自动续期记录</Typography.Title>
+              {hasDcv ? (
+                <>
+                  <DnsRecordsTable records={dcv} />
+                  <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                    {state === "active"
+                      ? "已配置，无需操作。以后证书到期会自动续期。"
+                      : "如果域名在 Cloudflare：把这条记录设为「仅 DNS」（灰色云朵），然后点「刷新状态」。之后系统会自动续期，不需要再操作。"}
+                    <br />
+                    不要删除这条记录，也不要加同名 TXT。
+                  </Typography.Paragraph>
+                </>
+              ) : state === "active" ? (
                 <Alert
                   type="warning"
                   showIcon
-                  message="证书续期记录正在生成"
-                  description="通常几秒。点「刷新状态」再看；如果长时间没有，先解除绑定再重新添加。"
+                  message="自动续期还没配置"
+                  description="当前证书有效，网站正常；证书到期前需要处理。请联系客服，不要删除现有 DNS 记录。"
                 />
-              )
-            )}
-          </div>
-
-          {ownership.length > 0 && (
-            <div>
-              <Typography.Title level={5}>3. 域名归属验证（通常不需要）</Typography.Title>
-              <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-                先等 5 分钟，如果状态还是「等待验证」，再加下面这条 TXT；生效后可以删除。
-              </Typography.Paragraph>
-              <DnsRecordsTable records={ownership} />
+              ) : (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="证书续期记录正在生成"
+                  description="请稍后点「刷新状态」；10 分钟后仍然没有，请联系客服。"
+                />
+              )}
             </div>
-          )}
 
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            <strong>根域名（如 example.com）：</strong>首选把 DNS 托管到 Cloudflare，然后加一条
-            A 记录 <code>@ → 192.0.2.1</code>（开启代理）。如果继续用现在的 DNS 服务商，需要它支持
-            CNAME 展平 / ALIAS；注册商通常不允许根域直接 CNAME。
-          </Typography.Paragraph>
-        </Space>
-      )}
+            {ownership.length > 0 && (
+              <div>
+                <Typography.Title level={5}>3. 域名归属验证（通常不需要）</Typography.Title>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                  先等 5 分钟；如果状态仍是「等待验证」，再加下面这条 TXT。生效后可以删除。
+                </Typography.Paragraph>
+                <DnsRecordsTable records={ownership} />
+              </div>
+            )}
+
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              <strong>根域名（如 example.com）：</strong>
+              域名在 Cloudflare 时，加一条 A 记录 <code>@ → 192.0.2.1</code>（开启代理）；
+              不在 Cloudflare 时，需要服务商支持 CNAME 展平 / ALIAS，否则请用子域，或把 DNS 托管到 Cloudflare。
+            </Typography.Paragraph>
+          </>
+        )}
+      </Space>
     </Modal>
   );
 }
@@ -549,8 +606,8 @@ export default function Domains() {
       <Alert
         type="info"
         showIcon
-        message="自定义域名由平台自动申请和续期证书"
-        description="绑定后只需要在 DNS 里加一条 CNAME 记录（自动续期用），不要删除；不需要加 TXT。原来的默认地址一直可用。"
+        message="自定义域名由平台自动申请证书"
+        description="绑定后按「解析记录」里的一次性步骤配置 DNS；配置完成后不需要再操作。原来的默认地址一直可用。"
       />
 
       {data?.defaults && (
