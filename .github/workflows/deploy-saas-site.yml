@@ -94,7 +94,7 @@ jobs:
     if: success()
     permissions:
       contents: write
-    uses: ./.github/workflows/release.yml
+    uses: ./.github/workflows/_release-publish.yml
     with:
       tag: ${{ needs.resolve.outputs.release_tag }}
       sha: ${{ needs.resolve.outputs.sha }}

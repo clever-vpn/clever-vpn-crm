@@ -1,11 +1,11 @@
-# 共享：部署成功之后创建 tag + release，并给该 release 挂可复现产物（幂等）
+# 共享：部署成功之后创建 tag + release（幂等）
 #
-# 为什么产物也在这里：`GITHUB_TOKEN` 创建的 release **不会**再触发 `release: published`
-# 的 workflow（GitHub 的防递归规则），所以不能靠事件驱动来补资产。
+# 不做产物：SaaS 与自托管都从源码 build，release 只是一条"版本记录"（tag + notes）。
+# 需要可下载的 self-host 包时，另外加一个 workflow_dispatch 的打包流程，不挂在每次发布上。
 #
 # 只在 _release-tag.yml 报 is_new_tag=true 时被调用；创建在**部署过的那个 sha** 上，
 # 所以 tag 永远等于线上版本。已存在则跳过（并行部署的两个 worker 不会互相打架）。
-name: release
+name: _release-publish
 
 on:
   workflow_call:
@@ -55,32 +55,3 @@ jobs:
             gh release create "$TAG" --target "$SHA" --title "$TAG" --generate-notes
           fi
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck
-      - run: npm test
-
-      # `wrangler deploy` 会校验 `assets.directory`（= web/dist）是否存在，
-      # 而 web/dist 是构建产物、不入库 —— 不先构建就直接挂在 dry-run 上。
-      - name: Build web assets
-        run: npm run build:web
-
-      - name: Build worker bundle
-        run: npx wrangler deploy --dry-run --outdir dist
-
-      - name: Package release assets
-        run: |
-          set -euo pipefail
-          cp dist/index.js crm-worker.mjs
-          sha256sum crm-worker.mjs wrangler.example.jsonc > checksums.txt
-          cat checksums.txt
-
-      - name: Upload assets to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
-        run: gh release upload "$TAG" crm-worker.mjs wrangler.example.jsonc checksums.txt --clobber
