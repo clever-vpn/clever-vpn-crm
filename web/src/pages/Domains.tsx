@@ -415,10 +415,10 @@ function DnsModal({
               </>
             ) : (
               <Alert
-                type="error"
+                type="warning"
                 showIcon
-                message="平台没有返回 DCV 委派记录"
-                description="无法保证证书自动续期。请联系平台检查 DCV Delegation 配置；不要用手动 TXT 代替。"
+                message="DCV 委派记录还没生成"
+                description="Cloudflare 是异步生成的，通常几秒。点「刷新状态」再看；如果长时间没有，先解除绑定再重新添加。不要用手动 TXT 代替。"
               />
             )}
           </div>
