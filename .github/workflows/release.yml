@@ -1,23 +1,59 @@
+# 共享：部署成功之后创建 tag + release，并给该 release 挂可复现产物（幂等）
+#
+# 为什么产物也在这里：`GITHUB_TOKEN` 创建的 release **不会**再触发 `release: published`
+# 的 workflow（GitHub 的防递归规则），所以不能靠事件驱动来补资产。
+#
+# 只在 _release-tag.yml 报 is_new_tag=true 时被调用；创建在**部署过的那个 sha** 上，
+# 所以 tag 永远等于线上版本。已存在则跳过（并行部署的两个 worker 不会互相打架）。
 name: release
 
-# 发布事件（由部署 workflow 的 _release-publish 创建）→ 给该 release 挂可复现产物。
-#
-# **tag/release 不由这里创建**：版本由部署决定（见 skill `release-crm` 与 docs/release.md），
-# tag 必须等于线上 worker 自报的版本。这里只负责"把产物传到已经存在的 release 上"。
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: "要创建的 tag（vX.Y.Z）"
+        required: true
+        type: string
+      sha:
+        description: "部署过的 commit"
+        required: true
+        type: string
+      is_new_tag:
+        description: "_release-tag 的输出：true 才创建"
+        required: true
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
-  assets:
+  publish:
+    name: publish ${{ inputs.tag }}
+    if: inputs.is_new_tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Create tag and release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG 已存在，跳过创建"
+            exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          else
+            gh release create "$TAG" --target "$SHA" --title "$TAG" --generate-notes
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -43,10 +79,8 @@ jobs:
           sha256sum crm-worker.mjs wrangler.example.jsonc > checksums.txt
           cat checksums.txt
 
-      - name: Upload assets to the existing release
+      - name: Upload assets to the release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -euo pipefail
-          gh release upload "$TAG" crm-worker.mjs wrangler.example.jsonc checksums.txt --clobber
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" crm-worker.mjs wrangler.example.jsonc checksums.txt --clobber
