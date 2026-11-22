@@ -109,13 +109,12 @@ export async function scopeToTenant(
   }
 
   const host = new URL(request.url).hostname.toLowerCase();
-  // 与 router 同一口径：先查 `host:`，miss 再按平台子域取 `slug:`。
-  // 平台子域**不写 `host:`**（cf-api 只写 `slug:`），没有这条兜底新租户会 404。
-  let map = await mapOf(env.HOSTS, `host:${host}`);
-  if (!map) {
-    const slug = platformSlug(host, env.ADMIN_ZONE);
-    if (slug) map = await mapOf(env.HOSTS, `slug:${slug}`);
-  }
+  // 与 router 同一口径：平台子域**优先**（从 slug 推导，`host:` 里的旧行可能是错的），
+  // 自定义域才看 `host:`。平台子域不写 `host:`，新租户只能靠 `slug:` 兜底。
+  let map: HostMap | null = null;
+  const slug = platformSlug(host, env.ADMIN_ZONE);
+  if (slug) map = await mapOf(env.HOSTS, `slug:${slug}`);
+  if (!map) map = await mapOf(env.HOSTS, `host:${host}`);
   if (!map) {
     throw new TenantResolveError("unknown_host", `未知域名：${host}`);
   }
