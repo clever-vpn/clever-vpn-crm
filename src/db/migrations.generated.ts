@@ -6,7 +6,7 @@
  * `d1_migrations` 台账里的文件名集合必须与 `files[].name` 集合相等 ——
  * 缺就 `batch` 补上，多就是"库比代码新"，拒绝服务。
  *
- * `schemaVersion`（sha256:d610ffa3913192f2）是全部 `(name, sql)` 的内容指纹，
+ * `schemaVersion`（sha256:92716020ee9979dd）是全部 `(name, sql)` 的内容指纹，
  * 只用于日志与排障 —— **不参与门禁判断**（判据是文件名集合，理由见 ADR
  * `0007-tenant-migration-execution.md`）。
  */
@@ -23,7 +23,7 @@ export const MIGRATION_BUNDLE: {
   readonly schemaVersion: string;
   readonly files: readonly EmbeddedMigrationFile[];
 } = {
-  "schemaVersion": "sha256:d610ffa3913192f2",
+  "schemaVersion": "sha256:92716020ee9979dd",
   "files": [
     {
       "name": "0000_baseline.sql",
@@ -103,6 +103,13 @@ export const MIGRATION_BUNDLE: {
         "CREATE UNIQUE INDEX `uq_store_channels_platform` ON `store_channels` (`platform`);",
         "CREATE TABLE `subscription_changes` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`at` text NOT NULL,\n\t`customer_id` integer NOT NULL,\n\t`subscription_id` integer NOT NULL,\n\t`action` text NOT NULL,\n\t`paid_minor` integer,\n\t`residual_minor` integer,\n\t`payable_minor` integer,\n\t`kind_before` text,\n\t`kind_after` text,\n\t`plan_before` text,\n\t`plan_after` text,\n\t`expires_before` text,\n\t`expires_after` text,\n\t`period_extra_before` real,\n\t`period_extra_after` real,\n\t`detail` text\n);",
         "CREATE INDEX `idx_changes_customer` ON `subscription_changes` (`customer_id`,`id`);"
+      ]
+    },
+    {
+      "name": "0001_wonderful_sheva_callister.sql",
+      "sha256": "287288e5f9dde841e4e27ed1f5c3d6e5ec2f991f786b2d55c34f433fb952693f",
+      "statements": [
+        "CREATE TABLE `domain_checks` (\n\t`hostname` text PRIMARY KEY NOT NULL,\n\t`status` text NOT NULL,\n\t`checked_at` text NOT NULL\n);"
       ]
     }
   ]
