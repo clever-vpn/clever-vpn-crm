@@ -32,14 +32,24 @@ env:
   CF_API_BASE: https://api.clever-vpn.org
 
 jobs:
+  resolve:
+    uses: ./.github/workflows/_release-tag.yml
+    with:
+      mode: latest
+
   ensure:
     name: ensure capacity
+    needs: resolve
     runs-on: ubuntu-latest
     concurrency:
       group: ensure-shard
       cancel-in-progress: false
+    env:
+      CRM_CODE_VERSION: ${{ needs.resolve.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -130,6 +140,7 @@ jobs:
           REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
           CRM_ROOT: ${{ vars.CRM_ROOT }}
           BASE_DOMAIN: ${{ vars.SAAS_BASE_DOMAIN || 'clever-vpn.org' }}
+          PLATFORM_VERSION: ${{ needs.resolve.outputs.release_tag }}
         run: |
           set -euo pipefail
           next=$(( ${{ steps.decide.outputs.ready }} + 1 ))

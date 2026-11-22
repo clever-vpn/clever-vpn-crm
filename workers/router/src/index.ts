@@ -37,6 +37,8 @@ export interface RouterEnv {
   ADMIN_ZONE?: string;
   /** registry D1（`tenants` 表）。自托管单租户部署不绑。 */
   REGISTRY?: D1Database;
+  /** 该 router 部署的版本（tag，见 skill release-crm） */
+  PLATFORM_VERSION?: string;
   /** `SHARD_<n>` → 该片 worker 的 service binding */
   [binding: string]: unknown;
 }
@@ -169,6 +171,14 @@ export default {
   async fetch(request: Request, env: RouterEnv): Promise<Response> {
     const url = new URL(request.url);
     const host = url.hostname.toLowerCase();
+
+    // 自己的版本（发布后核验"tag == 线上"用，不需要 KV）
+    if (url.pathname === "/__version") {
+      return new Response(
+        JSON.stringify({ service: "clever-vpn-crm-router", version: env.PLATFORM_VERSION ?? "dev" }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }
 
     // 自己的健康检查（部署后核验用，不需要 KV）
     if (url.pathname === "/__router/health") {

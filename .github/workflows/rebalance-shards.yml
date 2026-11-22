@@ -30,15 +30,22 @@ env:
   CF_API_BASE: https://api.clever-vpn.org
 
 jobs:
+  resolve:
+    uses: ./.github/workflows/_release-tag.yml
+    with:
+      mode: latest
+
   rebalance:
     name: rebalance to capacity ${{ inputs.capacity }}
+    needs: resolve
     runs-on: ubuntu-latest
     concurrency:
       group: rebalance-shards
       cancel-in-progress: false
     env:
       CAPACITY: ${{ inputs.capacity }}
-      CRM_CODE_VERSION: ${{ github.sha }}
+      CRM_CODE_VERSION: ${{ needs.resolve.outputs.release_tag }}
+      PLATFORM_VERSION: ${{ needs.resolve.outputs.release_tag }}
       CRM_ROOT: ${{ vars.CRM_ROOT }}
       HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
       REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
@@ -47,6 +54,8 @@ jobs:
       ALLOW_MOCK_PAYMENTS: ${{ vars.ALLOW_MOCK_PAYMENTS }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - uses: actions/setup-node@v4
         with:

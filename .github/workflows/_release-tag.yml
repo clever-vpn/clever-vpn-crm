@@ -1,0 +1,131 @@
+# 共享：解析本次部署的版本 tag（契约见 docs/release.md / skill release-crm）
+#
+# 规则（云服务只有一个对外版本）：
+#   · 传了 tag：必须已存在，部署它的 commit；不存在 ⇒ 直接失败（不猜、不自动创建）
+#   · 没传：HEAD == 最新 release 的 commit ⇒ 复用该 tag
+#           否则（auto_bump 时）latest release 的 patch+1，部署 HEAD，成功后由
+#           _release-publish.yml 创建 tag+release
+#   · auto_bump=false：维护类部署（扩容/重平衡）只允许部署"已发布的 commit"
+name: _release-tag
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "可选：已存在的 release tag（如 v1.2.0）。留空 = 自动解析"
+        required: false
+        type: string
+        default: ""
+      auto_bump:
+        description: "HEAD 未发布时是否允许 patch+1（维护类部署传 false）"
+        required: false
+        type: boolean
+        default: true
+      mode:
+        description: "auto = 按 HEAD 解析；latest = 只部署最新已发布版本（扩容/重平衡用）"
+        required: false
+        type: string
+        default: auto
+    outputs:
+      release_tag:
+        description: "本次部署的版本"
+        value: ${{ jobs.resolve.outputs.release_tag }}
+      is_new_tag:
+        description: "true = 部署成功后需要创建 tag+release"
+        value: ${{ jobs.resolve.outputs.is_new_tag }}
+      sha:
+        description: "要部署的 commit（部署必须 checkout 它，不能 checkout main）"
+        value: ${{ jobs.resolve.outputs.sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      is_new_tag: ${{ steps.resolve.outputs.is_new_tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          AUTO_BUMP: ${{ inputs.auto_bump }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          # 允许带/不带 v 前缀；发布统一 v 前缀
+          INPUT_TAG="${INPUT_TAG#v}"
+          INPUT_TAG="$(printf '%s' "$INPUT_TAG" | tr -d '[:space:]')"
+
+          emit() {
+            echo "release_tag=$1" >> "$GITHUB_OUTPUT"
+            echo "is_new_tag=$2" >> "$GITHUB_OUTPUT"
+            echo "sha=$3" >> "$GITHUB_OUTPUT"
+            echo "→ 部署 $1 @ ${3:0:12}（is_new_tag=$2）"
+          }
+
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="v${INPUT_TAG}"
+            if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "::error::tag '$TAG' 不存在。指定 tag 部署时必须先创建它（大版本见 docs/release.md）"
+              exit 1
+            fi
+            emit "$TAG" "false" "$(git rev-list -n1 "$TAG")"
+            exit 0
+          fi
+
+          HEAD_SHA="$(git rev-parse HEAD)"
+          LATEST="$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+
+          if [ "$MODE" = "latest" ]; then
+            if [ -z "$LATEST" ]; then
+              echo "::error::还没有任何 release，无法按最新已发布版本部署"
+              exit 1
+            fi
+            TAG="v${LATEST#v}"
+            emit "$TAG" "false" "$(git rev-list -n1 "$TAG")"
+            exit 0
+          fi
+
+          if [ -z "$LATEST" ]; then
+            if [ "$AUTO_BUMP" != "true" ]; then
+              echo "::error::仓库还没有任何 release；维护类部署必须先发一版"
+              exit 1
+            fi
+            emit "v1.0.0" "true" "$HEAD_SHA"
+            exit 0
+          fi
+
+          LATEST="${LATEST#v}"
+          REL_SHA=""
+          if git rev-parse -q --verify "refs/tags/v${LATEST}" >/dev/null; then
+            REL_SHA="$(git rev-list -n1 "v${LATEST}")"
+          fi
+
+          if [ "$HEAD_SHA" = "$REL_SHA" ]; then
+            emit "v${LATEST}" "false" "$HEAD_SHA"
+            exit 0
+          fi
+
+          if [ "$AUTO_BUMP" != "true" ]; then
+            echo "::error::HEAD 不是最新 release（v${LATEST}）的 commit；维护类部署只能部署已发布的 commit，先发一版"
+            exit 1
+          fi
+
+          BASE="$(printf '%s' "$LATEST" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*$/\1/')"
+          if ! printf '%s' "$BASE" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::无法解析最新 release 的版本：v${LATEST}"
+            exit 1
+          fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          emit "v${MAJOR}.${MINOR}.$((PATCH + 1))" "true" "$HEAD_SHA"
