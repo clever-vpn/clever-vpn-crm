@@ -26,6 +26,7 @@ import { handleAdminPromotions } from "./promotions";
 import { handleAdminSettings } from "./settings";
 import { handleAdminPlatform } from "./platform";
 import { handleAdminSite } from "./site";
+import { handleAdminDomains } from "./domains";
 import { handleAdminSubscriptions } from "./subscriptions";
 import { emailCodeAvailable, mailReady, sendMail } from "../mail";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
@@ -510,6 +511,10 @@ export async function handleAdminApi(
   // ── 站点：发布 / 回滚 / 状态（产物在 R2，指针在 KV，见 contracts/site-studio-crm.md §6）──
   const siteResponse = await handleAdminSite(request, env, tenantId, admin.email);
   if (siteResponse) return siteResponse;
+
+  // ── 自定义域名（品牌网站 / 后台）：托管模式走 cf-api，自部署只回说明 ──
+  const domainsResponse = await handleAdminDomains(request, env, admin.email);
+  if (domainsResponse) return domainsResponse;
 
   if (method === "GET" && path === "/me") {
     return json({

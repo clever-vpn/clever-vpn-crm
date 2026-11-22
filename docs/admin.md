@@ -171,6 +171,7 @@ console.log(`pbkdf2$sha256$50000$${b64(salt)}$${b64(bits)}`);' '新密码'
 | POST | `/api/admin/2fa/disable` | `{password}` 关闭 |
 | GET | `/api/admin/audit?limit=50` | 审计日志（最多 200 条） |
 | * | `/api/admin/plans*` | 套餐设计器（CRUD / 发布 / 下线 / 预览），见 [plans.md](plans.md)  |
+| GET/POST/DELETE | `/api/admin/domains*` | 自定义域名（品牌网站 / 后台）；托管模式转发 cf-api，自部署只回说明，见 [site-storage.md](site-storage.md) §5 |
 | GET/POST | `/api/admin/customers` | 客户列表 / 建客户（本地联调与补单用） |
 | GET/POST | `/api/admin/subscriptions` | 订阅历史 / 手工开通，见 [plans.md](plans.md) |
 | POST | `/api/admin/subscriptions/settle` | 跑一轮额度结算（**默认 dry-run**；线上由 cron 每小时跑） |
