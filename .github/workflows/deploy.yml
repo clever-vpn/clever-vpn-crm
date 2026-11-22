@@ -19,6 +19,12 @@ name: deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "可选：已存在的 release tag（如 v1.2.0）。留空 = 自动解析"
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
 
@@ -30,8 +36,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    uses: ./.github/workflows/_release-tag.yml
+    with:
+      tag: ${{ inputs.tag || '' }}
+
   deploy:
     # 上游仓库 / 未配置租户的 fork：直接跳过，不制造红叉
+    needs: resolve
     if: ${{ vars.CRM_TENANT_ID != '' }}
     runs-on: ubuntu-latest
     env:
@@ -46,8 +58,11 @@ jobs:
       # studio 票据的跳转落点（空 = 该产品未上线，签票会返回 500 studio_not_configured）
       STUDIO_SITE_URL: ${{ vars.STUDIO_SITE_URL }}
       STUDIO_APP_URL: ${{ vars.STUDIO_APP_URL }}
+      CRM_CODE_VERSION: ${{ needs.resolve.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -179,3 +194,15 @@ jobs:
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: publish version
+    needs: [resolve, deploy]
+    if: success() && vars.CRM_TENANT_ID != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/_release-publish.yml
+    with:
+      tag: ${{ needs.resolve.outputs.release_tag }}
+      sha: ${{ needs.resolve.outputs.sha }}
+      is_new_tag: ${{ needs.resolve.outputs.is_new_tag == 'true' }}

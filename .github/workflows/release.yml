@@ -1,23 +1,30 @@
 name: release
 
-# 打 tag（v*）→ 产出可复现的部署产物（Worker bundle + 迁移资产 + 示例配置）。
-# 部署本身走 `deploy-*.yml`（CI 直接 wrangler deploy），不经过这里。
+# 发布事件（由部署 workflow 的 _release-publish 创建）→ 给该 release 挂可复现产物。
+#
+# **tag/release 不由这里创建**：版本由部署决定（见 skill `release-crm` 与 docs/release.md），
+# tag 必须等于线上 worker 自报的版本。这里只负责"把产物传到已经存在的 release 上"。
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  assets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-      - run: npm install --no-audit --no-fund
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
 
@@ -31,18 +38,15 @@ jobs:
 
       - name: Package release assets
         run: |
+          set -euo pipefail
           cp dist/index.js crm-worker.mjs
-          # 迁移资产（给 cf-api 建租户库用）：整文件 sql + 内容寻址 schema_version
           sha256sum crm-worker.mjs wrangler.example.jsonc > checksums.txt
           cat checksums.txt
 
-      # 版本号不写进 bundle：托管侧上传时以 plain_text 绑定 CRM_CODE_VERSION，
-      # 自托管则在 wrangler.jsonc 里配置 —— 保持"同一份字节、不同配置"。
-      - name: Publish release
+      - name: Upload assets to the existing release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes \
-            crm-worker.mjs wrangler.example.jsonc checksums.txt
+          set -euo pipefail
+          gh release upload "$TAG" crm-worker.mjs wrangler.example.jsonc checksums.txt --clobber

@@ -19,13 +19,24 @@ on:
         required: false
         default: "manual"
         type: string
+      tag:
+        description: "可选：已存在的 release tag（如 v1.2.0）。留空 = 自动解析"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  resolve:
+    uses: ./.github/workflows/_release-tag.yml
+    with:
+      tag: ${{ inputs.tag }}
+
   deploy:
     name: deploy site-serve
+    needs: resolve
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-saas-site
@@ -39,9 +50,11 @@ jobs:
       ADMIN_ZONE: ${{ vars.CRM_ROOT }}
       SITE_ROOT: ${{ vars.SITES_ROOT }}
       BASE_DOMAIN: ${{ vars.SAAS_BASE_DOMAIN || 'clever-vpn.org' }}
-      PLATFORM_VERSION: ${{ github.sha }}
+      PLATFORM_VERSION: ${{ needs.resolve.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -74,3 +87,15 @@ jobs:
           printf '%s' "$TEXT" | grep -q "unknown host" \
             || { echo "::error::未登记 host 的响应不是 unknown host：$TEXT"; exit 1; }
           echo "✓ site-serve 在 origin-site 上正常（未登记 host 一律 404）"
+
+  publish:
+    name: publish version
+    needs: [resolve, deploy]
+    if: success()
+    permissions:
+      contents: write
+    uses: ./.github/workflows/_release-publish.yml
+    with:
+      tag: ${{ needs.resolve.outputs.release_tag }}
+      sha: ${{ needs.resolve.outputs.sha }}
+      is_new_tag: ${{ needs.resolve.outputs.is_new_tag == 'true' }}
