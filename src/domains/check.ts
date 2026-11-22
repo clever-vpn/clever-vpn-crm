@@ -163,10 +163,15 @@ async function lookup(
   };
 }
 
-function recordsOf(result: DohResult, name: string, type: DnsRecord["type"]): DnsRecord[] {
+function recordsOf(result: DohResult, owner: string, type: DnsRecord["type"]): DnsRecord[] {
+  const want = lower(owner);
   return result.answers
-    .filter((a) => a.type === DNS_TYPES[type])
-    .map((a) => ({ type, name, value: recordValue(type, a.data) }));
+    .filter((a) => {
+      if (a.type !== DNS_TYPES[type]) return false;
+      // 解析器会跟随 CNAME：target 上的 TXT 不属于租户在这个名字下的记录。
+      return lower(a.name || owner) === want;
+    })
+    .map((a) => ({ type, name: lower(a.name || owner), value: recordValue(type, a.data) }));
 }
 
 function hasValue(records: DnsRecord[], expected: string): boolean {

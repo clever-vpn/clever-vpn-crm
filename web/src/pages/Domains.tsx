@@ -133,6 +133,11 @@ function DnsTable({ records }: { records: DomainDnsRecord[] }) {
 function StepCard({ step }: { step: DomainCheckStep }) {
   const meta = STEP_META[step.status];
   const isDone = step.status === "done";
+  const proxyOnly =
+    step.id === "traffic" &&
+    step.status === "done" &&
+    step.actual.some((r) => r.type === "A" || r.type === "AAAA") &&
+    !step.actual.some((r) => r.type === "CNAME");
   return (
     <div
       style={{
@@ -160,10 +165,18 @@ function StepCard({ step }: { step: DomainCheckStep }) {
 
       {step.actual.length > 0 && (
         <div style={{ marginBottom: 8 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            检测到
-          </Typography.Text>
-          <DnsTable records={step.actual} />
+          {proxyOnly ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              已通过 Cloudflare 代理访问；A/AAAA 是公开 DNS 的解析结果，不是你在 DNS 里新增的记录。
+            </Typography.Text>
+          ) : (
+            <>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                DNS 解析结果
+              </Typography.Text>
+              <DnsTable records={step.actual} />
+            </>
+          )}
         </div>
       )}
 

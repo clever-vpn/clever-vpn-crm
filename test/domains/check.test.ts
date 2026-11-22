@@ -221,6 +221,45 @@ describe("runDomainCheck", () => {
     expect(check.steps[1]?.fix).toContain("CNAME 和 TXT 不能同名共存");
   });
 
+  it("CNAME 后面的 target TXT 不算租户记录", async () => {
+    const base = fakeFetch({
+      head: 200,
+      dns: [
+        answer("brand.com", "NS", "ada.ns.cloudflare.com"),
+        answer("www.brand.com", "CNAME", "origin-site.clever-vpn.org"),
+        answer("_acme-challenge.www.brand.com", "CNAME", "www.brand.com.abc.dcv.cloudflare.com"),
+      ],
+    });
+    const withTargetTxt = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (
+        (url.hostname === "cloudflare-dns.com" || url.hostname === "dns.google") &&
+        url.searchParams.get("name") === "_acme-challenge.www.brand.com" &&
+        url.searchParams.get("type") === "TXT"
+      ) {
+        return new Response(
+          JSON.stringify({
+            Status: 0,
+            Answer: [
+              {
+                name: "www.brand.com.abc.dcv.cloudflare.com",
+                type: 16,
+                data: '"target-token"',
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/dns-json" } },
+        );
+      }
+      return base(input, init);
+    }) as typeof fetch;
+
+    const check = await runDomainCheck(raw(), { fetch: withTargetTxt });
+    const dcv = check.steps.find((s) => s.id === "dcv");
+    expect(dcv?.status).toBe("done");
+    expect(dcv?.actual.some((r) => r.type === "TXT")).toBe(false);
+  });
+
   it("DNS/HEAD 全失败 ⇒ unknown，不误报", async () => {
     const check = await runDomainCheck(raw(), { fetch: fakeFetch({ fail: true }) });
     expect(check.status).toBe("unknown");
