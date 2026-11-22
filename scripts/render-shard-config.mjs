@@ -80,6 +80,8 @@ const vars = {
   CRM_CONTRACT_VERSION: process.env.CRM_CONTRACT_VERSION ?? "19",
   ENVIRONMENT: "production",
   SITE_URL: process.env.SITE_URL ?? "",
+  // 站点设计器入口：租户后台的「打开设计器」按钮靠它（缺了会 500 studio_not_configured）
+  STUDIO_SITE_URL: process.env.STUDIO_SITE_URL ?? "",
   // 发信人：域名须已在本账号完成 Email Sending 验证（与 cf-api 用同一个）
   EMAIL_FROM: process.env.EMAIL_FROM ?? "noreply@clever-vpn.org",
   // 测试支付网关的总开关。**默认开**：它是租户验证支付流程的产品能力，
