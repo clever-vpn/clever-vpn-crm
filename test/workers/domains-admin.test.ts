@@ -31,6 +31,20 @@ function installFakeCf(opts: { conflict?: boolean; unauthorized?: boolean } = {}
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     if (!url.href.startsWith(BASE)) {
+      if (url.hostname === "cloudflare-dns.com" || url.hostname === "dns.google") {
+        const name = url.searchParams.get("name") ?? "";
+        const type = url.searchParams.get("type") ?? "";
+        const target = "origin-site.clever-vpn.org";
+        const dcv = "www.brand.com.abc.dcv.cloudflare.com";
+        const answers: { name: string; type: number; data: string }[] = [];
+        if (type === "NS") answers.push({ name, type: 2, data: "ada.ns.cloudflare.com" });
+        if (type === "CNAME" && name === "www.brand.com") answers.push({ name, type: 5, data: target });
+        if (type === "CNAME" && name === "_acme-challenge.www.brand.com") {
+          answers.push({ name, type: 5, data: dcv });
+        }
+        return json({ Status: 0, Answer: answers });
+      }
+      if (init?.method === "HEAD") return new Response(null, { status: 200 });
       throw new Error(`unexpected fetch ${url.href}`);
     }
     const method = (init?.method ?? "GET").toUpperCase();
@@ -64,6 +78,36 @@ function installFakeCf(opts: { conflict?: boolean; unauthorized?: boolean } = {}
         ],
       });
     }
+    if (url.pathname === "/api/v2/crms/domains/www.brand.com" && method === "GET") {
+      return json({
+        domain: {
+          hostname: "www.brand.com",
+          kind: "site",
+          state: "active",
+          enabled: true,
+          hostname_status: "active",
+          cert_status: "active",
+          cert_expires_at: "2027-02-20T00:00:00Z",
+          dcv_available: true,
+          cf_hostname_id: "ch-1",
+          created_at: "t0",
+          verified_at: "t0",
+          last_checked_at: "t0",
+          last_error: null,
+          dns: {
+            target: "origin-site.clever-vpn.org",
+            ownership: null,
+            dcv: [
+              {
+                type: "CNAME",
+                name: "_acme-challenge.www.brand.com",
+                value: "www.brand.com.abc.dcv.cloudflare.com",
+              },
+            ],
+          },
+        },
+      });
+    }
     if (url.pathname === "/api/v2/crms/domains" && method === "POST") {
       return json(
         {
@@ -84,9 +128,6 @@ function installFakeCf(opts: { conflict?: boolean; unauthorized?: boolean } = {}
         },
         201,
       );
-    }
-    if (url.pathname.endsWith("/retry") && method === "POST") {
-      return json({ domain: { hostname: "www.brand.com", kind: "site", state: "pending" } });
     }
     if (url.pathname.startsWith("/api/v2/crms/domains/") && method === "DELETE") {
       return json({ ok: true, deleted: true });
@@ -135,12 +176,12 @@ describe("mode 分流", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("multi：GET 转发 refresh 并带回 domains", async () => {
+  it("multi：GET 带回 domains", async () => {
     (testEnv as unknown as Record<string, unknown>).MODE = "multi";
     const calls = installFakeCf();
 
     const res = await handleAdminDomains(
-      req("GET", "/domains?refresh=1"),
+      req("GET", "/domains"),
       testEnv,
       "ops@example.com",
     );
@@ -190,6 +231,33 @@ describe("写操作与错误映射", () => {
       (await handleAdminDomains(req("POST", "/domains", { hostname: "", kind: "site" }), testEnv, "a"))?.status,
     ).toBe(400);
     expect(calls).toHaveLength(0);
+  });
+
+  it("POST check：拉单域名 + DNS/HEAD，返回检查结果并写 domain_checks", async () => {
+    (testEnv as unknown as Record<string, unknown>).MODE = "multi";
+    const calls = installFakeCf();
+
+    const res = await handleAdminDomains(
+      req("POST", "/domains/www.brand.com/check"),
+      testEnv,
+      "ops@example.com",
+    );
+
+    expect(res?.status).toBe(200);
+    const body = (await res!.json()) as {
+      check: { status: string; provider: string; steps: { id: string; status: string }[] };
+    };
+    expect(body.check.status).toBe("ready");
+    expect(body.check.provider).toBe("cloudflare");
+    expect(body.check.steps.map((s) => s.id)).toEqual(["traffic", "dcv"]);
+    expect(calls.some((c) => c.path === "/api/v2/crms/domains/www.brand.com")).toBe(true);
+
+    const row = await testEnv.DB.prepare(
+      "SELECT status FROM domain_checks WHERE hostname = ?",
+    )
+      .bind("www.brand.com")
+      .first<{ status: string }>();
+    expect(row?.status).toBe("ready");
   });
 
   it("DELETE 解码 hostname 后转发", async () => {

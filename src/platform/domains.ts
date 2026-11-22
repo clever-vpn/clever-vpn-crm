@@ -56,12 +56,21 @@ export interface DomainsOverview {
   domains: DomainView[];
 }
 
-export async function listDomains(env: Env, refresh: boolean): Promise<DomainsOverview> {
+export async function listDomains(env: Env): Promise<DomainsOverview> {
+  const res = await platformRequest(env, "/api/v2/crms/domains");
+  return platformJson<DomainsOverview>(res);
+}
+
+export async function getDomain(
+  env: Env,
+  hostname: string,
+  refresh: boolean,
+): Promise<{ domain: DomainView }> {
   const res = await platformRequest(
     env,
-    `/api/v2/crms/domains${refresh ? "?refresh=1" : ""}`,
+    `/api/v2/crms/domains/${encodeURIComponent(hostname)}${refresh ? "?refresh=1" : ""}`,
   );
-  return platformJson<DomainsOverview>(res);
+  return platformJson<{ domain: DomainView }>(res);
 }
 
 export async function createDomain(
@@ -72,18 +81,6 @@ export async function createDomain(
     method: "POST",
     body: JSON.stringify(input),
   });
-  return platformJson<{ domain: DomainView }>(res);
-}
-
-export async function retryDomain(
-  env: Env,
-  hostname: string,
-): Promise<{ domain: DomainView }> {
-  const res = await platformRequest(
-    env,
-    `/api/v2/crms/domains/${encodeURIComponent(hostname)}/retry`,
-    { method: "POST", body: JSON.stringify({}) },
-  );
   return platformJson<{ domain: DomainView }>(res);
 }
 

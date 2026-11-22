@@ -123,14 +123,17 @@ site:<tenant>:active   { template_seq, artifact_sha,         写：本仓发布 
 
 - **`MODE=single`（自部署）**：域名不归本仓管。租户在 Cloudflare 里给 `site-serve`
   加 Custom Domain，给 CRM Worker 加后台 Custom Domain，并自己写 `KV[host:<域名>]`。
-- **`MODE=multi`（SaaS）**：域名动作一律走 cf-api（它才持有云凭据，契约
-  `cf-api/hosting.md` §5.6）。CRM 后台「域名」页 → `/api/admin/domains*` → cf-api
-  `/api/v2/crms/domains*`。两种 kind：
+- **`MODE=multi`（SaaS）**：**绑定/解绑**走 cf-api（它才持有云凭据，契约
+  `cf-api/hosting.md` §5.6）；**状态检查/诊断**在 CRM 自己做。两种 kind：
   - `site`：品牌网站（`brand.com` / `www.brand.com`），CNAME 到 `origin-site.<SAAS_ZONE>`；
   - `crm`：后台登录域（`crm.brand.com`），同一 CNAME 目标 + per-hostname
     `custom_origin_server=origin-crm.<SAAS_ZONE>`。
 - 托管绑定由 cf-api 写 registry `tenant_hosts` 与 `HOSTS` KV；CRM 只存 cf-api token，
   **不直接调 Cloudflare**。自部署的页面只展示说明，不出现「添加」按钮。
+- **状态检查在 CRM**：`POST /api/admin/domains/:hostname/check` 先调 cf-api 单域名
+  `?refresh=1` 拿原始状态，再查 NS、DNS（Cloudflare + Google DoH）、HEAD 网站；结论写
+  CRM D1 `domain_checks`。cf-api 不提供 check/DoH/HEAD。
 - **证书验证统一走 DCV Delegation**：后台只展示 `_acme-challenge` CNAME（DNS only），
   不提供手动 TXT 路径；归属验证优先 HTTP，`_cf-custom-hostname` TXT 只在 pending 时作为
-  备用展示。新建 hostname 拿不到 DCV 委派记录会被 cf-api 拒绝（`cf_dcv_not_available`）。
+  备用展示。CF 没返回 DCV 委派记录时，检查结果为 `manual`（联系客服），不会退化成手动 TXT。
+- 列表每行只有「状态检查」「删除」；检查结果会告诉租户缺哪条、类型/值错在哪、怎么改。
