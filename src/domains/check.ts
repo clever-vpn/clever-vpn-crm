@@ -174,14 +174,20 @@ function hasValue(records: DnsRecord[], expected: string): boolean {
 }
 
 async function detectProvider(hostname: string, fetchImpl: typeof fetch): Promise<DnsProvider> {
-  const result = await lookup(hostname, "NS", fetchImpl);
-  const ns = [...result.answers, ...result.authority]
-    .filter((a) => a.type === DNS_TYPES.NS)
-    .map((a) => lower(a.data));
-  if (ns.some((n) => n === "ns.cloudflare.com" || n.endsWith(".ns.cloudflare.com"))) {
-    return "cloudflare";
+  // NS 属于 zone apex，不在 www 上：从最左标签往上找，直到拿到 NS 为止。
+  const labels = hostname.split(".");
+  for (let i = 0; i < labels.length - 1 && i < 4; i += 1) {
+    const candidate = labels.slice(i).join(".");
+    const result = await lookup(candidate, "NS", fetchImpl);
+    const ns = [...result.answers, ...result.authority]
+      .filter((a) => a.type === DNS_TYPES.NS)
+      .map((a) => lower(a.data));
+    if (ns.length === 0) continue;
+    return ns.some((n) => n === "ns.cloudflare.com" || n.endsWith(".ns.cloudflare.com"))
+      ? "cloudflare"
+      : "other";
   }
-  return ns.length > 0 ? "other" : "unknown";
+  return "unknown";
 }
 
 async function trafficReachable(hostname: string, fetchImpl: typeof fetch): Promise<boolean> {
