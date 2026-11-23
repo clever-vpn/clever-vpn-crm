@@ -2,6 +2,9 @@
 
 Last updated: 2026-10-23
 
+> **只想在本机跑 CRM、接线上 cf-api、不配 Caddy/域名：**
+> 看 [local-dev-single.md](local-dev-single.md)，或直接 `npm run dev:local`。
+
 一套**本机就能跑**的联调环境：CRM 作为服务端，`app-web` 是一张网页模拟 App。
 全部走 `https://`，证书由本机 Caddy 的内部 CA 签发（已在本机信任链里）。
 
