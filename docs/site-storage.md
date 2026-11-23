@@ -126,8 +126,8 @@ site:<tenant>:active   { template_seq, artifact_sha,         写：本仓发布 
 - **`MODE=multi`（SaaS）**：**绑定/解绑**走 cf-api（它才持有云凭据，契约
   `cf-api/hosting.md` §5.6）；**状态检查/诊断**在 CRM 自己做。两种 kind：
   - `site`：品牌网站（`brand.com` / `www.brand.com`），CNAME 到 `origin-site.<SAAS_ZONE>`；
-  - `crm`：后台登录域（`crm.brand.com`），同一 CNAME 目标 + per-hostname
-    `custom_origin_server=origin-crm.<SAAS_ZONE>`。
+  - `crm`：后台登录域（`crm.brand.com`），CNAME 到 `origin-crm.<SAAS_ZONE>`，同时
+    custom hostname 带 `custom_origin_server=origin-crm.<SAAS_ZONE>`。
 - 托管绑定由 cf-api 写 registry `tenant_hosts` 与 `HOSTS` KV；CRM 只存 cf-api token，
   **不直接调 Cloudflare**。自部署的页面只展示说明，不出现「添加」按钮。
 - **状态检查在 CRM**：`POST /api/admin/domains/:hostname/check` 先调 cf-api 单域名
