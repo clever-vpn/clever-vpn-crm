@@ -6,10 +6,10 @@
  */
 import { PANEL_BASE } from "./pages/panelBase";
 
-let guard: (() => boolean) | null = null;
+let guard: ((href: string) => boolean) | null = null;
 
-/** 注册导航守卫；返回的函数用于卸载时清理 */
-export function setNavGuard(fn: () => boolean): () => void {
+/** 注册导航守卫；参数是目标面板内路径（如 /payments/gateways） */
+export function setNavGuard(fn: (href: string) => boolean): () => void {
   guard = fn;
   return () => {
     if (guard === fn) guard = null;
@@ -17,12 +17,12 @@ export function setNavGuard(fn: () => boolean): () => void {
 }
 
 /** 当前是否允许离开（没有守卫 = 允许） */
-export function canNavigate(): boolean {
-  return !guard || guard();
+export function canNavigate(href: string): boolean {
+  return !guard || guard(href);
 }
 
 export function navigate(href: string): void {
-  if (!canNavigate()) return;
+  if (!canNavigate(href)) return;
   const target = PANEL_BASE + href;
   if (window.location.pathname === target) return;
   window.history.pushState(null, "", target);

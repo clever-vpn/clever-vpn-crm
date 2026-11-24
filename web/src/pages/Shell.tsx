@@ -157,11 +157,12 @@ function usePathname(): [string] {
   useEffect(() => {
     // 浏览器后退：先过编辑器守卫；取消时把地址推回当前页
     const onPop = () => {
-      if (!canNavigate()) {
+      const target = stripPanelBase(window.location.pathname);
+      if (!canNavigate(target)) {
         window.history.pushState(null, "", PANEL_BASE + pathRef.current);
         return;
       }
-      setPath(stripPanelBase(window.location.pathname));
+      setPath(target);
     };
     // 应用内 navigate：守卫已在 navigate() 里过，这里只同步状态
     const onNav = () => setPath(stripPanelBase(window.location.pathname));

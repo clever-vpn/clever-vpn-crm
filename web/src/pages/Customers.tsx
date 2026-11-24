@@ -53,6 +53,9 @@ export default function Customers() {
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addForm] = Form.useForm<{ email: string }>();
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState<AdminCustomer | null>(null);
   const [form] = Form.useForm<{ plan_id: string; paid_minor: number }>();
@@ -84,18 +87,23 @@ export default function Customers() {
     void load();
   }, [load]);
 
-  async function addCustomer() {
-    const email = window.prompt("新客户邮箱");
-    if (!email) return;
-    setBusy(true);
+  function openAddCustomer(): void {
+    addForm.resetFields();
+    setAddOpen(true);
+  }
+
+  async function submitAddCustomer(): Promise<void> {
+    const values = await addForm.validateFields();
+    setAddBusy(true);
     try {
-      await api.createCustomer(email.trim());
+      await api.createCustomer(values.email.trim());
       message.success("已创建");
+      setAddOpen(false);
       await load();
     } catch (e) {
       message.error(e instanceof ApiError ? e.message || e.code : "创建失败");
     } finally {
-      setBusy(false);
+      setAddBusy(false);
     }
   }
 
@@ -200,7 +208,7 @@ export default function Customers() {
             <Button onClick={() => void load()} loading={busy}>
               刷新
             </Button>
-            <Button type="primary" onClick={() => void addCustomer()} loading={busy}>
+            <Button type="primary" onClick={openAddCustomer} loading={busy}>
               新建客户
             </Button>
           </Space>
@@ -331,6 +339,32 @@ export default function Customers() {
         />
       </div>
 
+      <Modal
+        open={addOpen}
+        title="新建客户"
+        okText="创建"
+        cancelText="取消"
+        confirmLoading={addBusy}
+        onOk={() => void submitAddCustomer()}
+        onCancel={() => setAddOpen(false)}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+          只创建客户账号，不会自动开通订阅；开通/续订请用列表里的操作。
+        </Typography.Paragraph>
+        <Form form={addForm} layout="vertical">
+          <Form.Item
+            label="邮箱"
+            name="email"
+            rules={[
+              { required: true, message: "请填客户邮箱" },
+              { type: "email", message: "邮箱格式不对" },
+            ]}
+          >
+            <Input placeholder="customer@example.com" autoFocus />
+          </Form.Item>
+        </Form>
+      </Modal>
       <Modal
         title={target ? `手工开通：${target.email}` : "手工开通"}
         open={open}
