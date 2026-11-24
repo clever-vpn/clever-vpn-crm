@@ -60,8 +60,9 @@ WEB_PID=$!
 # 设空 = 关闭 AI（面板显示未配置）。AI binding 没有本地模拟，未 `wrangler login` 时
 # wrangler dev 会直接报错，见 docs/local-dev-single.md §5。
 GATEWAY="${CLOUDFLARE_GATEWAY_ID-studio}"
-echo "→ 启动 CRM Worker（8788，AI 网关=${GATEWAY:-关闭}）…"
-./node_modules/.bin/wrangler dev --port 8788 --var "CLOUDFLARE_GATEWAY_ID:${GATEWAY}" >"$WORKER_LOG" 2>&1 &
+MODEL="${CLOUDFLARE_AI_MODEL-}"
+echo "→ 启动 CRM Worker（8788，AI 网关=${GATEWAY:-关闭}，模型=${MODEL:-deepseek/deepseek-flash}）…"
+./node_modules/.bin/wrangler dev --port 8788   --var "CLOUDFLARE_GATEWAY_ID:${GATEWAY}"   --var "CLOUDFLARE_AI_MODEL:${MODEL}" >"$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 
 ready() {

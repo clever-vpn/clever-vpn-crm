@@ -161,6 +161,21 @@ describe("parseAiDraft：拒绝不可信的模型输出", () => {
     if (r.ok) expect(r.draft.template).toBeNull();
   });
 
+  it("模型把 sign 当字段输出：丢弃 role=sign 的冗余项，其它照常校验", () => {
+    const draft = cloneSample();
+    const mapping = mappingOf(draft) as {
+      create: { request: { fields: Record<string, unknown>[] }; response: { fields: Record<string, unknown>[] } };
+      notify: { request: { fields: Record<string, unknown>[] } };
+    };
+    mapping.create.request.fields.push({ field: "sign", role: "sign", value: "{sign}" });
+    mapping.create.response.fields.push({ field: "sign", role: "sign" });
+    mapping.notify.request.fields.push({ field: "sign_type", role: "sign", value: "{sign}" });
+
+    const r = parseAiDraft(JSON.stringify(draft));
+    expect(r.ok, r.ok ? "" : r.errors.join("；")).toBe(true);
+    if (r.ok) expect(JSON.stringify(r.draft.template?.mapping)).not.toContain('"role":"sign"');
+  });
+
   it("evidence / uncertainty 形状不对", () => {
     const badEvidence = cloneSample();
     badEvidence.evidence = [{ section: "1", quote: "" }];
@@ -200,6 +215,10 @@ describe("模型配置与 prompt", () => {
       product: AI_PRODUCT,
       task: "gateway-mapping",
     });
+    expect(aiRuntime(env, "7")?.model).toBe("deepseek/deepseek-flash");
+    expect(
+      aiRuntime({ ...env, CLOUDFLARE_AI_MODEL: "deepseek/deepseek-chat" }, "7")?.model,
+    ).toBe("deepseek/deepseek-chat");
     expect(AI_PRODUCT).toBe("crm");
   });
 
@@ -230,11 +249,12 @@ describe("completeAiJson：AI Gateway binding 接线", () => {
           run({ model, inputs, options }),
       } as unknown as Ai,
       gatewayId: "studio",
+      model: "deepseek/deepseek-flash",
       metadata: { tenant: "7", product: AI_PRODUCT, task: "gateway-mapping" },
     };
   }
 
-  it("模型固定 deepseek flash；网关/元数据/隐私头一次带全", async () => {
+  it("默认模型 deepseek flash；网关/元数据/隐私头一次带全", async () => {
     const calls: RunCall[] = [];
     const runtime = runtimeWith(async (call) => {
       calls.push(call);

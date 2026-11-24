@@ -80,7 +80,9 @@
 2. **envelope**：顶层键恰为四个；`classification` 合法；`template` 与分类一致；
    `schema_version === 2`；`source === "ai"`；模板键只允许
    `schema_version/id/name/description/source/mapping`；账户字段出现即失败；
-3. **`validateMapping`**：mapping 深校验（必填 role、签名、判定、未知键）；
+3. **`validateMapping`**：mapping 深校验（必填 role、签名、判定、未知键）。
+   模型若仍把签名当字段输出（`role: "sign"`），服务端会**丢弃这些冗余项**
+   （签名由端点 `sign` 配置生成），其它非法值照常报错；
 4. **JSON Schema**：运行时**不**加载 Ajv（它依赖 `new Function`，Workers 禁止）；
    envelope 检查覆盖 schema 的模板外壳，mapping 深校验交给 `validateMapping`；
    测试里用 Ajv 对 AI 输出样例跑完整 schema，防止三者漂移。
@@ -135,7 +137,7 @@
 |---|---|
 | `env.AI` | `wrangler.jsonc` 的 `ai` binding（账号内预认证；本地 dev 恒为 remote，需 `wrangler login`） |
 | `CLOUDFLARE_GATEWAY_ID` | AI Gateway 名称，默认 `studio`；本地可用 `studio-dev` 分账。空 = 不启用 |
-| 模型 | 固定 `deepseek/deepseek-flash`（`src/payments/ai.ts` 的 `AI_MODEL`） |
+| 模型 | 默认 `deepseek/deepseek-flash`；可用 `CLOUDFLARE_AI_MODEL` 显式覆盖（本地网关没有 flash 时联调用） |
 | 厂商 key | 只在 AI Gateway 的 **BYOK**（DeepSeek，`default` 别名）；不进 Worker、不进 GitHub Secrets |
 
 每条请求都带：

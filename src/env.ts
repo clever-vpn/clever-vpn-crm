@@ -110,6 +110,12 @@ export interface Env {
   AI?: Ai;
   /** AI Gateway 名称（我们的是 `studio`）。空 = 不启用 AI 配置助手。 */
   CLOUDFLARE_GATEWAY_ID?: string;
+  /**
+   * 可选模型覆盖；空 = `deepseek/deepseek-flash`。
+   * 本地网关没有 flash（或只有 `deepseek-chat` 的 BYOK）时可显式改成
+   * `deepseek/deepseek-chat` 做联调，**不改变生产默认**。
+   */
+  CLOUDFLARE_AI_MODEL?: string;
 
   /**
    * **测试网关（`driver = 'mock'`）的总开关**，默认关闭（`docs/payments.md` §5.3）。

@@ -11,7 +11,7 @@
  * 不写库、不保存、不发布；审计不记文档正文，也不记模型原文。
  */
 
-import { AI_LIMITS, AI_MODEL, aiRuntime, buildPrompt, completeAiJson, parseAiDraft } from "../payments/ai";
+import { AI_LIMITS, aiRuntime, buildPrompt, completeAiJson, parseAiDraft } from "../payments/ai";
 
 import type { Env } from "../env";
 
@@ -89,14 +89,14 @@ export async function handleAdminGatewayAi(
   const completion = await completeAiJson(runtime, buildPrompt(document));
   if (!completion.ok) {
     // 失败也计数：模型已经被调用过，成本已经发生
-    await auditDraft(env, actor, { ok: false, code: completion.code, model: AI_MODEL });
+    await auditDraft(env, actor, { ok: false, code: completion.code, model: runtime.model });
     return fail(502, completion.code, completion.message);
   }
 
   const parsed = parseAiDraft(completion.content);
   await auditDraft(env, actor, {
     ok: parsed.ok,
-    model: AI_MODEL,
+    model: runtime.model,
     ...(parsed.ok
       ? { classification: parsed.draft.classification }
       : { errors: parsed.errors.slice(0, 5) }),
@@ -105,5 +105,5 @@ export async function handleAdminGatewayAi(
   if (!parsed.ok) {
     return fail(422, "invalid_draft", "AI 输出未通过校验，请重试或换一份文档", { errors: parsed.errors });
   }
-  return json({ draft: parsed.draft, model: AI_MODEL });
+  return json({ draft: parsed.draft, model: runtime.model });
 }

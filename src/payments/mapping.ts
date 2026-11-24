@@ -284,7 +284,9 @@ function checkField(value: unknown, label: string, errors: string[], request: bo
   errors.push(...unknownErrors(value, FIELD_KEYS, `${label}.`));
   const f = value as FieldSpec;
   if (!isNonEmptyStr(f.field)) errors.push(`${label}.field 必填`);
-  if (f.role !== undefined && !ROLES.includes(f.role)) errors.push(`${label}.role 非法`);
+  if (f.role !== undefined && !ROLES.includes(f.role)) {
+    errors.push(`${label}.role 非法：${String(f.role)}`);
+  }
   if (f.value !== undefined && typeof f.value !== "string") errors.push(`${label}.value 必须是字符串`);
   if (!request && f.value !== undefined) errors.push(`${label}.value 只能出现在请求字段里`);
   if (request && f.value === undefined && f.role === undefined) {

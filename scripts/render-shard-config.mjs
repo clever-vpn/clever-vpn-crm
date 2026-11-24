@@ -93,6 +93,8 @@ const vars = {
   // AI 配置助手：走平台共用的 AI Gateway（site-studio 也用这个），厂商 key 在网关 BYOK。
   // 空 = 不开放；托管分片默认 `studio`。
   CLOUDFLARE_GATEWAY_ID: process.env.CLOUDFLARE_GATEWAY_ID ?? "studio",
+  // 空 = deepseek/deepseek-flash
+  CLOUDFLARE_AI_MODEL: process.env.CLOUDFLARE_AI_MODEL ?? "",
 };
 
 /** wrangler 配置：代码 + 资源 + 绑定（首次部署与升级都用它） */

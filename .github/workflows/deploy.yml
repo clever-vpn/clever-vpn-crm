@@ -61,6 +61,7 @@ jobs:
       STUDIO_SITE_URL: ${{ vars.STUDIO_SITE_URL }}
       STUDIO_APP_URL: ${{ vars.STUDIO_APP_URL }}
       CLOUDFLARE_GATEWAY_ID: ${{ vars.CLOUDFLARE_GATEWAY_ID }}
+      CLOUDFLARE_AI_MODEL: ${{ vars.CLOUDFLARE_AI_MODEL }}
       CRM_CODE_VERSION: ${{ needs.resolve.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4

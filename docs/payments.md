@@ -620,7 +620,7 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
     envelope/`validateMapping` 校验）+ `src/admin/gateway-ai.ts`
     （`POST /api/admin/gateways/ai-draft`，会话 + 每小时 20 次限流）+ 映射编辑器内的
     「粘贴文档 → 生成 → 预览 → 应用」面板。只产 v2 草稿，不落库、不保存、不发布；
-    模型固定 `deepseek/deepseek-flash`，厂商 key 在网关 BYOK；每条请求带
+    模型默认 `deepseek/deepseek-flash`（`CLOUDFLARE_AI_MODEL` 可覆盖），厂商 key 在网关 BYOK；每条请求带
     `metadata.tenant`（cf-api 计费键）与 `product=crm`。未配 AI binding /
     `CLOUDFLARE_GATEWAY_ID` 时 `ai_unavailable`。
 

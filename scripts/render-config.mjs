@@ -83,6 +83,8 @@ setString("STUDIO_SITE_URL", process.env.STUDIO_SITE_URL ?? "");
 setString("STUDIO_APP_URL", process.env.STUDIO_APP_URL ?? "");
 // AI 配置助手：只渲染网关名（AI binding 已在 wrangler.jsonc）。空 = 不开放。
 setString("CLOUDFLARE_GATEWAY_ID", process.env.CLOUDFLARE_GATEWAY_ID ?? "");
+// 可选模型覆盖；空 = deepseek/deepseek-flash
+setString("CLOUDFLARE_AI_MODEL", process.env.CLOUDFLARE_AI_MODEL ?? "");
 setString("CRM_CODE_VERSION", value("CRM_CODE_VERSION"));
 
 setString("CRM_CONTRACT_VERSION", value("CRM_CONTRACT_VERSION"));

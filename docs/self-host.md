@@ -65,6 +65,7 @@ Variables（明文）：
 | `STUDIO_SITE_URL` | 站点必填 | site-studio 的地址（如 `https://site-studio.clever-vpn.org` 或你自己的）。**不配就没有站点上线路径** —— 后台「打开设计器」会报 `studio_not_configured` |
 | `SITE_URL` | 站点必填 | 站点对外地址（`site-serve` 绑的域名）。只用于给租户一个「点开看线上」的链接；不配就是不给链接，**绝不拿 CRM 的 origin 冒充** |
 | `CLOUDFLARE_GATEWAY_ID` | – | 可选：AI 配置助手用的 AI Gateway 名称（空 = 不启用，见 §2.6） |
+| `CLOUDFLARE_AI_MODEL` | – | 可选：模型覆盖；空 = `deepseek/deepseek-flash` |
 
 > `CLOUDFLARE_API_TOKEN` 建议单独建一把、只给这个仓库用；它是"能改你 Cloudflare
 > 账号"的密钥，不要复用主账号 token。
@@ -121,7 +122,7 @@ Variables（明文）：
    本地 `npm run dev:local` 默认连线上网关 `studio`，需要先 `wrangler login`；
    自部署测试自己的网关时用 `CLOUDFLARE_GATEWAY_ID=<你的网关> npm run dev:local`。
 
-模型固定 `deepseek/deepseek-flash`。每条请求都带 `metadata`：
+模型默认 `deepseek/deepseek-flash`（`CLOUDFLARE_AI_MODEL` 可覆盖）。每条请求都带 `metadata`：
 
 | 键 | 值 |
 |---|---|

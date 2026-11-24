@@ -56,8 +56,8 @@ export const AI_LIMITS = {
 } as const;
 
 /**
- * 固定模型：与 site-studio 同一档。换模型改这里 + 文档，不在运行时按环境变量
- * 偷偷切（模型差异会直接体现在草稿质量和网关上）。
+ * 默认模型：与 site-studio 同一档。可用 `CLOUDFLARE_AI_MODEL` 显式覆盖（本地网关
+ * 没有 flash 时联调用），默认值本身不在运行时偷偷切。
  */
 export const AI_MODEL = "deepseek/deepseek-flash";
 /**
@@ -71,13 +71,20 @@ export const AI_TASK = "gateway-mapping";
 export interface AiRuntime {
   binding: Ai;
   gatewayId: string;
+  model: string;
   metadata: { tenant: string; product: string; task: string };
 }
 
 type AiEnv = {
   AI?: Ai;
   CLOUDFLARE_GATEWAY_ID?: string;
+  /** 可选覆盖；空 = 用 AI_MODEL（deepseek/deepseek-flash） */
+  CLOUDFLARE_AI_MODEL?: string;
 };
+
+export function modelOf(env: AiEnv): string {
+  return (env.CLOUDFLARE_AI_MODEL ?? "").trim() || AI_MODEL;
+}
 
 export function gatewayIdOf(env: AiEnv): string {
   return (env.CLOUDFLARE_GATEWAY_ID ?? "").trim();
@@ -99,6 +106,7 @@ export function aiRuntime(env: AiEnv, tenantId: string): AiRuntime | null {
   return {
     binding: env.AI,
     gatewayId,
+    model: modelOf(env),
     metadata: { tenant, product: AI_PRODUCT, task: AI_TASK },
   };
 }
@@ -137,8 +145,15 @@ mapping 规则：
 - role 只能是 merchant/order_no/amount/subject/body/notify_url/return_url/client_ip/channel/timestamp/nonce/pay_url/trade_no/expires_at/message；
 - 请求字段的 value 用占位符：{merchant} {secret} {order_no} {amount} {subject} {body} {notify_url} {return_url} {client_ip} {channel} {timestamp} {nonce}；
 - 常量字段只写 field + value，不写 role；响应字段不写 value；
+- **fields 里不要写 sign / sign_type 等签名字段**：签名由 sign 配置生成，不属于请求参数；
+  role 只能是上面列出的值（sign/sign_type 都不是 role）；
+- 每个请求字段必须二选一：有 role + value，或常量只有 field + value（无 role）；
+  不要出现既无 role 又无 value 的字段；
 - amount 字段必须写 unit；timestamp 字段写 format（ymdhms 固定 Asia/Shanghai）；
 - sign: {field?（默认 sign）, algo?("md5"|"sha256"), key_append?, exclude?, upper?, encode?}；
+  key_append 是**密钥前的字面量分隔符**（如 "&key="），不要把 {secret} 写进去；
+- 状态/判定字段（status、code、state 等）不要放进 fields：它们由 paid_when / response.ok
+  表达；fields 只列运行时需要读取的字段（如 order_no / trade_no / amount）；
 - 判定值按字符串比较；equals 与 in 只能二选一；
 - query 必填且必须签名，禁止 {"mode":"none"}。
 
@@ -187,6 +202,7 @@ function contentOf(body: unknown): string | null {
  * 经 AI binding → AI Gateway 调一次模型。
  *
  * - 认证：binding 在账号内预认证；厂商 key 由网关 BYOK 注入 ⇒ 这里没有 key；
+ * - 模型：`runtime.model`（默认 `deepseek/deepseek-flash`，可用 `CLOUDFLARE_AI_MODEL` 显式覆盖）；
  * - 记账：`gateway.metadata.tenant` 原样落到网关日志，cf-api 按它聚合；
  * - 隐私：`cf-aig-collect-log-payload: false`，日志不留 prompt/response；
  * - 失败：只回稳定错误码，不把网关/厂商原文回给前端。
@@ -202,7 +218,7 @@ export async function completeAiJson(
   let raw: unknown;
   try {
     raw = await runtime.binding.run(
-      AI_MODEL,
+      runtime.model,
       {
         messages: [
           { role: "system", content: prompt.system },
@@ -286,6 +302,29 @@ function stripFence(raw: string): string {
   const text = raw.trim();
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(text);
   return fenced?.[1]?.trim() ?? text;
+}
+
+/**
+ * 模型偶尔仍把签名本身当请求字段输出（`role: "sign"`）。签名由端点 `sign` 配置
+ * 生成，这类项永远不可能合法；在 `validateMapping` 前丢弃，避免一份本可用的草稿
+ * 因为一个冗余字段整体 422。只丢 `role === "sign"`，其它非法值照常报错。
+ */
+function dropSignRoleFields(mapping: Record<string, unknown>): string[] {
+  const dropped: string[] = [];
+  for (const api of ["create", "notify", "query"]) {
+    const node = mapping[api];
+    if (!isObject(node)) continue;
+    for (const side of ["request", "response"]) {
+      const part = node[side];
+      if (!isObject(part) || !Array.isArray(part.fields)) continue;
+      part.fields = part.fields.filter((field) => {
+        if (!isObject(field) || field.role !== "sign") return true;
+        dropped.push(`${api}.${side}.${String(field.field ?? "?")}`);
+        return false;
+      });
+    }
+  }
+  return dropped;
 }
 
 /**
@@ -380,6 +419,7 @@ export function parseAiDraft(raw: string): ParseResult {
         if ("channel_codes" in rawTemplate.mapping) {
           errors.push("template.mapping 不能包含 channel_codes（通道号属于网关实例）");
         }
+        dropSignRoleFields(rawTemplate.mapping);
         const mapping = validateMapping(rawTemplate.mapping);
         if (!mapping.ok) {
           for (const err of mapping.errors) errors.push(`mapping：${err}`);
