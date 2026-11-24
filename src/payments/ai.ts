@@ -15,6 +15,7 @@
  * 运行时的权威 `validateMapping`；完整 schema 由 `test/payments/ai.test.ts` 在 Node 侧复核。
  */
 
+import { AI_OUTPUT_SCHEMA, AI_OUTPUT_SCHEMA_NAME } from "./ai-output-schema";
 import { validateMapping, type GatewayMapping } from "./mapping";
 
 /** 允许的模型分类；只有 generic_mapping 才带 template */
@@ -225,7 +226,7 @@ export type AiGeneration =
       attempts: number;
     };
 
-/** 从网关返回体取文本：OpenAI 兼容 `choices[0].message.content`，兼容 Workers AI 的 `response`。 */
+/** 从 Chat Completions 返回体取文本：OpenAI 兼容 `choices[0].message.content`。 */
 function contentOf(body: unknown): string | null {
   if (!isObject(body)) return null;
   const choices = body.choices;
@@ -240,48 +241,40 @@ function contentOf(body: unknown): string | null {
   return null;
 }
 
-/**
- * 经 AI binding → AI Gateway 的 **provider-native** 路径调一次模型。
- *
- * 与 site-studio 同一条路：`env.AI.gateway(id).run({ provider, endpoint, query })`。
- * 它用网关里存的 **BYOK** 厂商 key（`default` 别名），不走 unified billing —
- * 所以用自己的 DeepSeek 账号也能调 `deepseek-flash`，不需要 Cloudflare credits。
- *
- * - 模型：`runtime.model`（默认 `deepseek/deepseek-flash`；body 里只发 `deepseek-flash`）；
- * - 记账：`gateway.metadata.tenant` 原样落到网关日志，cf-api 按它聚合；
- * - 隐私：`cf-aig-collect-log-payload: false`，日志不留 prompt/response；
- * - 失败：只回稳定错误码，不把网关/厂商原文回给前端。
- */
-export async function completeAiJson(
-  runtime: AiRuntime,
-  prompt: { system: string; user: string },
-  options: { timeoutMs?: number; maxTokens?: number } = {},
-): Promise<AiCompletion> {
-  return completeAiMessages(
-    runtime,
-    [
-      { role: "system", content: prompt.system },
-      { role: "user", content: prompt.user },
-    ],
-    options,
-  );
+/** 从 Responses API 返回体取文本：output[].message.content[].output_text.text。 */
+function structuredContentOf(body: unknown): string | null {
+  if (!isObject(body)) return null;
+  if (typeof body.output_text === "string" && body.output_text.trim()) return body.output_text;
+  if (!Array.isArray(body.output)) return null;
+  const texts: string[] = [];
+  for (const item of body.output) {
+    if (!isObject(item) || item.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const part of item.content) {
+      if (isObject(part) && part.type === "output_text" && typeof part.text === "string") {
+        texts.push(part.text);
+      }
+    }
+  }
+  const text = texts.join("\n").trim();
+  return text || null;
 }
 
-/** 多消息版本（首次 + 校验失败后的重写）；`completeAiJson` 是它的两消息特例。 */
-export async function completeAiMessages(
+interface GatewayRunResult {
+  ok: true;
+  body: unknown;
+}
+
+/**
+ * 通过 AI binding → AI Gateway 的 provider-native 路径调一次上游。
+ * 失败只回稳定错误码，不把网关/厂商原文带出去。
+ */
+async function callGateway(
   runtime: AiRuntime,
-  messages: AiMessage[],
-  options: { timeoutMs?: number; maxTokens?: number } = {},
-): Promise<AiCompletion> {
-  const route = providerRouteOf(runtime.model);
-  if (!route) {
-    return {
-      ok: false,
-      code: "ai_upstream_error",
-      message: "模型必须是 deepseek/<model>（例如 deepseek/deepseek-flash）",
-    };
-  }
-  const timeoutMs = options.timeoutMs ?? AI_LIMITS.requestTimeoutMs;
+  route: { provider: string; model: string },
+  endpoint: string,
+  query: unknown,
+  timeoutMs: number,
+): Promise<GatewayRunResult | { ok: false; code: "ai_upstream_error" | "ai_timeout"; message: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
@@ -289,18 +282,9 @@ export async function completeAiMessages(
     response = await runtime.binding.gateway(runtime.gatewayId).run(
       {
         provider: route.provider,
-        endpoint: "chat/completions",
+        endpoint,
         headers: { "content-type": "application/json" },
-        query: {
-          model: route.model,
-          messages,
-          temperature: 0,
-          max_tokens: options.maxTokens ?? 8192,
-          response_format: { type: "json_object" },
-          // DeepSeek flash 默认会先消耗 reasoning tokens；关掉思考，
-          // 否则大文档会把 max_tokens 吃光、content 为空（实测 QWGUA）。
-          ...(/flash$/i.test(route.model) ? { thinking: { type: "disabled" } } : {}),
-        },
+        query,
       },
       {
         gateway: { id: runtime.gatewayId, metadata: runtime.metadata },
@@ -346,11 +330,109 @@ export async function completeAiMessages(
       message: "AI Gateway 拒绝了请求：检查 CLOUDFLARE_GATEWAY_ID、DeepSeek BYOK 与模型名",
     };
   }
+  return { ok: true, body };
+}
 
-  const content = contentOf(body);
+/** 两消息特例：system + user，走 Chat Completions（用于选页等简单 JSON）。 */
+export async function completeAiJson(
+  runtime: AiRuntime,
+  prompt: { system: string; user: string },
+  options: { timeoutMs?: number; maxTokens?: number } = {},
+): Promise<AiCompletion> {
+  return completeAiMessages(
+    runtime,
+    [
+      { role: "system", content: prompt.system },
+      { role: "user", content: prompt.user },
+    ],
+    options,
+  );
+}
+
+/** 多消息版本（Chat Completions），用于选页；不承载模板 v2 生成。 */
+export async function completeAiMessages(
+  runtime: AiRuntime,
+  messages: AiMessage[],
+  options: { timeoutMs?: number; maxTokens?: number } = {},
+): Promise<AiCompletion> {
+  const route = providerRouteOf(runtime.model);
+  if (!route) {
+    return {
+      ok: false,
+      code: "ai_upstream_error",
+      message: "模型必须是 deepseek/<model>（例如 deepseek/deepseek-flash）",
+    };
+  }
+  const timeoutMs = options.timeoutMs ?? AI_LIMITS.requestTimeoutMs;
+  const result = await callGateway(
+    runtime,
+    route,
+    "chat/completions",
+    {
+      model: route.model,
+      messages,
+      temperature: 0,
+      max_tokens: options.maxTokens ?? 8192,
+      response_format: { type: "json_object" },
+      // DeepSeek flash 默认会先消耗 reasoning tokens；关掉思考，
+      // 否则大文档会把 max_tokens 吃光、content 为空（实测 QWGUA）。
+      ...(/flash$/i.test(route.model) ? { thinking: { type: "disabled" } } : {}),
+    },
+    timeoutMs,
+  );
+  if (!result.ok) return result;
+  const content = contentOf(result.body);
   if (!content) return { ok: false, code: "ai_upstream_error", message: "模型没有返回内容" };
   return { ok: true, content };
 }
+
+/**
+ * 模板 v2 生成：走 DeepSeek **Responses API** 的 `text.format.json_schema`，
+ * 让上游先保证 JSON 结构，再交给 `parseAiDraft` / `validateMapping` 做语义校验。
+ *
+ * Chat Completions 的 `response_format` 只支持 `json_object`；`json_schema` 会 400。
+ * 这是本文件唯一使用 Responses 的地方；选页仍走 Chat Completions。
+ */
+export async function completeAiStructured(
+  runtime: AiRuntime,
+  messages: AiMessage[],
+  options: { timeoutMs?: number; maxTokens?: number } = {},
+): Promise<AiCompletion> {
+  const route = providerRouteOf(runtime.model);
+  if (!route) {
+    return {
+      ok: false,
+      code: "ai_upstream_error",
+      message: "模型必须是 deepseek/<model>（例如 deepseek/deepseek-flash）",
+    };
+  }
+  const timeoutMs = options.timeoutMs ?? AI_LIMITS.requestTimeoutMs;
+  const result = await callGateway(
+    runtime,
+    route,
+    "responses",
+    {
+      model: route.model,
+      input: messages,
+      temperature: 0,
+      max_output_tokens: options.maxTokens ?? 8192,
+      text: {
+        format: {
+          type: "json_schema",
+          name: AI_OUTPUT_SCHEMA_NAME,
+          schema: AI_OUTPUT_SCHEMA,
+        },
+      },
+      ...(/flash$/i.test(route.model) ? { reasoning: { effort: "none" } } : {}),
+    },
+    timeoutMs,
+  );
+  if (!result.ok) return result;
+  const content = structuredContentOf(result.body);
+  if (!content) return { ok: false, code: "ai_upstream_error", message: "模型没有返回内容" };
+  return { ok: true, content };
+}
+
 // ─────────────────────────────────────────────────────────────
 // 解析 + 校验
 // ─────────────────────────────────────────────────────────────
@@ -618,7 +700,7 @@ export async function generateAiDraft(
   ];
   let lastErrors: string[] = [];
   for (let attempt = 1; attempt <= AI_LIMITS.maxAttempts; attempt += 1) {
-    const completion = await completeAiMessages(runtime, messages, options);
+    const completion = await completeAiStructured(runtime, messages, options);
     if (!completion.ok) {
       return { ...completion, errors: [], attempts: attempt };
     }

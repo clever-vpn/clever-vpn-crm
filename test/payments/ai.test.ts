@@ -26,6 +26,7 @@ import {
 } from "../../src/payments/ai";
 
 import type { AiRuntime } from "../../src/payments/ai";
+import { AI_OUTPUT_SCHEMA } from "../../src/payments/ai-output-schema";
 import { validateMapping } from "../../src/payments/mapping";
 
 const schema = JSON.parse(
@@ -137,6 +138,24 @@ describe("ai.md 的完整示例（契约可执行）", () => {
   it("代码块前后有解释文字时，抽出其中的 JSON 对象", () => {
     const wrapped = "好的，结果如下：\n```json\n" + JSON.stringify(sample) + "\n```\n以上。";
     expect(parseAiDraft(wrapped).ok).toBe(true);
+  });
+});
+
+describe("Responses 结构化输出 schema", () => {
+  const outputAjv = new Ajv2020({ allErrors: true, strict: false });
+  const validateOutput = outputAjv.compile(AI_OUTPUT_SCHEMA);
+
+  it("接受契约示例；driver/unsupported 可用 template:null", () => {
+    expect(validateOutput(sample), JSON.stringify(validateOutput.errors)).toBe(true);
+    expect(
+      validateOutput({ classification: "unsupported", template: null, evidence: [], uncertainty: [] }),
+      JSON.stringify(validateOutput.errors),
+    ).toBe(true);
+  });
+
+  it("拒绝缺少 envelope 键 / 顶层多余键", () => {
+    expect(validateOutput({ classification: "generic_mapping", template: null, evidence: [] })).toBe(false);
+    expect(validateOutput({ ...(sample as object), secret: "sk-leak" })).toBe(false);
   });
 });
 
@@ -291,6 +310,10 @@ describe("completeAiJson：AI Gateway provider-native 路径", () => {
       temperature: number;
       response_format: { type: string };
       messages: { role: string }[];
+      input?: { role: string; content: string }[];
+      text?: { format: { type: string; name: string; schema: { type: string } } };
+      max_output_tokens?: number;
+      reasoning?: { effort: string };
     };
   }
 
@@ -302,6 +325,15 @@ describe("completeAiJson：AI Gateway provider-native 路径", () => {
       extraHeaders: Record<string, string>;
       signal: AbortSignal;
     };
+  }
+
+  function responsesBody(content: string): Response {
+    return new Response(
+      JSON.stringify({
+        output: [{ type: "message", content: [{ type: "output_text", text: content }] }],
+      }),
+      { status: 200 },
+    );
   }
 
   function runtimeWith(run: (call: RunCall) => Promise<unknown>): AiRuntime {
@@ -414,7 +446,7 @@ describe("completeAiJson：AI Gateway provider-native 路径", () => {
     const runtime = runtimeWith(async (call) => {
       calls.push(call);
       const content = contents[calls.length - 1]!;
-      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+      return responsesBody(content);
     });
 
     const gen = await generateAiDraft(runtime, "示例接口文档");
@@ -422,7 +454,7 @@ describe("completeAiJson：AI Gateway provider-native 路径", () => {
     if (gen.ok) expect(gen.attempts).toBe(2);
     expect(calls).toHaveLength(2);
 
-    const messages = calls[1]!.entry.query.messages as { role: string; content: string }[];
+    const messages = calls[1]!.entry.query.input as { role: string; content: string }[];
     expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"]);
     expect(messages[2]!.content).toBe(bad);
     expect(messages[3]!.content).toContain("未通过服务端校验");
@@ -431,9 +463,7 @@ describe("completeAiJson：AI Gateway provider-native 路径", () => {
 
   it("两次都不合法 → invalid_draft + 最后一次 errors", async () => {
     const bad = JSON.stringify({ classification: "generic_mapping", template: null, evidence: [], uncertainty: [] });
-    const runtime = runtimeWith(async () =>
-      new Response(JSON.stringify({ choices: [{ message: { content: bad } }] }), { status: 200 }),
-    );
+    const runtime = runtimeWith(async () => responsesBody(bad));
     const gen = await generateAiDraft(runtime, "示例接口文档");
     expect(gen.ok).toBe(false);
     if (!gen.ok) {
@@ -462,14 +492,23 @@ describe("completeAiJson：AI Gateway provider-native 路径", () => {
     const calls: RunCall[] = [];
     const runtime = runtimeWith(async (call) => {
       calls.push(call);
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(sample) } }] }), {
-        status: 200,
-      });
+      return responsesBody(JSON.stringify(sample));
     });
     const gen = await generateAiDraft(runtime, "示例接口文档");
     expect(gen.ok).toBe(true);
     if (gen.ok) expect(gen.attempts).toBe(1);
     expect(calls).toHaveLength(1);
+    expect(calls[0]!.entry.endpoint).toBe("responses");
+    const query = calls[0]!.entry.query as unknown as {
+      text: { format: { type: string; name: string; schema: { type: string } } };
+      reasoning: { effort: string };
+      input: unknown[];
+    };
+    expect(query.text.format.type).toBe("json_schema");
+    expect(query.text.format.name).toBe("payment_template_draft");
+    expect(query.text.format.schema.type).toBe("object");
+    expect(query.reasoning.effort).toBe("none");
+    expect(query.input).toHaveLength(2);
   });
 
   it("上限常量与文档一致", () => {

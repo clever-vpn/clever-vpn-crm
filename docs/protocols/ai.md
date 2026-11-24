@@ -122,7 +122,10 @@
 - 评测样例的期望输出必须能通过 §4 的同一套校验；
 - P0 手动评测脚本：`test/payments/ai-eval.test.ts`（默认跳过，`AI_EVAL=1 npm run ai:eval`），
   需要先 `npm run dev:local` 且 `wrangler login`。它打 report 而不是做 CI 门禁；
-  fixture 差异只记录、不直接判失败（合法变体/文档歧义很常见）。
+  fixture 差异只记录、不直接判失败（合法变体/文档歧义很常见）；
+- 2026-11-24 Responses `json_schema` 实测：四家均 HTTP 200、schema 通过；
+  attempts 分别为 QWGUA 1 / 亿宏 2 / 布拉格 1 / XArrPay 1，语义匹配 22/22、20/21、22/22、22/22。
+  对比切换前 Chat Completions `json_object` 多为 2 次，结构化输出减少了首次结构错误。
 
 ## 6. 数据边界
 
@@ -232,6 +235,14 @@ URL 抓取响应：
   走网关存的 **BYOK** DeepSeek key（用自己的 DeepSeek 账号即可，不需要 Cloudflare credits）。
   **不要**改成 `env.AI.run("deepseek/...")`：那是 unified-billing run catalog，
   `deepseek-v4-flash` 会报 402（缺 credits）、`deepseek-flash` 会报 404（不在 run catalog）。
+- **模板生成走 Responses API**：`endpoint: "responses"`，
+  `text.format = { type:"json_schema", name:"payment_template_draft", schema }`；
+  schema 定义在 `src/payments/ai-output-schema.ts`，mapping 部分直接复用
+  `docs/payment-templates.schema.json` 的 `$defs`，避免两份 schema 漂移。
+  Chat Completions 的 `response_format` 只有 `json_object`；传 `json_schema` 会 400。
+  选页仍走 Chat Completions（简单 JSON，不需要模板 schema）。
+- Responses 的结构化输出只保证**结构**；role / 三端点 / `data_path` 位置 / 金额单位 /
+  when 互斥等语义仍由 `validateMapping` 校验，不能跳过。
 - `metadata.tenant` 就是 cf-api 的计费键（契约 `usage.md` §9）：必须是数字；
   缺了/非数字会落到 `unattributed`，所以服务端直接拒绝（`ai_unavailable`）；
 - 另带 `cf-aig-collect-log-payload: false`：网关日志只留元数据与用量，不留 prompt/response；
@@ -239,7 +250,9 @@ URL 抓取响应：
 
 行为约束：
 
-- 调用模型前先把文档包成不可信数据；`temperature=0`，要求 JSON 输出；
+- 调用模型前先把文档包成不可信数据；`temperature=0`；
+- 模板生成：Responses `json_schema` 约束结构 + 服务端语义校验；选页：Chat Completions
+  `json_object`；
 - 结果只在内存里过 §4 校验，**不落库**；应用与保存由用户显式操作；
 - 审计只写 `gateway_ai_draft`（成功/失败、分类、模型），不写文档正文和模型原文；
 - 限流按 `audit_log` 里的 `gateway_ai_draft` 计数，跨 isolate 生效。

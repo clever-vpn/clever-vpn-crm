@@ -81,9 +81,12 @@ const VALID_DRAFT = {
 
 function modelReply(content: unknown): () => Promise<Response> {
   return async () =>
-    new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), {
-      status: 200,
-    });
+    new Response(
+      JSON.stringify({
+        output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(content) }] }],
+      }),
+      { status: 200 },
+    );
 }
 
 function fakeAi(run: (entry: Record<string, unknown>, options: Record<string, unknown>) => Promise<unknown>): Ai {
@@ -194,8 +197,9 @@ describe("AI 配置助手端点", () => {
       { gateway: { id: string; metadata: Record<string, string> }; extraHeaders: Record<string, string> },
     ];
     expect(entry.provider).toBe("deepseek");
-    expect(entry.endpoint).toBe("chat/completions");
+    expect(entry.endpoint).toBe("responses");
     expect(entry.query.model).toBe("deepseek-flash");
+    expect((entry.query as { text?: { format?: { type?: string } } }).text?.format?.type).toBe("json_schema");
     expect(options.gateway.id).toBe("studio");
     expect(options.gateway.metadata).toMatchObject({
       tenant: "0",
