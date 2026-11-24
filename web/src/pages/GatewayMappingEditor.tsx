@@ -39,7 +39,7 @@ import {
   type WhenInput,
 } from "../mapping-form";
 import { OFFICIAL_TEMPLATES, parseTemplateText, type PaymentTemplate } from "../payment-templates";
-import { api, ApiError, type AiFetchedPage, type GatewayAiDraft, type GatewayAiGate } from "../api";
+import { api, ApiError, type GatewayAiDraft, type GatewayAiGate } from "../api";
 import { AI_DOC_MAX_FILES, mergeAiSubmission, readAiDocument } from "../ai-doc";
 
 interface Props {
@@ -63,6 +63,11 @@ interface AiDocFileItem {
   name: string;
   text: string;
   chars: number;
+  source: "file" | "url";
+  selected: boolean;
+  /** URL 导入时保留来源，便于统一列表里区分 */
+  url?: string;
+  reason?: "entry" | "ai" | "keyword";
 }
 
 type AiFailureKind =
@@ -394,8 +399,9 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const [aiFiles, setAiFiles] = useState<AiDocFileItem[]>([]);
   const [aiFailure, setAiFailure] = useState<AiFailure | null>(null);
   const [aiUrl, setAiUrl] = useState("");
+  const [aiUrlOpen, setAiUrlOpen] = useState(false);
   const [aiUrlBusy, setAiUrlBusy] = useState(false);
-  const [aiUrlPages, setAiUrlPages] = useState<AiFetchedPage[]>([]);
+  const [aiUrlError, setAiUrlError] = useState("");
   const [aiUrlWarnings, setAiUrlWarnings] = useState<string[]>([]);
   const [aiUrlAiUsed, setAiUrlAiUsed] = useState(false);
 
@@ -426,13 +432,13 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     const parsed = fromMapping(aiDraft.template.mapping, methods);
     return { issues: parsed.issues, description: describeMapping(parsed.state) };
   }, [aiDraft, methods]);
-  /** 文本框=粘贴，文件和抓取页面=附件；提交时才合并，都不写回 textarea */
-  const aiSubmission = useMemo(() => {
-    const urlParts = aiUrlPages
-      .filter((p) => p.selected)
-      .map((p) => ({ name: `${p.title || p.url} — ${p.url}`, text: p.text }));
-    return mergeAiSubmission(aiDoc, [...aiFiles, ...urlParts]);
-  }, [aiDoc, aiFiles, aiUrlPages]);
+  /** 文本框=粘贴，文件和 URL 页面在同一个附件集合；只提交勾选项，都不写回 textarea */
+  const aiSubmission = useMemo(
+    () => mergeAiSubmission(aiDoc, aiFiles.filter((f) => f.selected)),
+    [aiDoc, aiFiles],
+  );
+  const selectedAiFiles = aiFiles.filter((f) => f.selected);
+  const urlPageCount = aiFiles.filter((f) => f.source === "url").length;
   const createMissing = missing.filter((c) => c.key.startsWith("create.") || c.key.startsWith("fields.") || c.key.startsWith("response.") || c.key === "sign").length;
   const callbackMissing = missing.filter((c) => c.key.startsWith("notify.")).length;
   const queryMissing = missing.filter((c) => c.key.startsWith("query.")).length;
@@ -546,49 +552,81 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     }
   }
 
-  async function fetchAiDocFromUrl(): Promise<void> {
-    const url = aiUrl.trim();
-    if (!url) {
-      message.warning("请先填文档入口 URL");
-      return;
-    }
-    setAiUrlBusy(true);
-    setAiFailure(null);
+  function resetAiResult(): void {
     setAiDraft(null);
     setAiGate(null);
     setAiApplied(false);
-    setAiUrlPages([]);
-    setAiUrlWarnings([]);
-    setAiUrlAiUsed(false);
+    setAiFailure(null);
+  }
+
+  /** 文件与 URL 页面共用这一个集合；总数/60KB 在这里统一把关 */
+  function addAiItems(items: AiDocFileItem[]): { ok: boolean; error?: string; added: number; chars: number } {
+    const existing = new Set(aiFiles.map((f) => f.id));
+    const fresh = items.filter((f) => !existing.has(f.id));
+    if (fresh.length === 0) return { ok: true, added: 0, chars: 0 };
+    const next = [...aiFiles, ...fresh];
+    if (next.length > AI_DOC_MAX_FILES) {
+      return {
+        ok: false,
+        error: `文件/页面最多 ${AI_DOC_MAX_FILES} 个；请先移除一些再导入`,
+        added: 0,
+        chars: 0,
+      };
+    }
+    const merged = mergeAiSubmission(aiDoc, next.filter((f) => f.selected));
+    if (merged.error) return { ok: false, error: merged.error, added: 0, chars: 0 };
+    setAiFiles(next);
+    resetAiResult();
+    return { ok: true, added: fresh.length, chars: merged.fileChars };
+  }
+
+  async function fetchAiDocFromUrl(): Promise<void> {
+    const url = aiUrl.trim();
+    if (!url) {
+      setAiUrlError("请先填文档入口 URL");
+      return;
+    }
+    setAiUrlBusy(true);
+    setAiUrlError("");
     try {
       const res = await api.fetchAiDoc(url);
-      setAiUrlPages(res.pages);
+      const items: AiDocFileItem[] = res.pages.map((p) => ({
+        id: `url:${p.url}`,
+        name: p.title || p.url,
+        text: p.text,
+        chars: p.chars,
+        source: "url",
+        selected: true,
+        url: p.url,
+        reason: p.reason,
+      }));
+      const added = addAiItems(items);
+      if (!added.ok) {
+        setAiUrlError(added.error ?? "URL 页面导入失败");
+        return;
+      }
       setAiUrlWarnings(res.warnings);
       setAiUrlAiUsed(res.ai_used);
-      message.success(`已抓取 ${res.pages.length} 个页面（${res.ai_used ? "AI 选页" : "关键词选页"}）`);
+      setAiUrlOpen(false);
+      setAiUrlError("");
+      if (added.added === 0) message.info("这些页面已经导入过了");
+      else message.success(`已从 URL 导入 ${added.added} 页（${res.ai_used ? "AI 选页" : "关键词选页"}）`);
     } catch (error) {
-      setAiFailure(failureFromError(error));
+      const failure = failureFromError(error);
+      setAiUrlError([failure.title, ...failure.details].join("；"));
     } finally {
       setAiUrlBusy(false);
     }
   }
 
-  function toggleAiUrlPage(url: string): void {
-    setAiUrlPages((prev) => prev.map((p) => (p.url === url ? { ...p, selected: !p.selected } : p)));
-    setAiDraft(null);
-    setAiGate(null);
-    setAiApplied(false);
-    setAiFailure(null);
+  function toggleAiItem(id: string): void {
+    setAiFiles((prev) => prev.map((f) => (f.id === id ? { ...f, selected: !f.selected } : f)));
+    resetAiResult();
   }
 
-  function clearAiUrlPages(): void {
-    setAiUrlPages([]);
-    setAiUrlWarnings([]);
-    setAiUrlAiUsed(false);
-    setAiDraft(null);
-    setAiGate(null);
-    setAiApplied(false);
-    setAiFailure(null);
+  function removeAiFile(id: string): void {
+    setAiFiles((prev) => prev.filter((f) => f.id !== id));
+    resetAiResult();
   }
 
   async function readAiFiles(files: File[]): Promise<void> {
@@ -606,14 +644,6 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
       message.info("这些文件已经导入过了");
       return;
     }
-    if (aiFiles.length + batch.length > AI_DOC_MAX_FILES) {
-      setAiFailure({
-        kind: "input",
-        title: "附件太多",
-        details: [`最多 ${AI_DOC_MAX_FILES} 个页面附件；请先移除一些文件`],
-      });
-      return;
-    }
 
     const items: AiDocFileItem[] = [];
     const errors: string[] = [];
@@ -627,6 +657,8 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
           name: file.name,
           text: result.text,
           chars: [...result.text].length,
+          source: "file",
+          selected: true,
         });
       }
     }
@@ -634,26 +666,12 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
       setAiFailure({ kind: "input", title: "文件导入失败", details: errors });
       return;
     }
-    const next = [...aiFiles, ...items];
-    const merged = mergeAiSubmission(aiDoc, next);
-    if (merged.error) {
-      setAiFailure({ kind: "input", title: "附件合并失败", details: [merged.error] });
+    const added = addAiItems(items);
+    if (!added.ok) {
+      setAiFailure({ kind: "input", title: "文件导入失败", details: [added.error ?? "合并失败"] });
       return;
     }
-    setAiFiles(next);
-    setAiDraft(null);
-    setAiGate(null);
-    setAiApplied(false);
-    setAiFailure(null);
-    message.success(`已导入 ${items.length} 个附件（${merged.fileChars} 字）`);
-  }
-
-  function removeAiFile(id: string): void {
-    setAiFiles((prev) => prev.filter((f) => f.id !== id));
-    setAiDraft(null);
-    setAiGate(null);
-    setAiApplied(false);
-    setAiFailure(null);
+    message.success(`已导入 ${added.added} 个文件（已选 ${added.chars} 字）`);
   }
 
   const [exportOpen, setExportOpen] = useState(false);
@@ -1164,48 +1182,6 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                   description="服务端需要 AI binding 与 CLOUDFLARE_GATEWAY_ID（AI Gateway）才会开放；现在仍可用模板导入。"
                 />
               )}
-              <div style={{ display: "flex", gap: 8 }}>
-                <Input
-                  value={aiUrl}
-                  disabled={!aiReady || aiBusy || aiUrlBusy}
-                  onChange={(e) => setAiUrl(e.target.value)}
-                  placeholder="文档入口 URL，例如 https://www.yimapay.com/docs/api/index.html"
-                />
-                <Button
-                  loading={aiUrlBusy}
-                  disabled={!aiReady || aiBusy || aiUrlBusy || !aiUrl.trim()}
-                  onClick={() => void fetchAiDocFromUrl()}
-                >
-                  抓取文档
-                </Button>
-              </div>
-              {aiUrlPages.length > 0 && (
-                <div style={{ border: "1px solid #f0f0f0", borderRadius: 6, padding: 8 }}>
-                  <Space wrap align="center">
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      已抓取 {aiUrlPages.length} 页（{aiUrlAiUsed ? "AI 选页" : "关键词选页"}），
-                      已选 {aiUrlPages.filter((p) => p.selected).length} 页
-                    </Typography.Text>
-                    <Button type="link" size="small" style={{ paddingInline: 0 }} onClick={clearAiUrlPages}>
-                      清除
-                    </Button>
-                  </Space>
-                  {aiUrlWarnings.map((w, i) => (
-                    <Alert key={i} type="warning" showIcon message={w} style={{ marginTop: 4 }} />
-                  ))}
-                  {aiUrlPages.map((page) => (
-                    <div key={page.url} style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0", fontSize: 12 }}>
-                      <Checkbox checked={page.selected} onChange={() => toggleAiUrlPage(page.url)}>
-                        <span style={{ wordBreak: "break-all" }}>{page.title || page.url}</span>
-                      </Checkbox>
-                      <Tag color={page.reason === "ai" ? "blue" : page.reason === "entry" ? "green" : "default"}>
-                        {page.reason === "ai" ? "AI" : page.reason === "entry" ? "入口" : "关键词"}
-                      </Tag>
-                      <Typography.Text type="secondary">{page.chars} 字</Typography.Text>
-                    </div>
-                  ))}
-                </div>
-              )}
               <input
                 ref={aiFileRef}
                 type="file"
@@ -1219,7 +1195,17 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
               />
               <Space wrap align="center">
                 <Button size="small" disabled={!aiReady || aiBusy} onClick={() => aiFileRef.current?.click()}>
-                  导入页面文件
+                  导入文件
+                </Button>
+                <Button
+                  size="small"
+                  disabled={!aiReady || aiBusy || aiUrlBusy}
+                  onClick={() => {
+                    setAiUrlOpen(true);
+                    setAiUrlError("");
+                  }}
+                >
+                  从 URL 导入
                 </Button>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   支持 .txt / .md / .json / .html / .mhtml；可一次选多个页面，文件只在本地转文本
@@ -1227,17 +1213,39 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
               </Space>
               {aiFiles.length > 0 && (
                 <div style={{ border: "1px solid #f0f0f0", borderRadius: 6, padding: 8 }}>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    附件 {aiFiles.length} 个，共 {aiFiles.reduce((n, f) => n + f.chars, 0)} 字
-                  </Typography.Text>
+                  <Space wrap align="center">
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      已导入 {aiFiles.length} 个（文件/页面），已选 {selectedAiFiles.length} 个，共{" "}
+                      {aiSubmission.fileChars} 字
+                    </Typography.Text>
+                    {urlPageCount > 0 && (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        URL 抓取 {urlPageCount} 页（{aiUrlAiUsed ? "AI 选页" : "关键词选页"}）
+                      </Typography.Text>
+                    )}
+                  </Space>
+                  {aiUrlWarnings.map((w, i) => (
+                    <Alert key={i} type="warning" showIcon message={w} style={{ marginTop: 4 }} />
+                  ))}
                   {aiFiles.map((f) => (
                     <div
                       key={f.id}
-                      style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "2px 0" }}
+                      style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "3px 0" }}
                     >
-                      <Typography.Text style={{ flex: "1 1 auto", minWidth: 0, wordBreak: "break-all" }}>
-                        {f.name}
-                      </Typography.Text>
+                      <Checkbox checked={f.selected} onChange={() => toggleAiItem(f.id)} />
+                      <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                        <Typography.Text style={{ wordBreak: "break-all" }}>{f.name}</Typography.Text>
+                        {f.source === "url" && f.url && (
+                          <div>
+                            <Typography.Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>
+                              {f.url}
+                            </Typography.Text>
+                          </div>
+                        )}
+                      </div>
+                      <Tag color={f.source === "url" ? (f.reason === "ai" ? "blue" : "default") : "green"}>
+                        {f.source === "url" ? (f.reason === "ai" ? "AI" : "URL") : "文件"}
+                      </Tag>
                       <Typography.Text type="secondary">{f.chars} 字</Typography.Text>
                       <Button type="link" size="small" style={{ paddingInline: 0 }} onClick={() => removeAiFile(f.id)}>
                         移除
@@ -1258,7 +1266,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                   setAiApplied(false);
                   setAiFailure(null);
                 }}
-                placeholder="粘贴文本（可选）；页面文件请用上方「导入页面文件」"
+                placeholder="粘贴文本（可选）；页面文件请用上方「导入文件」或「从 URL 导入」"
               />
               <Space align="center" wrap>
                 <Button
@@ -1411,6 +1419,34 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
           网关地址：{endpoint}
         </Typography.Text>
       ) : null}
+      <Modal
+        open={aiUrlOpen}
+        title="从 URL 导入文档"
+        okText="抓取并导入"
+        cancelText="取消"
+        confirmLoading={aiUrlBusy}
+        onOk={() => void fetchAiDocFromUrl()}
+        onCancel={() => {
+          if (!aiUrlBusy) setAiUrlOpen(false);
+        }}
+      >
+        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+          <Typography.Text type="secondary">
+            只抓公开、同源、静态 HTML 的一层页面（最多 8 页、总正文 60KB）。登录页、JS 渲染页面
+            抓不到；失败时请改用「导入文件」或粘贴。
+          </Typography.Text>
+          <Input
+            value={aiUrl}
+            disabled={aiUrlBusy}
+            onChange={(e) => setAiUrl(e.target.value)}
+            onPressEnter={() => {
+              if (!aiUrlBusy) void fetchAiDocFromUrl();
+            }}
+            placeholder="https://www.yimapay.com/docs/api/index.html"
+          />
+          {aiUrlError && <Alert type="error" showIcon message={aiUrlError} />}
+        </Space>
+      </Modal>
       <Modal
         open={exportOpen}
         title="导出接口模板"
