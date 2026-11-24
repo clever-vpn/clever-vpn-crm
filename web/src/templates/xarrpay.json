@@ -1,0 +1,70 @@
+{
+  "schema_version": 2,
+  "id": "xarrpay",
+  "name": "XArrPay",
+  "description": "JSON/表单、MD5、下单元/回调分；三端点签名",
+  "source": "official",
+  "mapping": {
+    "create": {
+      "request": {
+        "method": "POST",
+        "path": "/xpay/order/create",
+        "format": "json",
+        "fields": [
+          { "field": "pid", "role": "merchant", "value": "{merchant}", "numeric": true },
+          { "field": "out_trade_no", "role": "order_no", "value": "{order_no}" },
+          { "field": "money", "role": "amount", "value": "{amount}", "unit": "yuan" },
+          { "field": "name", "role": "subject", "value": "{subject}" },
+          { "field": "notify_url", "role": "notify_url", "value": "{notify_url}" },
+          { "field": "return_url", "role": "return_url", "value": "{return_url}" },
+          { "field": "clientip", "role": "client_ip", "value": "{client_ip}" },
+          { "field": "pay_type", "role": "channel", "value": "{channel}" }
+        ],
+        "sign": { "algo": "md5", "key_append": "", "exclude": ["sign"] }
+      },
+      "response": {
+        "ok": { "path": "code", "equals": 200 },
+        "fields": [
+          { "field": "data.uri", "role": "pay_url" },
+          { "field": "data.trade_no", "role": "trade_no" },
+          { "field": "data.expire_time", "role": "expires_at", "format": "s" },
+          { "field": "msg", "role": "message" }
+        ]
+      }
+    },
+    "notify": {
+      "request": {
+        "method": "POST",
+        "format": "form",
+        "fields": [
+          { "field": "out_trade_no", "role": "order_no" },
+          { "field": "trade_no", "role": "trade_no" },
+          { "field": "amount", "role": "amount", "unit": "cent" }
+        ],
+        "paid_when": { "path": "status", "equals": 2 },
+        "sign": { "algo": "md5", "key_append": "", "exclude": ["sign"] }
+      },
+      "response": { "reply": "success" }
+    },
+    "query": {
+      "request": {
+        "method": "POST",
+        "format": "form",
+        "path": "/xpay/order/status",
+        "fields": [
+          { "field": "out_order_id", "value": "{order_no}" },
+          { "field": "pid", "value": "{merchant}", "numeric": true }
+        ],
+        "sign": { "algo": "md5", "key_append": "", "exclude": ["sign"] }
+      },
+      "response": {
+        "ok": { "path": "code", "equals": 200 },
+        "paid_when": { "path": "data.status", "equals": 2 },
+        "terminal_when": { "path": "data.status", "in": [3, 4, 5] },
+        "fields": [
+          { "field": "data.trade_no", "role": "trade_no" }
+        ]
+      }
+    }
+  }
+}

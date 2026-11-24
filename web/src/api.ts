@@ -509,13 +509,19 @@ export const api = {
     call<{ gateway: GatewayView }>("POST", "/gateways", input),
   updateGateway: (id: number, input: Partial<GatewayDraft>) =>
     call<{ gateway: GatewayView }>("PATCH", `/gateways/${id}`, input),
+  /** 显式查看当前密钥（审计；不在列表/详情里自动回显） */
+  revealGatewaySecret: (id: number) =>
+    call<{ secret: string }>("GET", `/gateways/${id}/secret`),
   publishGateway: (id: number) =>
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/publish`),
   disableGateway: (id: number) =>
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/disable`),
+  deleteGateway: (id: number) => call<{ ok: true }>("DELETE", `/gateways/${id}`),
+  copyGateway: (id: number) =>
+    call<{ gateway: GatewayView }>("POST", `/gateways/${id}/copy`),
   /** 测试支付：只验"这条网关能不能收钱"，不产生订阅（`source='test'` 的测试单） */
   testGateway: (id: number, input: { method?: string; amount_minor?: number } = {}) =>
-    call<{ order_code: string; pay_url: string; amount_minor: number; currency: string }>(
+    call<{ order_code: string; pay_url: string; amount_minor: number; currency: string; test_ready?: boolean; callback_required?: boolean }>(
       "POST",
       `/gateways/${id}/test`,
       input,
@@ -726,11 +732,21 @@ export interface GatewayView {
   endpoint: string | null;
   merchant_id: string | null;
   has_secret: boolean;
+  has_webhook: boolean;
   methods: string[];
+  channel_codes: Record<string, string | number>;
   mapping: unknown;
   priority: number;
-  status: "draft" | "live" | "disabled";
+  status: "draft" | "live" | "disabled" | "deleted";
   currency: string;
+  fx_rate: number;
+  test_amount_minor: number;
+  test_create_ok_at: string | null;
+  test_query_ok_at: string | null;
+  test_callback_ok_at: string | null;
+  test_require_callback: boolean;
+  tested_config_hash: string | null;
+  test_ready: boolean;
   allowed_emails: string[];
   last_test_order_id: number | null;
   last_ok_at: string | null;
@@ -745,9 +761,16 @@ export interface GatewayDraft {
   /** 明文密钥：只有传了才会更新；留空 = 不改 */
   secret?: string;
   clear_secret?: boolean;
+  /** webhook 凭据（Stripe signing secret / PayPal webhook id）；留空 = 不改 */
+  webhook_secret?: string;
+  clear_webhook?: boolean;
   methods: string[];
+  channel_codes?: Record<string, string | number>;
   priority?: number;
   currency?: string;
+  fx_rate?: number;
+  test_amount_minor?: number;
+  test_require_callback?: boolean;
   allowed_emails?: string[];
   mapping?: unknown;
 }

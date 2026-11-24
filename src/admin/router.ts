@@ -76,12 +76,17 @@ function cookie(request: Request, name: string): string | null {
   return null;
 }
 
-function setCookie(name: string, value: string, maxAgeSeconds: number): string {
-  return `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+/** 本地 http 开发不能带 Secure，否则浏览器不保存会话 cookie（生产 https 仍强制 Secure）。 */
+function secureCookie(request: Request): boolean {
+  return new URL(request.url).protocol === "https:";
 }
 
-function clearCookie(name: string): string {
-  return `${name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+function setCookie(name: string, value: string, maxAgeSeconds: number, secure: boolean): string {
+  return `${name}=${value}; Path=/; HttpOnly;${secure ? " Secure;" : ""} SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
+function clearCookie(name: string, secure: boolean): string {
+  return `${name}=; Path=/; HttpOnly;${secure ? " Secure;" : ""} SameSite=Lax; Max-Age=0`;
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {
@@ -255,7 +260,7 @@ export async function handleAdminApi(
     return json(
       { ok: true, email },
       200,
-      { "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000) },
+      { "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000, secureCookie(request)) },
     );
   }
 
@@ -299,7 +304,7 @@ export async function handleAdminApi(
       return json(
         { totp_required: true },
         200,
-        { "Set-Cookie": setCookie(PENDING_COOKIE, pending, PENDING_TTL_MS / 1000) },
+        { "Set-Cookie": setCookie(PENDING_COOKIE, pending, PENDING_TTL_MS / 1000, secureCookie(request)) },
       );
     }
 
@@ -308,7 +313,7 @@ export async function handleAdminApi(
     return json(
       { ok: true },
       200,
-      { "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000) },
+      { "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000, secureCookie(request)) },
     );
   }
 
@@ -372,7 +377,7 @@ export async function handleAdminApi(
       return json(
         { totp_required: true },
         200,
-        { "Set-Cookie": setCookie(PENDING_COOKIE, pending, PENDING_TTL_MS / 1000) },
+        { "Set-Cookie": setCookie(PENDING_COOKIE, pending, PENDING_TTL_MS / 1000, secureCookie(request)) },
       );
     }
 
@@ -381,7 +386,7 @@ export async function handleAdminApi(
     return json(
       { ok: true },
       200,
-      { "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000) },
+      { "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000, secureCookie(request)) },
     );
   }
 
@@ -405,7 +410,7 @@ export async function handleAdminApi(
       status: 200,
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000),
+        "Set-Cookie": setCookie(SESSION_COOKIE, session, SESSION_TTL_MS / 1000, secureCookie(request)),
       },
     });
   }
@@ -542,7 +547,7 @@ export async function handleAdminApi(
   if (method === "POST" && path === "/logout") {
     await env.DB.prepare(`DELETE FROM admin_sessions WHERE id = ?`).bind(session.id).run();
     await audit(env, admin.email, "logout", null, null);
-    return json({ ok: true }, 200, { "Set-Cookie": clearCookie(SESSION_COOKIE) });
+    return json({ ok: true }, 200, { "Set-Cookie": clearCookie(SESSION_COOKIE, secureCookie(request)) });
   }
 
   // 改密的第二种再认证：给当前绑定邮箱发码（必须有会话才能调）

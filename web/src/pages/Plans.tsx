@@ -16,6 +16,8 @@ import { api, ApiError, type PlanDraft, type PlanView } from "../api";
 const WEB_METHODS = [
   { value: "alipay", label: "支付宝" },
   { value: "wechat", label: "微信支付" },
+  { value: "stripe", label: "Stripe" },
+  { value: "paypal", label: "PayPal" },
 ] as const;
 
 const KINDS = [
@@ -439,7 +441,7 @@ function PlanForm({
               ])
             }
           >
-            <option value="web_checkout">网页收银台（支付宝/微信）</option>
+            <option value="web_checkout">网页收银台</option>
             <option value="apple_iap">App Store 内购</option>
             <option value="google_play">Google Play 内购</option>
           </select>

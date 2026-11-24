@@ -3,12 +3,13 @@
  *
  * 铁律（`docs/payments.md` §3.1）：
  *   1. 回调只当**触发器**。验签通过也不直接认账，还要 `queryCharge` 复核；
- *      只有网关没有查单接口时（虎皮椒/mock）才以回调为准。
+ *      只有 mock/历史映射没有查单接口时才以回调为准；通用映射新配置必须带查单。
  *   2. **钱到了必须记账**：订单已 `expired` 也照样转 `paid`（钱不能丢）。
  *   3. 幂等：已经 `paid/active` 的订单直接应答成功，不重复发货。
  */
 
-import { GATEWAY_COLUMNS, mappingOf } from "./gateways";
+import { GATEWAY_COLUMNS, mappingOf, parseChannelCodes } from "./gateways";
+import { handlePaypalWebhook, handleStripeWebhook } from "./webhook";
 import {
   buildQueryRequest,
   hasQuery,
@@ -18,6 +19,7 @@ import {
   type GatewayMapping,
 } from "./mapping";
 import { gatewaySecret } from "./checkout";
+import { verifyEpayV2Notify } from "./drivers/epay-v2";
 import { provisionOrder } from "../platform/provision";
 import { rewardReferrer } from "../promotions/referral";
 import { redeemOrderPromotion } from "../promotions/service";
@@ -52,6 +54,9 @@ export interface PayableOrder {
   promotion_id: number | null;
   code_id: number | null;
   currency: string;
+  provider_amount_minor: number | null;
+  provider_currency: string | null;
+  fx_rate: number | null;
   payment_method: string;
   gateway_id: number | null;
   status: string;
@@ -68,7 +73,8 @@ export interface PayableOrder {
 
 /** `SELECT ${PAYABLE_COLUMNS}` —— 与 `PayableOrder` 一一对应 */
 export const PAYABLE_COLUMNS = `id, code, customer_id, plan_id, plan_snapshot, amount_minor,
-  discount_minor, promotion_id, code_id, currency, payment_method, gateway_id, status, source,
+  discount_minor, promotion_id, code_id, currency, provider_amount_minor, provider_currency, fx_rate,
+  payment_method, gateway_id, status, source,
   provider_order_no, provider_trade_no, created_at, updated_at, expires_at`;
 
 type OrderRow = Omit<PayableOrder, "provider_order_no" | "created_at" | "updated_at" | "expires_at"> & {
@@ -244,7 +250,7 @@ export async function handlePayNotify(
   env: Env,
   request: Request,
   gatewayIdRaw: string,
-  deps: { fetch?: typeof fetch } = {},
+  deps: { fetch?: typeof fetch; now?: Date; refresh?: (orderCode: string) => Promise<unknown> } = {},
 ): Promise<Response> {
   const gatewayId = Number(gatewayIdRaw);
   if (!Number.isInteger(gatewayId) || gatewayId <= 0) return text("bad gateway", 400);
@@ -255,6 +261,52 @@ export async function handlePayNotify(
     .bind(gatewayId)
     .first<GatewayRow>();
   if (!gateway) return text("unknown gateway", 404);
+
+  // 薄 driver 的 webhook 先验签、再触发查单；映射类网关继续走下面的映射解析。
+  if (gateway.driver === "stripe" || gateway.driver === "paypal") {
+    if (!deps.refresh) return text("refresh unavailable", 503);
+    const webhookDeps = { fetch: deps.fetch, now: deps.now, refresh: deps.refresh };
+    return gateway.driver === "stripe"
+      ? handleStripeWebhook(env, gateway, request, webhookDeps)
+      : handlePaypalWebhook(env, gateway, request, webhookDeps);
+  }
+
+  // 易支付 V2：GET + 平台公钥验签；回调只触发查单
+  if (gateway.driver === "epay_v2") {
+    if (!deps.refresh) return text("refresh unavailable", 503);
+    const secret = await gatewaySecret(env, gateway);
+    if (!secret) return text("gateway not ready", 501);
+    const params = Object.fromEntries(new URL(request.url).searchParams);
+    if (!(await verifyEpayV2Notify(params, secret))) {
+      await markGatewayError(env, gateway.id, "notify 验签失败");
+      return text("bad sign", 403);
+    }
+    if (String(params.trade_status ?? "") !== "TRADE_SUCCESS") return text("success");
+    const orderNo = String(params.out_trade_no ?? "").trim();
+    if (!orderNo) return text("missing order", 400);
+    const order = await env.DB.prepare(
+      `SELECT id, code, customer_id, plan_id, plan_snapshot, amount_minor, discount_minor,
+         promotion_id, code_id, currency, provider_amount_minor, provider_currency, fx_rate,
+       payment_method, gateway_id, status
+       FROM orders WHERE provider_order_no = ? AND gateway_id = ?`,
+    )
+      .bind(orderNo, gateway.id)
+      .first<OrderRow>();
+    if (!order) return text("unknown order", 404);
+    if (params.money !== undefined && params.money !== "" && params.money !== null) {
+      const charged = Math.round(Number(params.money) * 100);
+      const expected = order.provider_amount_minor ?? order.amount_minor;
+      if (Number.isFinite(charged) && charged !== expected) {
+        await markGatewayError(env, gateway.id, `金额不符 order=${order.code} notify=${charged}`);
+        return text("amount mismatch", 400);
+      }
+    }
+    if (order.status === "paid" || order.status === "provisioning" || order.status === "active") {
+      return text("success");
+    }
+    await deps.refresh(orderNo);
+    return text("success");
+  }
 
   const mapping: GatewayMapping | null = mappingOf(gateway);
   if (!mapping) return text("gateway misconfigured", 500);
@@ -275,13 +327,14 @@ export async function handlePayNotify(
   }
   if (!parsed.paid) {
     // 验签通过但不是"已付款"（例如等待支付）⇒ 正常应答，等下一次
-    return text(mapping.notify.reply);
+    return text(mapping.notify.response.reply);
   }
   if (!parsed.orderNo) return text("missing order", 400);
 
   const order = await env.DB.prepare(
     `SELECT id, code, customer_id, plan_id, plan_snapshot, amount_minor, discount_minor,
-       promotion_id, code_id, currency, payment_method, gateway_id, status
+       promotion_id, code_id, currency, provider_amount_minor, provider_currency, fx_rate,
+       payment_method, gateway_id, status
      FROM orders WHERE provider_order_no = ? AND gateway_id = ?`,
   )
     .bind(parsed.orderNo, gateway.id)
@@ -290,8 +343,9 @@ export async function handlePayNotify(
   if (!order) return text("unknown order", 404);
 
   // 金额核对：回调说的钱必须等于下单时的金额（防篡改、防串单）
-  if (parsed.amountMinor !== null && parsed.amountMinor !== order.amount_minor) {
-    const msg = `金额不符 order=${order.code} notify=${parsed.amountMinor} expected=${order.amount_minor}`;
+  const expectedProvider = order.provider_amount_minor ?? order.amount_minor;
+  if (parsed.amountMinor !== null && parsed.amountMinor !== expectedProvider) {
+    const msg = `金额不符 order=${order.code} notify=${parsed.amountMinor} expected=${expectedProvider}`;
     await markGatewayError(env, gateway.id, msg);
     console.error(`[pay] ${msg}`);
     return text("amount mismatch", 400);
@@ -299,7 +353,7 @@ export async function handlePayNotify(
 
   // 幂等：已经认过账就直接应答
   if (order.status === "paid" || order.status === "provisioning" || order.status === "active") {
-    return text(mapping.notify.reply);
+    return text(mapping.notify.response.reply);
   }
 
   // 复核："回调只当触发器"。有查单接口就以查单为准（没有则只能信回调）
@@ -314,6 +368,7 @@ export async function handlePayNotify(
       subject: "",
       method: order.payment_method,
       endpoint: gateway.endpoint ?? "",
+      channelCodes: parseChannelCodes(gateway.channel_codes),
       now: new Date(),
     });
     try {
@@ -324,10 +379,10 @@ export async function handlePayNotify(
         signal: AbortSignal.timeout(10_000),
       });
       const payload = (await res.json().catch(() => null)) as unknown;
-      const q = parseQueryResponse(mapping, payload);
+      const q = parseQueryResponse(mapping, payload, secretForQuery);
       if (!q.paid) {
         // 查单说没付：不认账，但正常应答（对方会按自己的节奏重试）
-        return text(mapping.notify.reply);
+        return text(mapping.notify.response.reply);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -340,16 +395,20 @@ export async function handlePayNotify(
   await settlePaidOrder(env, order, parsed.tradeNo, parsed.raw);
   await env.DB.prepare(
     `UPDATE payment_gateways SET last_ok_at = ?, last_error = NULL,
-       last_test_order_id = COALESCE(?, last_test_order_id), updated_at = ?
+       last_test_order_id = COALESCE(?, last_test_order_id),
+       test_callback_ok_at = CASE WHEN ? THEN ? ELSE test_callback_ok_at END,
+       updated_at = ?
       WHERE id = ?`,
   )
     .bind(
       new Date().toISOString(),
       order.source === "test" ? order.id : null,
+      order.source === "test" ? 1 : 0,
+      new Date().toISOString(),
       new Date().toISOString(),
       gateway.id,
     )
     .run();
 
-  return text(mapping.notify.reply);
+  return text(mapping.notify.response.reply);
 }

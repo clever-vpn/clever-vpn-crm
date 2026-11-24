@@ -33,11 +33,20 @@ function gw(over: Partial<GatewayRow> = {}): GatewayRow {
     endpoint: "https://pay.example.com",
     merchant_id: "M1",
     secret_enc: null,
+    webhook_enc: null,
     methods: '["alipay","wechat"]',
+    channel_codes: null,
     mapping: null,
     priority: 100,
     status: "live",
     currency: "CNY",
+    fx_rate: 1,
+    test_amount_minor: 100,
+    test_create_ok_at: null,
+    test_query_ok_at: null,
+    test_callback_ok_at: null,
+    tested_config_hash: null,
+    test_require_callback: 0,
     allowed_emails: null,
     last_test_order_id: null,
     last_ok_at: null,
@@ -123,9 +132,31 @@ describe("pickGateway 路由", () => {
     expect(pickGateway(rows, "alipay", "x@b.com", mockOn)?.gateway.driver).toBe("epay_v1");
   });
 
-  it("没有自动下单实现的 driver（stripe/manual）不参与路由", () => {
-    const rows = [gw({ id: 1, driver: "stripe", priority: 10 }), gw({ id: 2, priority: 100 })];
-    expect(pickGateway(rows, "alipay", "a@b.com", env())?.gateway.id).toBe(2);
+  it("Stripe / PayPal 走薄 driver 参与路由；manual 不参与", () => {
+    const rows = [
+      gw({ id: 1, driver: "manual", methods: '["transfer"]', priority: 1 }),
+      gw({ id: 2, driver: "stripe", methods: '["stripe"]', priority: 10 }),
+      gw({ id: 3, driver: "paypal", methods: '["paypal"]', priority: 20 }),
+    ];
+    const stripe = pickGateway(rows, "stripe", "a@b.com", env());
+    expect(stripe?.gateway.id).toBe(2);
+    expect(stripe?.driver).toBe("stripe");
+    expect(stripe?.mapping).toBeNull();
+
+    const paypal = pickGateway(rows, "paypal", "a@b.com", env());
+    expect(paypal?.gateway.id).toBe(3);
+    expect(paypal?.driver).toBe("paypal");
+
+    expect(pickGateway(rows, "transfer", "a@b.com", env())).toBeNull();
+  });
+
+  it("visibleMethods 包含 Stripe/PayPal，不包含 manual", () => {
+    const stripe = gw({ driver: "stripe", methods: '["stripe"]' });
+    const paypal = gw({ driver: "paypal", methods: '["paypal"]' });
+    const manual = gw({ driver: "manual", methods: '["transfer"]' });
+    expect(visibleMethods(stripe, "a@b.com", env())).toEqual(["stripe"]);
+    expect(visibleMethods(paypal, "a@b.com", env())).toEqual(["paypal"]);
+    expect(visibleMethods(manual, "a@b.com", env())).toEqual([]);
   });
 
   it("一条都不满足时返回 null", () => {
@@ -140,15 +171,43 @@ describe("mappingOf", () => {
     expect(mappingOf(gw({ driver: "mock" }))).toBe(MOCK_MAPPING);
   });
 
+  it("Stripe/PayPal 不是映射类 driver", () => {
+    expect(mappingOf(gw({ driver: "stripe" }))).toBeNull();
+    expect(mappingOf(gw({ driver: "paypal" }))).toBeNull();
+  });
+
   it("generic_json_v1 解析网关上的 mapping；非法返回 null", () => {
     const good = gw({
       driver: "generic_json_v1",
       mapping: JSON.stringify({
-        create: { path: "/pay" },
-        fields: { merchant: "mch", order_no: "no", amount: "amt" },
-        amount_unit: "yuan",
-        response: { ok: { path: "code", equals: 1 }, pay_url: "url" },
-        notify: { order_no: "no", paid_when: { path: "s", equals: 1 }, reply: "success" },
+        create: {
+          request: {
+            path: "/pay",
+            fields: [
+              { field: "mch", role: "merchant", value: "{merchant}" },
+              { field: "no", role: "order_no", value: "{order_no}" },
+              { field: "amt", role: "amount", value: "{amount}", unit: "yuan" },
+            ],
+            sign: { algo: "md5", key_append: "" },
+          },
+          response: { ok: { path: "code", equals: 1 }, fields: [{ field: "url", role: "pay_url" }] },
+        },
+        notify: {
+          request: {
+            fields: [{ field: "no", role: "order_no" }],
+            paid_when: { path: "s", equals: 1 },
+            sign: { algo: "md5" },
+          },
+          response: { reply: "success" },
+        },
+        query: {
+          request: {
+            path: "/query",
+            fields: [{ field: "no", value: "{order_no}" }],
+            sign: { algo: "md5" },
+          },
+          response: { paid_when: { path: "s", equals: 1 }, fields: [] },
+        },
       }),
     });
     expect(mappingOf(good)).not.toBeNull();
@@ -163,6 +222,13 @@ describe("mock 回调（走真实解析路径）", () => {
     orderNo: "ORD-1",
     amountMinor: 1234,
     currency: "CNY",
+    fx_rate: 1,
+    test_amount_minor: 100,
+    test_create_ok_at: null,
+    test_query_ok_at: null,
+    test_callback_ok_at: null,
+    tested_config_hash: null,
+    test_require_callback: 0,
     now: new Date("2026-10-24T04:00:00Z"),
   };
 

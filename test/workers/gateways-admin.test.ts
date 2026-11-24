@@ -2,7 +2,7 @@
  * 集成测试：支付网关管理（`/api/admin/gateways*`）
  *
  * 重点不是 CRUD，而是**三道守卫**：
- *   - 密钥永不回显（响应里只有 `has_secret`）
+ *   - 列表/详情不回显密钥；当前值只能显式查看（审计）
  *   - 没配主密钥时不允许保存密钥（不能退化存明文）
  *   - 发布前检查：易支付类必须有密钥；测试网关必须有白名单
  */
@@ -10,6 +10,8 @@ import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "./apply-migrations";
+import { gatewayConfigHash } from "../../src/admin/gateways";
+import { GATEWAY_COLUMNS, type GatewayRow } from "../../src/payments/gateways";
 
 const BASE = "https://crm.test";
 const CSRF = { "x-crm-request": "1" };
@@ -21,6 +23,19 @@ const worker = rawExports as unknown as {
 };
 
 let cookie = "";
+
+async function markTested(id: number): Promise<void> {
+  const row = await env.DB.prepare(`SELECT ${GATEWAY_COLUMNS} FROM payment_gateways WHERE id = ?`)
+    .bind(id)
+    .first<GatewayRow>();
+  if (!row) throw new Error(`gateway ${id} not found`);
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE payment_gateways SET test_create_ok_at = ?, test_query_ok_at = ?, tested_config_hash = ? WHERE id = ?`,
+  )
+    .bind(now, now, await gatewayConfigHash(row), id)
+    .run();
+}
 
 function call(path: string, init: { method?: string; body?: unknown } = {}) {
   const headers: Record<string, string> = { ...CSRF };
@@ -72,7 +87,7 @@ describe("网关管理", () => {
     for (const gw of body.gateways) expect(gw).not.toHaveProperty("secret");
   });
 
-  it("新建易支付网关：默认草稿，密钥加密入库且不回显", async () => {
+  it("新建易支付网关：默认草稿，密钥加密入库；列表不返回，显式查看可读", async () => {
     const res = await call("/api/admin/gateways", {
       method: "POST",
       body: {
@@ -98,6 +113,36 @@ describe("网关管理", () => {
       .first<{ secret_enc: string }>();
     expect(row?.secret_enc).toMatch(/^v1:/);
     expect(row?.secret_enc).not.toContain("super-secret-value");
+
+    // 列表/详情仍不回显；显式查看才返回明文，且禁止缓存
+    const list = (await (await call("/api/admin/gateways")).json()) as {
+      gateways: Record<string, unknown>[];
+    };
+    expect(list.gateways.find((g) => g.id === gateway.id)).not.toHaveProperty("secret");
+
+    const revealed = await call(`/api/admin/gateways/${gateway.id}/secret`);
+    expect(revealed.status).toBe(200);
+    expect(revealed.headers.get("cache-control")).toContain("no-store");
+    expect(((await revealed.json()) as { secret: string }).secret).toBe("super-secret-value");
+  });
+
+  it("未设置密钥时显式查看返回 secret_not_set", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "epay_v1",
+        name: "易支付-无密钥",
+        endpoint: "https://pay.example.com",
+        merchant_id: "M2",
+        methods: ["alipay"],
+        channel_codes: { alipay: "alipay" },
+      },
+    });
+    expect(created.status).toBe(201);
+    const id = ((await created.json()) as { gateway: { id: number } }).gateway.id;
+    const revealed = await call(`/api/admin/gateways/${id}/secret`);
+    expect(revealed.status).toBe(400);
+    expect(((await revealed.json()) as { error: string }).error).toBe("secret_not_set");
   });
 
   it("不支持的方式会被挡（stripe 不能卖支付宝）", async () => {
@@ -107,6 +152,219 @@ describe("网关管理", () => {
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { message: string }).message).toContain("不支持");
+  });
+
+  it("Stripe：只填密钥即可创建并发布；发布前必须有密钥", async () => {
+    const noSecret = await call("/api/admin/gateways", {
+      method: "POST",
+      body: { driver: "stripe", name: "Stripe-无密钥", methods: ["stripe"] },
+    });
+    expect(noSecret.status).toBe(201);
+    const noSecretId = ((await noSecret.json()) as { gateway: { id: number } }).gateway.id;
+    const denied = await call(`/api/admin/gateways/${noSecretId}/publish`, { method: "POST" });
+    expect(denied.status).toBe(400);
+    expect(((await denied.json()) as { error: string }).error).toBe("secret_required");
+
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "stripe",
+        name: "Stripe-主号",
+        secret: "sk_test_value",
+        webhook_secret: "whsec_test_value",
+        methods: ["stripe"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const id = ((await created.json()) as { gateway: { id: number } }).gateway.id;
+    await markTested(id);
+    await markTested(id);
+    const pub = await call(`/api/admin/gateways/${id}/publish`, { method: "POST" });
+    expect(pub.status).toBe(200);
+    expect(((await pub.json()) as { gateway: { status: string } }).gateway.status).toBe("live");
+  });
+
+  it("易支付 V2：密钥 JSON 创建并发布（无 webhook）", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "epay_v2",
+        name: "易支付V2-主号",
+        endpoint: "https://pay.test/xpay/epayn",
+        merchant_id: "10001",
+        secret: JSON.stringify({ merchant_private_key: "pem", platform_public_key: "pem" }),
+        methods: ["alipay", "wechat"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { gateway: { id: number; has_secret: boolean; has_webhook: boolean } };
+    expect(body.gateway.has_secret).toBe(true);
+    expect(body.gateway.has_webhook).toBe(false);
+
+    await markTested(body.gateway.id);
+    const published = await call(`/api/admin/gateways/${body.gateway.id}/publish`, { method: "POST" });
+    expect(published.status).toBe(200);
+  });
+
+  it("PayPal：Client ID + Client Secret 才能创建/发布", async () => {
+    const missingClient = await call("/api/admin/gateways", {
+      method: "POST",
+      body: { driver: "paypal", name: "PayPal-缺 Client", secret: "secret", methods: ["paypal"] },
+    });
+    expect(missingClient.status).toBe(400);
+    expect(((await missingClient.json()) as { message: string }).message).toContain("Client ID");
+
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "paypal",
+        name: "PayPal-主号",
+        merchant_id: "paypal-client-id",
+        secret: "paypal-secret",
+        webhook_secret: "WH-test-id",
+        methods: ["paypal"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const id = ((await created.json()) as { gateway: { id: number } }).gateway.id;
+    await markTested(id);
+    await markTested(id);
+    const pub = await call(`/api/admin/gateways/${id}/publish`, { method: "POST" });
+    expect(pub.status).toBe(200);
+  });
+
+  it("Stripe/PayPal 发布前必须有 webhook 凭据；保存后只回 has_webhook", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "stripe",
+        name: "Stripe-无 webhook",
+        secret: "sk_test_no_webhook",
+        methods: ["stripe"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { gateway: { id: number; has_webhook: boolean } };
+    expect(body.gateway.has_webhook).toBe(false);
+    expect(JSON.stringify(body)).not.toContain("sk_test_no_webhook");
+
+    const denied = await call(`/api/admin/gateways/${body.gateway.id}/publish`, { method: "POST" });
+    expect(denied.status).toBe(400);
+    expect(((await denied.json()) as { error: string }).error).toBe("webhook_required");
+
+    const patched = await call(`/api/admin/gateways/${body.gateway.id}`, {
+      method: "PATCH",
+      body: { webhook_secret: "whsec_patched" },
+    });
+    expect(patched.status).toBe(200);
+    expect(JSON.stringify(await patched.json())).not.toContain("whsec_patched");
+
+    await markTested(body.gateway.id);
+    const ok = await call(`/api/admin/gateways/${body.gateway.id}/publish`, { method: "POST" });
+    expect(ok.status).toBe(200);
+  });
+
+  it("草稿改驱动会清掉旧驱动的密钥与 webhook", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "stripe",
+        name: "Stripe-改驱动",
+        secret: "sk_old_stripe",
+        webhook_secret: "whsec_old_stripe",
+        methods: ["stripe"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const g = (await created.json()) as { gateway: { id: number } };
+
+    const patched = await call(`/api/admin/gateways/${g.gateway.id}`, {
+      method: "PATCH",
+      body: { driver: "paypal", merchant_id: "paypal-client", methods: ["paypal"] },
+    });
+    expect(patched.status).toBe(200);
+    const after = (await patched.json()) as {
+      gateway: { has_secret: boolean; has_webhook: boolean; driver: string };
+    };
+    expect(after.gateway.driver).toBe("paypal");
+    expect(after.gateway.has_secret).toBe(false);
+    expect(after.gateway.has_webhook).toBe(false);
+  });
+
+  it("删除是软删除：列表隐藏，但不能编辑/发布/测试/重复删除", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "epay_v1",
+        name: "待删除-易支付",
+        endpoint: "https://pay.example.com",
+        merchant_id: "M-DELETE",
+        secret: "epay-secret",
+        methods: ["alipay"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const g = (await created.json()) as { gateway: { id: number } };
+    const id = g.gateway.id;
+
+    const deleted = await call(`/api/admin/gateways/${id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ ok: true });
+
+    const list = (await (await call("/api/admin/gateways")).json()) as {
+      gateways: Array<{ id: number; name: string }>;
+    };
+    expect(list.gateways.find((row) => row.id === id)).toBeUndefined();
+
+    for (const [method, path] of [
+      ["PATCH", `/api/admin/gateways/${id}`],
+      ["POST", `/api/admin/gateways/${id}/publish`],
+      ["POST", `/api/admin/gateways/${id}/test`],
+      ["DELETE", `/api/admin/gateways/${id}`],
+    ] as const) {
+      const res = await call(path, { method });
+      expect(res.status).toBe(404);
+    }
+
+    const row = await env.DB.prepare(`SELECT status FROM payment_gateways WHERE id = ?`)
+      .bind(id)
+      .first<{ status: string }>();
+    expect(row?.status).toBe("deleted");
+  });
+
+  it("有测试订单的网关也能软删除，订单引用保留", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "mock",
+        name: "待删除-mock",
+        methods: ["alipay"],
+        allowed_emails: ["alice@example.com"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const g = (await created.json()) as { gateway: { id: number } };
+    const id = g.gateway.id;
+
+    const test = await call(`/api/admin/gateways/${id}/test`, {
+      method: "POST",
+      body: { method: "alipay" },
+    });
+    expect(test.status).toBe(200);
+    const testBody = (await test.json()) as { order_code: string };
+    const order = await env.DB.prepare(`SELECT gateway_id, source FROM orders WHERE code = ?`)
+      .bind(testBody.order_code)
+      .first<{ gateway_id: number; source: string }>();
+    expect(order).toMatchObject({ gateway_id: id, source: "test" });
+
+    const deleted = await call(`/api/admin/gateways/${id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+
+    // 订单引用还在，证明“删除不等于丢历史”
+    const after = await env.DB.prepare(`SELECT gateway_id FROM orders WHERE code = ?`)
+      .bind(testBody.order_code)
+      .first<{ gateway_id: number }>();
+    expect(after?.gateway_id).toBe(id);
   });
 
   it("自定义映射必须能通过校验", async () => {
@@ -122,7 +380,45 @@ describe("网关管理", () => {
       },
     });
     expect(bad.status).toBe(400);
-    expect(((await bad.json()) as { message: string }).message).toContain("amount_unit");
+    expect(((await bad.json()) as { message: string }).message).toContain("create.response");
+  });
+
+  it("通用映射没有查单接口 → 保存被拒", async () => {
+    const res = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "generic_json_v1",
+        name: "自定义-无查单",
+        endpoint: "https://x.example.com",
+        merchant_id: "M2",
+        methods: ["alipay"],
+        mapping: {
+          create: {
+            request: {
+              path: "/pay",
+              format: "json",
+              fields: [
+                { field: "mch", role: "merchant", value: "{merchant}" },
+                { field: "no", role: "order_no", value: "{order_no}" },
+                { field: "amt", role: "amount", value: "{amount}", unit: "yuan" },
+              ],
+              sign: { algo: "md5", key_append: "" },
+            },
+            response: { ok: { path: "code", equals: 200 }, fields: [{ field: "payUrl", role: "pay_url" }] },
+          },
+          notify: {
+            request: {
+              fields: [{ field: "no", role: "order_no" }],
+              paid_when: { path: "status", equals: 1 },
+              sign: { algo: "md5" },
+            },
+            response: { reply: "success" },
+          },
+        },
+      },
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { message: string }).message).toContain("query");
   });
 
   it("易支付：没密钥不能发布；设了密钥才能发布", async () => {
@@ -149,6 +445,7 @@ describe("网关管理", () => {
     });
     expect(patched.status).toBe(200);
 
+    await markTested(gateway.id);
     const ok = await call(`/api/admin/gateways/${gateway.id}/publish`, { method: "POST" });
     expect(ok.status).toBe(200);
     const body = (await ok.json()) as { gateway: { status: string } };
@@ -170,6 +467,7 @@ describe("网关管理", () => {
       method: "PATCH",
       body: { allowed_emails: ["tester@example.com"] },
     });
+    await markTested(gateway.id);
     const ok = await call(`/api/admin/gateways/${gateway.id}/publish`, { method: "POST" });
     expect(ok.status).toBe(200);
   });
@@ -185,6 +483,7 @@ describe("网关管理", () => {
       },
     });
     const { gateway } = (await created.json()) as { gateway: { id: number } };
+    await markTested(gateway.id);
     const pub = await call(`/api/admin/gateways/${gateway.id}/publish`, {
       method: "POST",
     });

@@ -15,6 +15,34 @@
       "when": 1795358910390,
       "tag": "0001_wonderful_sheva_callister",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795406896344,
+      "tag": "0002_true_menace",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795436014783,
+      "tag": "0003_instance_channel_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795489534199,
+      "tag": "0004_polite_meggan",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795495278830,
+      "tag": "0005_right_ser_duncan",
+      "breakpoints": true
     }
   ]
 }

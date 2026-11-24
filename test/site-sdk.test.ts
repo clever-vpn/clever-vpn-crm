@@ -274,7 +274,11 @@ describe("支付回跳页", () => {
     expect(RETURN_HTML).toContain("支付已提交");
     expect(RETURN_HTML).not.toMatch(/\{\{/);
     // 单号从 query 里读，且必须转义后再插入
-    expect(RETURN_HTML).toContain("order=");
-    expect(RETURN_HTML).toMatch(/escape/);
+    expect(RETURN_HTML).toContain('param("order")');
+    expect(RETURN_HTML).toMatch(/function esc/);
+    // 客户端回跳页自己触发一次受控查单
+    expect(RETURN_HTML).toContain("crm_pay_token");
+    expect(RETURN_HTML).toContain("/refresh?t=");
+    expect(RETURN_HTML).toContain("CRM_API_BASE");
   });
 });

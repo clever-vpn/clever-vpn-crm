@@ -5,9 +5,13 @@
  * 地址。**不判断是否已付** —— 那是 notify / queryCharge 的事。
  */
 
-import { listGateways, listLiveGateways, mappingOf, parseMethods, pickGateway } from "./gateways";
+import { createEpayV2 } from "./drivers/epay-v2";
+import { createPaypalCharge } from "./drivers/paypal";
+import { createStripeCharge } from "./drivers/stripe";
+import { listGateways, listLiveGateways, mappingOf, parseChannelCodes, parseMethods, pickGateway, routeDriverOf } from "./gateways";
 import { buildCreateRequest, parseCreateResponse } from "./mapping";
 import { MOCK_DRIVER, mockSecret } from "./mock";
+import { appendReturnToken, makeReturnPageUrl, normalizeReturnUrl } from "./return-token";
 import { decryptSecret } from "./secret";
 
 import type { Env } from "../env";
@@ -79,6 +83,11 @@ export interface CreateChargeInput {
   /** 本站 origin（拼 pay_url 与 notify_url 用） */
   origin: string;
   /**
+   * CRM 自己的 origin（回跳页/refresh 用）。默认 = `origin`。
+   * 后台测试支付把 `origin` 设成 SITE_URL，所以需要单独给 CRM 的 origin。
+   */
+  crmOrigin?: string;
+  /**
    * 用户付完回哪个页面（调用方给，站点 SDK 传自己的 `/_crm/return`）。
    * 没给就回本站根 —— 那是 CRM 自己的域名，不是站点，只作为兜底。
    */
@@ -118,23 +127,60 @@ function routeForTest(
   const gateway = rows.find((g) => g.id === id);
   if (!gateway) return null;
   if (!parseMethods(gateway.methods).includes(method)) return null;
-  const mapping = mappingOf(gateway);
-  return mapping ? { gateway, mapping } : null;
+  const driver = routeDriverOf(gateway);
+  if (!driver) return null;
+  return { gateway, driver, mapping: driver === "mapping" ? mappingOf(gateway) : null };
 }
 
-/** 把 `order=<code>` 拼到调用方给的地址上（它可能是 `/x` 也可能是 `/x?a=1`） */
-function withOrderCode(base: string | undefined, orderCode: string, origin: string): string {
-  const raw = (base ?? "").trim();
-  const safe = /^https?:\/\/[^\s"'<>]+$/i.test(raw) && raw.length <= 300 ? raw : "";
-  if (!safe) return `${origin}/?order=${orderCode}`;
-  return `${safe}${safe.includes("?") ? "&" : "?"}order=${orderCode}`;
+function isHttpUrl(url: string | null): boolean {
+  if (!url) return false;
+  try {
+    const p = new URL(url).protocol;
+    return p === "http:" || p === "https:";
+  } catch {
+    return false;
+  }
+}
+
+interface ReturnRoute {
+  successUrl: string;
+  cancelUrl: string;
+  /** 映射网关的 return_url：http(s) 客户端页带 token；自定义/空走 CRM 兜底页 */
+  mappingReturnUrl: string;
+}
+
+/**
+ * 决定 provider 的 return/success URL：
+ * - 客户端给了 http(s) 地址：直接回它，附 `crm_pay_token`；客户端页调 refresh；
+ * - 自定义 scheme / 没给：回 CRM 兜底页（自定义 scheme 放 token 的 `to`，页面给按钮）；
+ * - token 生成失败（APP_SECRET 缺失）：回退到最终地址，不阻塞下单。
+ */
+async function buildReturnRoute(
+  env: Env,
+  crmOrigin: string,
+  orderCode: string,
+  rawReturn: string | undefined,
+  now: Date,
+): Promise<ReturnRoute> {
+  const final = normalizeReturnUrl(rawReturn, orderCode);
+  const http = isHttpUrl(final);
+  const base = crmOrigin.replace(/\/+$/, "");
+  const fallbackTo = http ? null : final;
+  const fallback = await makeReturnPageUrl(env, base, orderCode, fallbackTo, now);
+  const clientSuccess = http && final ? await appendReturnToken(final, env, orderCode, null, now, false) : null;
+  const clientCancel = http && final ? await appendReturnToken(final, env, orderCode, null, now, true) : null;
+
+  const successUrl = clientSuccess ?? fallback ?? final ?? `${base}/?order=${encodeURIComponent(orderCode)}`;
+  const cancelUrl = clientCancel ?? (fallback ? `${fallback}&cancel=1` : successUrl);
+  return { successUrl, cancelUrl, mappingReturnUrl: successUrl };
 }
 
 export async function createCharge(env: Env, input: CreateChargeInput): Promise<CreateChargeResult> {
   const now = input.now ?? new Date();
   const nowIso = now.toISOString();
   const origin = input.origin.replace(/\/+$/, "");
-  const amountMinor = input.amountMinor ?? input.plan.price_minor;
+  const crmAmountMinor = input.amountMinor ?? input.plan.price_minor;
+  const crmCurrency = input.plan.currency;
 
   // ── 1. 防双击：60 秒内同一 plan + 方式 + **金额**还在 pending ⇒ 复用（不新建行）──
   //    金额必须参与匹配：用户中途换了个优惠码，价格变了就该新建一单，
@@ -148,7 +194,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
         AND pay_url IS NOT NULL AND created_at >= ? AND expires_at > ?
       ORDER BY id DESC LIMIT 1`,
   )
-    .bind(input.customerId, input.plan.id, input.method, amountMinor, cutoff, nowIso)
+    .bind(input.customerId, input.plan.id, input.method, crmAmountMinor, cutoff, nowIso)
     .first<{ code: string; pay_url: string; amount_minor: number; currency: string; expires_at: string | null }>();
 
   if (recent?.pay_url) {
@@ -172,23 +218,111 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
     // App 刷新 `/plans` 换一种，不要重试同一个。
     return { ok: false, status: 422, code: "payment_unavailable", message: "该支付方式暂不可用，请换一种" };
   }
-  const mapping = mappingOf(route.gateway);
-  if (!mapping) {
-    return { ok: false, status: 400, code: "gateway_misconfigured", message: "该支付网关的映射配置无效" };
-  }
-
-  const currency = input.plan.currency;
+  const gatewayCurrency = route.gateway.currency || crmCurrency;
+  const fxRate = gatewayCurrency === crmCurrency ? 1 : (route.gateway.fx_rate || 1);
+  const amountMinor = gatewayCurrency === crmCurrency ? crmAmountMinor : Math.round(crmAmountMinor / fxRate);
+  const currency = gatewayCurrency;
+  const providerAmountMinor = amountMinor;
+  const providerCurrency = gatewayCurrency;
   const orderCode = newOrderCode(now);
   const expiresAt = new Date(now.getTime() + ORDER_TTL_MINUTES * 60_000).toISOString();
+  const returnRoute = await buildReturnRoute(
+    env,
+    input.crmOrigin ?? origin,
+    orderCode,
+    input.returnUrl,
+    now,
+  );
 
   // ── 3. 换收银台地址 ──
   let payUrl: string;
   let rawCreate: string | null = null;
   let tradeNo: string | null = null;
 
-  if (route.gateway.driver === MOCK_DRIVER) {
+  if (route.driver === "stripe" || route.driver === "paypal") {
+    const secret = await gatewaySecret(env, route.gateway);
+    if (!secret) {
+      return {
+        ok: false,
+        status: 501,
+        code: "gateway_not_ready",
+        message: "网关密钥不可用（未配置主密钥 APP_SECRET 或密文无法解密）",
+      };
+    }
+    const result = route.driver === "stripe"
+      ? await createStripeCharge({
+          gateway: route.gateway,
+          secret,
+          merchantId: route.gateway.merchant_id,
+          orderNo: orderCode,
+          amountMinor,
+          currency,
+          subject: input.plan.name,
+          successUrl: returnRoute.successUrl,
+          cancelUrl: returnRoute.cancelUrl,
+          customerEmail: input.customerEmail,
+          env,
+          fetch: input.fetch,
+        })
+      : await createPaypalCharge({
+          gateway: route.gateway,
+          secret,
+          merchantId: route.gateway.merchant_id,
+          orderNo: orderCode,
+          amountMinor,
+          currency,
+          subject: input.plan.name,
+          successUrl: returnRoute.successUrl,
+          cancelUrl: returnRoute.cancelUrl,
+          customerEmail: input.customerEmail,
+          env,
+          fetch: input.fetch,
+        });
+    if (!result.ok) {
+      return { ok: false, status: result.status, code: result.code, message: result.message };
+    }
+    payUrl = result.payUrl;
+    tradeNo = result.tradeNo;
+    rawCreate = result.raw;
+  } else if (route.driver === "epay_v2") {
+    const secret = await gatewaySecret(env, route.gateway);
+    if (!secret) {
+      return {
+        ok: false,
+        status: 501,
+        code: "gateway_not_ready",
+        message: "网关密钥不可用（未配置主密钥 APP_SECRET 或密文无法解密）",
+      };
+    }
+    const result = await createEpayV2({
+      gateway: route.gateway,
+      secret,
+      merchantId: route.gateway.merchant_id,
+      orderNo: orderCode,
+      amountMinor,
+      currency,
+      subject: input.plan.name,
+      successUrl: returnRoute.successUrl,
+      cancelUrl: returnRoute.cancelUrl,
+      notifyUrl: `${origin}/api/pay/notify/${route.gateway.id}`,
+      paymentMethod: input.method,
+      customerEmail: input.customerEmail,
+      env,
+      fetch: input.fetch,
+    });
+    if (!result.ok) {
+      return { ok: false, status: result.status, code: result.code, message: result.message };
+    }
+    payUrl = result.payUrl;
+    tradeNo = result.tradeNo;
+    rawCreate = result.raw;
+  } else if (route.gateway.driver === MOCK_DRIVER) {
     payUrl = `${origin}/pay/mock/${orderCode}`;
   } else {
+    const mapping = route.mapping;
+    if (!mapping) {
+      return { ok: false, status: 400, code: "gateway_misconfigured", message: "该支付网关的映射配置无效" };
+    }
     const secret = await gatewaySecret(env, route.gateway);
     if (!secret) {
       // 密钥解不开 ⇒ 明确拒绝，不拿空密钥去签名
@@ -209,9 +343,10 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
       subject: input.plan.name,
       method: input.method,
       notifyUrl: `${origin}/api/pay/notify/${route.gateway.id}`,
-      returnUrl: withOrderCode(input.returnUrl, orderCode, origin),
+      returnUrl: returnRoute.mappingReturnUrl,
       clientIp: input.clientIp,
       endpoint: route.gateway.endpoint ?? "",
+      channelCodes: parseChannelCodes(route.gateway.channel_codes),
       now,
     });
 
@@ -240,7 +375,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
     } catch {
       return { ok: false, status: 502, code: "gateway_bad_response", message: "网关返回的不是 JSON" };
     }
-    const parsed = parseCreateResponse(mapping, payload);
+    const parsed = parseCreateResponse(mapping, payload, secret);
     if (!parsed.ok || !parsed.payUrl) {
       return {
         ok: false,
@@ -257,10 +392,11 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   // ── 4. 落订单（单号创建后不可改）──
   await env.DB.prepare(
     `INSERT INTO orders (code, customer_id, plan_id, kind, plan_snapshot, amount_minor, currency,
+       provider_amount_minor, provider_currency, fx_rate,
        discount_minor, promotion_id, code_id, entry,
        source, payment_method, gateway_id, provider_order_no, provider_trade_no, pay_url,
        raw_create, expires_at, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
   )
     .bind(
       orderCode,
@@ -268,8 +404,11 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
       input.plan.id,
       input.plan.kind,
       JSON.stringify(input.plan),
-      amountMinor,
-      currency,
+      crmAmountMinor,
+      crmCurrency,
+      providerAmountMinor,
+      providerCurrency,
+      fxRate,
       input.discountMinor ?? 0,
       input.promotionId ?? null,
       input.codeId ?? null,
@@ -287,5 +426,5 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
     )
     .run();
 
-  return { ok: true, orderCode, payUrl, amountMinor, currency, expiresAt, reused: false };
+  return { ok: true, orderCode, payUrl, amountMinor: crmAmountMinor, currency: crmCurrency, expiresAt, reused: false };
 }

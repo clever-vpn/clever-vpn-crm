@@ -35,14 +35,6 @@ export interface SignSpec {
   key_append?: string;
   /** 不参与签名的参数名，默认 `["sign"]` */
   exclude?: string[];
-  /**
-   * **仅验签时**额外尝试的**完整**排除集合（直接作为替代方案，不叠加）。
-   *
-   * 为什么需要：有的厂商文档没写清"回调是否带 `attach`/`format`"，
-   * 我们只能两种集合都试一遍（亿宏就是：下单排除 `format`/`attach`，回调未知）。
-   * 最多 3 组，防止配置失控。
-   */
-  exclude_variants?: string[][];
   /** 摘要结果转大写，默认小写 */
   upper?: boolean;
   /** 参与签名的值是否做 URL 编码，默认 `false`（各家文档都是原文签名） */
@@ -110,10 +102,9 @@ export function signParams(
 }
 
 /**
- * 验签。按 `exclude` 与 `exclude_variants` 依次尝试，任一匹配即通过。
+ * 验签。按 `exclude` 计算一次。
  *
- * **必须**用"收到什么就签什么"的方式比较 —— 厂商明确要求"接口可能增加字段，
- * 验签必须兼容扩展字段"（华俊文档原话），所以不能校验参数集合完全一致。
+ * 文档必须明确哪些字段参与签名；不清晰的文档不在这里兜底。
  */
 export function verifyParams(
   params: Record<string, unknown>,
@@ -124,16 +115,8 @@ export function verifyParams(
   const got = String(params[spec.field ?? "sign"] ?? "").trim();
   if (!got) return false;
 
-  const base = withField(spec, spec.exclude ?? DEFAULT_EXCLUDE);
-  // 每个候选都是**完整的**排除集合（基集与变体并列）
-  const candidates: string[][] = [
-    base,
-    ...(spec.exclude_variants ?? []).map((v) => withField(spec, v)),
-  ];
-
-  return candidates.some((exclude) => {
-    const hex = digest(spec.algo ?? "md5", signPlaintext(params, key, spec, exclude));
-    const expected = spec.upper ? hex.toUpperCase() : hex;
-    return safeEqual(expected.toLowerCase(), got.toLowerCase());
-  });
+  const exclude = withField(spec, spec.exclude ?? DEFAULT_EXCLUDE);
+  const hex = digest(spec.algo ?? "md5", signPlaintext(params, key, spec, exclude));
+  const expected = spec.upper ? hex.toUpperCase() : hex;
+  return safeEqual(expected.toLowerCase(), got.toLowerCase());
 }

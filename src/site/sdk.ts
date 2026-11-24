@@ -323,23 +323,60 @@ export const RETURN_HTML = `<!doctype html>
 </head>
 <body>
   <div class="box">
-    <h1>支付已提交</h1>
-    <p>如果已完成付款，权益通常几秒内到账。</p>
+    <h1 id="title">支付已提交</h1>
+    <p id="msg">如果已完成付款，权益通常几秒内到账。</p>
     <p>回到站点后在「我的」里刷新即可看到最新状态。</p>
     <p id="order"></p>
     <a href="/">回到站点</a>
   </div>
+  <script src="/_crm/config.js"></script>
   <script>
     (function () {
-      var m = /[?&]order=([^&]+)/.exec(location.search);
-      if (m) {
-        document.getElementById("order").innerHTML =
-          '单号 <code>' + SiteCrm_escape(decodeURIComponent(m[1])) + '</code>';
-      }
-      function SiteCrm_escape(s) {
+      function esc(s) {
         return String(s).replace(/[&<>"']/g, function (c) {
           return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
         });
+      }
+      function param(name) {
+        var m = new RegExp("[?&]" + name + "=([^&]*)").exec(location.search);
+        return m ? decodeURIComponent(m[1]) : "";
+      }
+      var order = param("order");
+      if (order) {
+        document.getElementById("order").innerHTML =
+          "单号 <code>" + esc(order) + "</code>";
+      }
+
+      var token = param("crm_pay_token");
+      var cancel = param("crm_pay_cancel") === "1";
+      var pay = param("pay");
+      var COPY = {
+        paid: ["支付成功", "权益通常几秒内到账。"],
+        pending: ["支付确认中", "如果已完成付款，权益通常几秒内到账。"],
+        failed: ["支付未完成", "没有产生有效支付，可以返回重新购买。"],
+        canceled: ["已取消支付", "没有产生扣款。"]
+      };
+      function show(kind) {
+        var v = COPY[kind];
+        if (!v) return;
+        document.getElementById("title").textContent = v[0];
+        document.getElementById("msg").textContent = v[1];
+      }
+      if (pay) show(pay);
+
+      // 客户端直接回跳：用 token 触发一次受控查单（CRM 的 refresh 接口）
+      if (token && order && window.CRM_API_BASE) {
+        var base = String(window.CRM_API_BASE).replace(/\/+$/, "");
+        var url = base + "/api/pay/return/" + encodeURIComponent(order) + "/refresh?t=" + encodeURIComponent(token);
+        if (cancel) url += "&cancel=1";
+        document.getElementById("title").textContent = "正在确认支付结果…";
+        fetch(url, { method: "POST" })
+          .then(function (res) { return res.json(); })
+          .then(function (data) { if (data && data.pay) show(data.pay); })
+          .catch(function () {
+            document.getElementById("title").textContent = "支付已提交";
+            document.getElementById("msg").textContent = "暂时无法确认，回到站点后在「我的」里刷新即可。";
+          });
       }
     })();
   </script>

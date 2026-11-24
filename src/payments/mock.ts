@@ -29,29 +29,43 @@ export const MOCK_SIGN: SignSpec = { field: "sign", algo: "md5", key_append: "",
  * `create` 字段不会被用到（mock 不下单），保留是为了配置形状统一。
  */
 export const MOCK_MAPPING: GatewayMapping = {
-  create: { method: "POST", path: "/pay/mock", format: "form" },
-  fields: { merchant: "mch", order_no: "out_trade_no", amount: "amount" },
-  /** 回调金额用**分**，与真实网关最常见的坑保持一致 */
-  amount_unit: "cent",
-  sign: MOCK_SIGN,
-  response: { ok: { path: "code", equals: 0 }, message: "msg", pay_url: "pay_url" },
+  create: {
+    request: {
+      method: "POST",
+      path: "/pay/mock",
+      format: "form",
+      fields: [
+        { field: "mch", role: "merchant", value: "{merchant}" },
+        { field: "out_trade_no", role: "order_no", value: "{order_no}" },
+        { field: "amount", role: "amount", value: "{amount}", unit: "cent" },
+      ],
+      sign: MOCK_SIGN,
+    },
+    response: {
+      ok: { path: "code", equals: 0 },
+      fields: [
+        { field: "pay_url", role: "pay_url" },
+        { field: "msg", role: "message" },
+      ],
+    },
+  },
   notify: {
-    method: "POST",
-    format: "form",
-    order_no: "out_trade_no",
-    trade_no: "trade_no",
-    amount: "amount",
-    paid_when: { path: "status", in: ["SUCCESS"] },
-    reply: "success",
+    request: {
+      method: "POST",
+      format: "form",
+      fields: [
+        { field: "out_trade_no", role: "order_no" },
+        { field: "trade_no", role: "trade_no" },
+        { field: "amount", role: "amount", unit: "cent" },
+      ],
+      paid_when: { path: "status", in: ["SUCCESS"] },
+      sign: MOCK_SIGN,
+    },
+    response: { reply: "success" },
   },
 };
 
-/**
- * mock 的签名密钥。
- *
- * 派生自 `APP_SECRET`（生产必有），这样**伪造回调需要拿到服务端密钥**，
- * 不是一个写在仓库里的常量。本地没配时退化成一个明显的开发值。
- */
+/** mock 的签名密钥：派生自 APP_SECRET，未配置时用明显的开发值。 */
 export function mockSecret(env: Env): string {
   const base = signingKeyOf(env);
   return base ? `${base}:mock` : "mock-dev-secret";

@@ -25,13 +25,27 @@ export interface GatewayRow {
   endpoint: string | null;
   merchant_id: string | null;
   secret_enc: string | null;
+  /** 加密的 webhook 凭据（Stripe whsec / PayPal webhook id）；仅 stripe/paypal */
+  webhook_enc: string | null;
   /** JSON 数组 */
   methods: string;
+  /** 账户相关的通道号（JSON 对象） */
+  channel_codes: string | null;
   /** JSON（只有 generic_json_v1 需要） */
   mapping: string | null;
   priority: number;
   status: string;
   currency: string;
+  /** 1 单位网关币种 = X CNY；CNY 网关固定 1 */
+  fx_rate: number;
+  /** 测试支付金额（网关币种，最小单位） */
+  test_amount_minor: number;
+  test_create_ok_at: string | null;
+  test_query_ok_at: string | null;
+  test_callback_ok_at: string | null;
+  test_require_callback: number;
+  /** 测试通过时绑定的配置 hash */
+  tested_config_hash: string | null;
   /** JSON 数组；`null` = 不限 */
   allowed_emails: string | null;
   last_test_order_id: number | null;
@@ -39,9 +53,10 @@ export interface GatewayRow {
   last_error: string | null;
 }
 
-export const GATEWAY_COLUMNS = `id, driver, name, endpoint, merchant_id, secret_enc,
-  methods, mapping, priority, status, currency, allowed_emails, last_test_order_id,
-  last_ok_at, last_error`;
+export const GATEWAY_COLUMNS = `id, driver, name, endpoint, merchant_id, secret_enc, webhook_enc,
+  methods, channel_codes, mapping, priority, status, currency, fx_rate, test_amount_minor,
+  test_create_ok_at, test_query_ok_at, test_callback_ok_at, test_require_callback, tested_config_hash,
+  allowed_emails, last_test_order_id, last_ok_at, last_error`;
 
 function parseJsonArray(raw: string | null): string[] {
   if (!raw) return [];
@@ -55,6 +70,22 @@ function parseJsonArray(raw: string | null): string[] {
 
 export function parseMethods(raw: string | null): string[] {
   return parseJsonArray(raw);
+}
+
+/** 账户通道号：JSON 对象；坏数据按空对象处理 */
+export function parseChannelCodes(raw: string | null): Record<string, string | number> {
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw) as unknown;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    const out: Record<string, string | number> = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (typeof x === "string" || typeof x === "number") out[k] = x;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /** 白名单（邮箱已归一为小写）；返回空数组表示"不限" */
@@ -85,8 +116,8 @@ export function gatewayVisibleTo(gw: GatewayRow, email: string, env: Env): boole
 }
 
 /**
- * 取这条网关的映射配置。
- * @returns `null` = 这个 driver 还没有自动下单实现（stripe/paypal/manual，或映射配置非法）
+ * 取这条网关的**映射**配置（只对映射类 driver 有意义）。
+ * @returns `null` = 不是映射类 driver（stripe/paypal/manual），或映射配置非法
  */
 export function mappingOf(gw: GatewayRow): GatewayMapping | null {
   if (gw.driver === "epay_v1") return EPAY_V1_MAPPING;
@@ -104,9 +135,26 @@ export function mappingOf(gw: GatewayRow): GatewayMapping | null {
   return null;
 }
 
+/** 路由真正走的实现：映射解释器，或两条薄 driver */
+export type RouteDriver = "mapping" | "stripe" | "paypal" | "epay_v2";
+
+/**
+ * 这条网关有没有可路由的实现。
+ * - `epay_v1` / `generic_json_v1` / `mock`：有合法 mapping ⇒ `"mapping"`；
+ * - `stripe` / `paypal`：代码里的薄 driver ⇒ 自身；
+ * - `manual`：`null`（线下到账，不参与路由）。
+ */
+export function routeDriverOf(gw: GatewayRow): RouteDriver | null {
+  if (gw.driver === "stripe" || gw.driver === "paypal") return gw.driver;
+  if (gw.driver === "epay_v2") return "epay_v2";
+  return mappingOf(gw) ? "mapping" : null;
+}
+
 export interface RouteResult {
   gateway: GatewayRow;
-  mapping: GatewayMapping;
+  driver: RouteDriver;
+  /** `driver === "mapping"` 时非空；薄 driver 为 null */
+  mapping: GatewayMapping | null;
 }
 
 /**
@@ -127,9 +175,13 @@ export function pickGateway(
     .sort((a, b) => a.priority - b.priority || a.id - b.id);
 
   for (const gateway of candidates) {
-    const mapping = mappingOf(gateway);
-    // 没有自动下单实现的 driver 不参与路由（stripe/paypal 将来补 driver 后自然会进来）
-    if (mapping) return { gateway, mapping };
+    const driver = routeDriverOf(gateway);
+    if (!driver) continue; // manual / 映射配置非法
+    return {
+      gateway,
+      driver,
+      mapping: driver === "mapping" ? mappingOf(gateway) : null,
+    };
   }
   return null;
 }
@@ -166,7 +218,7 @@ export async function methodsForViewer(
   const out = new Set<string>();
   const who = (email ?? "").trim().toLowerCase();
   for (const g of await listLiveGateways(env)) {
-    if (!mappingOf(g)) continue;
+    if (!routeDriverOf(g)) continue;
     if (!gatewayVisibleTo(g, who, env)) continue;
     for (const m of parseMethods(g.methods)) out.add(m);
   }
@@ -188,6 +240,6 @@ export async function listLiveGateways(env: Env): Promise<GatewayRow[]> {
 export function visibleMethods(gw: GatewayRow, email: string, env: Env): string[] {
   if (gw.status !== "live") return [];
   if (!gatewayVisibleTo(gw, email, env)) return [];
-  if (!mappingOf(gw)) return [];
+  if (!routeDriverOf(gw)) return [];
   return parseMethods(gw.methods);
 }

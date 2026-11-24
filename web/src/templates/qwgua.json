@@ -1,0 +1,78 @@
+{
+  "schema_version": 2,
+  "id": "qwgua",
+  "name": "泡泡 / 青蛙",
+  "description": "JSON、MD5、元、北京时间 ymdhms；响应 data.sign",
+  "source": "official",
+  "mapping": {
+    "create": {
+      "request": {
+        "method": "POST",
+        "path": "/pay/create",
+        "format": "json",
+        "fields": [
+          { "field": "mchId", "role": "merchant", "value": "{merchant}", "numeric": true },
+          { "field": "mchOrderNo", "role": "order_no", "value": "{order_no}" },
+          { "field": "amount", "role": "amount", "value": "{amount}", "unit": "yuan" },
+          { "field": "title", "role": "subject", "value": "{subject}" },
+          { "field": "body", "role": "body", "value": "{body}" },
+          { "field": "notifyUrl", "role": "notify_url", "value": "{notify_url}" },
+          { "field": "returnUrl", "role": "return_url", "value": "{return_url}" },
+          { "field": "ip", "role": "client_ip", "value": "{client_ip}" },
+          { "field": "code", "role": "channel", "value": "{channel}" },
+          { "field": "requestTime", "role": "timestamp", "value": "{timestamp}", "format": "ymdhms", "timezone": "Asia/Shanghai" },
+          { "field": "version", "value": "1.0" },
+          { "field": "device", "value": "app" }
+        ],
+        "sign": { "algo": "md5", "key_append": "", "exclude": ["sign"] }
+      },
+      "response": {
+        "ok": { "path": "code", "equals": "200" },
+        "fields": [
+          { "field": "data.payUrl", "role": "pay_url" },
+          { "field": "data.sysOrderNo", "role": "trade_no" },
+          { "field": "msg", "role": "message" }
+        ],
+        "sign": { "field": "data.sign", "data_path": "data" }
+      }
+    },
+    "notify": {
+      "request": {
+        "method": "POST",
+        "format": "json",
+        "fields": [
+          { "field": "mchOrderNo", "role": "order_no" },
+          { "field": "sysOrderNo", "role": "trade_no" },
+          { "field": "amount", "role": "amount", "unit": "yuan" }
+        ],
+        "paid_when": { "path": "status", "in": ["3"] },
+        "sign": { "algo": "md5", "key_append": "", "exclude": ["sign"] }
+      },
+      "response": { "reply": "success" }
+    },
+    "query": {
+      "request": {
+        "method": "POST",
+        "format": "json",
+        "path": "/pay/query",
+        "fields": [
+          { "field": "mchId", "value": "{merchant}", "numeric": true },
+          { "field": "mchOrderNo", "value": "{order_no}" },
+          { "field": "requestTime", "value": "{timestamp}", "role": "timestamp", "format": "ymdhms", "timezone": "Asia/Shanghai" },
+          { "field": "version", "value": "1.0" }
+        ],
+        "sign": { "algo": "md5", "key_append": "", "exclude": ["sign"] }
+      },
+      "response": {
+        "ok": { "path": "code", "equals": "200" },
+        "paid_when": { "path": "data.status", "equals": "3" },
+        "terminal_when": { "path": "data.status", "in": ["2", "4", "5"] },
+        "fields": [
+          { "field": "data.amount", "role": "amount", "unit": "yuan" },
+          { "field": "data.sysOrderNo", "role": "trade_no" }
+        ],
+        "sign": { "field": "data.sign", "data_path": "data" }
+      }
+    }
+  }
+}

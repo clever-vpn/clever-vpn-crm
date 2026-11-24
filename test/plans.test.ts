@@ -12,6 +12,7 @@ import {
   addDaysIso,
   applyAddon,
   applyPlanPatch,
+  paymentMethodsOf,
   planToControlParams,
   rowToPlan,
   validatePlan,
@@ -442,5 +443,22 @@ describe("applyPlanPatch（可变目录的合并规则）", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors.join()).toContain("至少选一个售卖渠道");
+  });
+});
+
+
+describe("paymentMethodsOf：Stripe / PayPal 的品牌标签", () => {
+  it("按 plan 勾选 ∩ 实例可用，输出品牌名", () => {
+    const plan = makePlan({
+      sales_channels: [{ channel: "web_checkout", methods: ["alipay", "stripe", "paypal"] }],
+    });
+    expect(paymentMethodsOf(plan, new Set(["alipay", "stripe", "paypal"]))).toEqual([
+      { id: "alipay", label: "支付宝", icon_url: null },
+      { id: "stripe", label: "Stripe", icon_url: null },
+      { id: "paypal", label: "PayPal", icon_url: null },
+    ]);
+    expect(paymentMethodsOf(plan, new Set(["alipay"]))).toEqual([
+      { id: "alipay", label: "支付宝", icon_url: null },
+    ]);
   });
 });

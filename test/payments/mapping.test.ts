@@ -4,7 +4,7 @@
  * 关键点：**签名用 `node:crypto` 独立算一遍**再和实现比对 —— 否则就是用同一段
  * 代码验证自己，签错也测不出来。
  *
- * 覆盖：易支付（内置）+ 青蛙 / 亿宏 / 华俊（仅夹具），四种形状全过同一份解释器。
+ * 覆盖：易支付（内置）+ 青蛙 / 亿宏 / 华俊 / XArrPay 原生 / 布拉格，同一份解释器。
  */
 
 import { createHash } from "node:crypto";
@@ -29,7 +29,14 @@ import {
   type GatewayMapping,
 } from "../../src/payments/mapping";
 
-import { HUAJUN_MAPPING, HUPIJIAO_MAPPING, QWGUA_MAPPING, YIHONG_MAPPING } from "./fixtures";
+import {
+  HUAJUN_MAPPING,
+  HUPIJIAO_MAPPING,
+  PRAGUE_MAPPING,
+  QWGUA_MAPPING,
+  XARRPAY_NATIVE_MAPPING,
+  YIHONG_MAPPING,
+} from "./fixtures";
 
 const KEY = "secret-key";
 /** 北京时间 2026-10-24 12:00:00 */
@@ -48,6 +55,7 @@ function ctx(over: Partial<ChargeContext> = {}): ChargeContext {
     returnUrl: "https://crm.example.com/return",
     clientIp: "1.2.3.4",
     endpoint: "https://pay.example.com",
+    channelCodes: { alipay: "alipay", wechat: "wxpay" },
     now: NOW,
     ...over,
   };
@@ -80,7 +88,7 @@ function signOf(payload: Record<string, unknown>): string {
 
 describe("内置映射 epay_v1", () => {
   it("自校验通过", () => {
-    const r = validateMapping(EPAY_V1_MAPPING);
+    const r = validateMapping(EPAY_V1_MAPPING, { allowUnsignedQuery: true });
     expect(r.ok).toBe(true);
   });
 
@@ -163,13 +171,13 @@ describe("夹具：青蛙（JSON + 北京时间 ymdhms）", () => {
     expect(validateMapping(QWGUA_MAPPING).ok).toBe(true);
   });
 
-  it("下单：JSON、金额按元、requestTime=YYYYMMDDHHmmss(UTC+8)", () => {
-    const req = buildCreateRequest(QWGUA_MAPPING, ctx());
+  it("下单：JSON、金额按元、mchId 数字、requestTime=YYYYMMDDHHmmss(UTC+8)", () => {
+    const req = buildCreateRequest(QWGUA_MAPPING, ctx({ merchant: "465", channelCodes: { alipay: "1888", wechat: "1999" } }));
     expect(req.url).toBe("https://pay.example.com/pay/create");
     expect(req.headers["Content-Type"]).toBe("application/json");
 
     const p = bodyParams(req.body, "json");
-    expect(p.mchId).toBe("M1000");
+    expect(p.mchId).toBe(465); // cf-api qwgua 用 Number(mchId)
     expect(p.code).toBe("1888"); // 渠道码
     expect(p.amount).toBe("12.34");
     expect(p.requestTime).toBe("20261024120000");
@@ -177,20 +185,39 @@ describe("夹具：青蛙（JSON + 北京时间 ymdhms）", () => {
     expect(signOf(p)).toBe(refSign(p, ["sign"], ""));
   });
 
-  it("响应：payUrl 在 data 下", () => {
+  it("响应：payUrl 在 data 下；data.sign 用同一算法验签", () => {
+    const data = { payUrl: "https://pay.example.com/cashier/1", sysOrderNo: "S-1" };
+    const sign = refSign(data, ["sign"], "");
     const r = parseCreateResponse(QWGUA_MAPPING, {
       code: "200",
-      data: { payUrl: "https://pay.example.com/cashier/1", sysOrderNo: "S-1" },
-    });
+      data: { ...data, sign },
+    }, KEY);
     expect(r.ok).toBe(true);
     expect(r.payUrl).toBe("https://pay.example.com/cashier/1");
     expect(r.tradeNo).toBe("S-1");
+    expect(parseCreateResponse(QWGUA_MAPPING, { code: "200", data: { ...data, sign: "bad" } }, KEY).ok).toBe(false);
   });
 
-  it("查单：data.status=3 已付", () => {
-    const r = parseQueryResponse(QWGUA_MAPPING, { code: "200", data: { status: "3", amount: "12.34" } });
+  it("查单：/pay/query、带 version、data.status=3 已付、2/4/5 终态", () => {
+    const req = buildQueryRequest(QWGUA_MAPPING, ctx({ merchant: "465", channelCodes: { alipay: "1888", wechat: "1999" } }));
+    expect(req.url).toBe("https://pay.example.com/pay/query");
+    const p = bodyParams(req.body, "json");
+    expect(p.version).toBe("1.0");
+    expect(p.mchId).toBe(465);
+    expect(p.requestTime).toBe("20261024120000");
+
+    const data = { status: "3", amount: "12.34" };
+    const sign = refSign(data, ["sign"], "");
+    const r = parseQueryResponse(QWGUA_MAPPING, { code: "200", data: { ...data, sign } }, KEY);
     expect(r.paid).toBe(true);
     expect(r.amountMinor).toBe(1234);
+    const terminal = (status: string) => {
+      const d = { status };
+      return parseQueryResponse(QWGUA_MAPPING, { code: "200", data: { ...d, sign: refSign(d, ["sign"], "") } }, KEY).terminal;
+    };
+    expect(terminal("2")).toBe(true);
+    expect(terminal("4")).toBe(true);
+    expect(terminal("5")).toBe(true);
   });
 });
 
@@ -200,7 +227,7 @@ describe("夹具：亿宏（form + 回调/查单两套状态码）", () => {
   });
 
   it("下单：form、format/attach 不参与签名", () => {
-    const req = buildCreateRequest(YIHONG_MAPPING, ctx());
+    const req = buildCreateRequest(YIHONG_MAPPING, ctx({ channelCodes: { alipay: "180", wechat: "210" } }));
     const p = bodyParams(req.body, "form");
     expect(p.userId).toBe("M1000");
     expect(p.type).toBe("180");
@@ -209,13 +236,13 @@ describe("夹具：亿宏（form + 回调/查单两套状态码）", () => {
     expect(signOf(p)).toBe(refSign(p, ["sign", "format", "attach"], ""));
   });
 
-  it("响应：datas.url 强制升级 https", () => {
+  it("响应：datas.url 按文档原样返回", () => {
     const r = parseCreateResponse(YIHONG_MAPPING, {
       code: "200",
       datas: { url: "http://pay.example.com/cashier/2" },
     });
     expect(r.ok).toBe(true);
-    expect(r.payUrl).toBe("https://pay.example.com/cashier/2");
+    expect(r.payUrl).toBe("http://pay.example.com/cashier/2");
   });
 
   it("回调 status=1 已付；查单 status=1 未付、status=3 已付（两套语义）", () => {
@@ -231,14 +258,13 @@ describe("夹具：亿宏（form + 回调/查单两套状态码）", () => {
     expect(parseQueryResponse(YIHONG_MAPPING, { code: "200", datas: { status: "3", amount: "12.34" } }).paid).toBe(true);
   });
 
-  it("回调带 attach 时用替代字段集合验签（exclude_variants）", () => {
+  it("回调带 attach：按文档固定排除 attach", () => {
     const params: Record<string, unknown> = {
       requestNo: "ORD-20261024-0001",
       amount: "12.34",
       status: "1",
       attach: "x",
     };
-    // 厂商签名时排除了 attach ⇒ 我们的基集也应包含 attach
     params.sign = refSign(params, ["sign", "format", "attach"]);
     expect(parseNotify(YIHONG_MAPPING, params, KEY).signOk).toBe(true);
   });
@@ -250,7 +276,7 @@ describe("夹具：华俊（JSON + 金额按分 + 毫秒 + &key=）", () => {
   });
 
   it("下单：金额是分、reqTime 13 位、签名用 &key=", () => {
-    const req = buildCreateRequest(HUAJUN_MAPPING, ctx());
+    const req = buildCreateRequest(HUAJUN_MAPPING, ctx({ channelCodes: { alipay: 901, wechat: 902 } }));
     const p = bodyParams(req.body, "json");
     expect(Number(p.amount)).toBe(1234); // 分，不除以 100
     expect(Number(p.wayCode)).toBe(901); // 渠道码是整数
@@ -352,70 +378,125 @@ describe("工具函数", () => {
 
 describe("校验（错误必须说清哪个键不对）", () => {
   const base: GatewayMapping = {
-    create: { path: "/pay" },
-    fields: { merchant: "mch", order_no: "no", amount: "amt" },
-    amount_unit: "yuan",
-    response: { ok: { path: "code", equals: 1 }, pay_url: "url" },
-    notify: { order_no: "no", paid_when: { path: "status", equals: 1 }, reply: "success" },
-    query: { path: "/q", fields: {}, paid_when: { path: "status", equals: 1 } },
+    create: {
+      request: {
+        path: "/pay",
+        fields: [
+          { field: "mch", role: "merchant", value: "{merchant}" },
+          { field: "no", role: "order_no", value: "{order_no}" },
+          { field: "amt", role: "amount", value: "{amount}", unit: "yuan" },
+        ],
+        sign: { algo: "md5" },
+      },
+      response: { ok: { path: "code", equals: 1 }, fields: [{ field: "url", role: "pay_url" }] },
+    },
+    notify: {
+      request: {
+        fields: [{ field: "no", role: "order_no" }],
+        paid_when: { path: "status", equals: 1 },
+        sign: { algo: "md5" },
+      },
+      response: { reply: "success" },
+    },
+    query: {
+      request: { path: "/q", fields: [], sign: { algo: "md5" } },
+      response: { paid_when: { path: "status", equals: 1 }, fields: [] },
+    },
   };
 
   it("最小可用配置通过", () => {
     expect(validateMapping(base).ok).toBe(true);
   });
 
-  it("缺 amount_unit 会报错（防止 100 倍的金额事故）", () => {
-    const r = validateMapping({ ...base, amount_unit: undefined });
+  it("金额字段缺 unit 会报错", () => {
+    const r = validateMapping({
+      ...base,
+      create: { ...base.create, request: { ...base.create.request, fields: base.create.request.fields.filter((f) => f.role !== "amount") } },
+    });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toContain("amount_unit");
+    if (!r.ok) expect(r.errors.join()).toContain("amount");
   });
 
-  it("判定条件必须写 equals 或 in", () => {
-    const r = validateMapping({ ...base, response: { ok: { path: "code" }, pay_url: "u" } });
+  it("判定条件不能同时 equals/in", () => {
+    const r = validateMapping({
+      ...base,
+      create: { ...base.create, response: { ...base.create.response, ok: { path: "code", equals: 1, in: ["1"] } } },
+    });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toContain("equals 或 in");
+    if (!r.ok) expect(r.errors.join()).toContain("不能同时有 equals 和 in");
   });
 
-  it("缺 notify.reply 会报错", () => {
-    const r = validateMapping({ ...base, notify: { order_no: "no", paid_when: { path: "s", equals: 1 } } });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toContain("notify.reply");
-  });
-
-  it("没有 pay_url 也没有 pay_url_from 会报错", () => {
-    const r = validateMapping({ ...base, response: { ok: { path: "code", equals: 1 } } });
+  it("create 缺 pay_url 字段报错", () => {
+    const r = validateMapping({
+      ...base,
+      create: { ...base.create, response: { ...base.create.response, fields: [] } },
+    });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.join()).toContain("pay_url");
+  });
+
+  it("response.sign.spec 未知键拒绝", () => {
+    const r = validateMapping({
+      ...base,
+      create: {
+        ...base.create,
+        response: { ...base.create.response, sign: { field: "data.sign", spec: { algo: "md5", exlude: ["sign"] } } },
+      },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join()).toContain("response.sign.spec.exlude");
+  });
+
+  it("未知顶层键报错", () => {
+    const r = validateMapping({ ...base, extra: 1 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join()).toContain("extra 不是合法键");
+  });
+
+  it("fields 重复 / role 非法报错", () => {
+    const r = validateMapping({
+      ...base,
+      create: {
+        ...base.create,
+        request: {
+          ...base.create.request,
+          fields: [...base.create.request.fields, { field: "mch", role: "nope" as never, value: "x" }],
+        },
+      },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join()).toContain("重复");
   });
 });
 
 describe("夹具：虎皮椒（hash / errcode=0 / nonce_str / 无查单）", () => {
-  it("自校验通过（没有 query 也合法）", () => {
+  it("没有查单接口不能作为通用映射（校验失败）", () => {
     const r = validateMapping(HUPIJIAO_MAPPING);
-    if (!r.ok) throw new Error(r.errors.join("; "));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join()).toContain("query");
     expect(hasQuery(HUPIJIAO_MAPPING)).toBe(false);
   });
 
   it("支付宝：type 整个参数不出现；微信用 WAP", () => {
-    const ali = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx()).body, "form");
+    const ali = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx({ channelCodes: { alipay: "", wechat: "WAP" } })).body, "form");
     expect("type" in ali).toBe(false);
 
     const wx = bodyParams(
-      buildCreateRequest(HUPIJIAO_MAPPING, ctx({ method: "wechat" })).body,
+      buildCreateRequest(HUPIJIAO_MAPPING, ctx({ method: "wechat", channelCodes: { alipay: "", wechat: "WAP" } })).body,
       "form",
     );
     expect(wx.type).toBe("WAP");
   });
 
   it("nonce_str 每次不同，且是 32 位 hex", () => {
-    const a = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx()).body, "form");
-    const b = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx()).body, "form");
+    const a = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx({ channelCodes: { alipay: "", wechat: "WAP" } })).body, "form");
+    const b = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx({ channelCodes: { alipay: "", wechat: "WAP" } })).body, "form");
     expect(a.nonce_str).toMatch(/^[0-9a-f]{32}$/);
     expect(a.nonce_str).not.toBe(b.nonce_str);
   });
 
   it("签名写进 hash（不是 sign），算法仍是直接拼密钥", () => {
-    const p = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx()).body, "form");
+    const p = bodyParams(buildCreateRequest(HUPIJIAO_MAPPING, ctx({ channelCodes: { alipay: "", wechat: "WAP" } })).body, "form");
     expect("sign" in p).toBe(false);
     expect(p.hash).toBe(refSign(p, ["hash"], ""));
   });
@@ -467,34 +548,106 @@ describe("夹具：虎皮椒（hash / errcode=0 / nonce_str / 无查单）", () 
   });
 });
 
-describe("分方向金额单位（下单按元、回调按分）", () => {
-  // XArrPay 原生协议的形状：下单 money 是元，回调 amount 是分
-  const mixed: GatewayMapping = {
-    ...HUPIJIAO_MAPPING,
-    amount_unit: "yuan",
-    notify_amount_unit: "cent",
-    notify: { ...HUPIJIAO_MAPPING.notify, amount: "amount" },
-  };
-
-  it("下单仍是元", () => {
-    const p = bodyParams(buildCreateRequest(mixed, ctx()).body, "form");
-    expect(p.total_fee).toBe("12.34");
+describe("夹具：XArrPay 原生（三端点全签名）", () => {
+  it("自校验通过", () => {
+    expect(validateMapping(XARRPAY_NATIVE_MAPPING).ok).toBe(true);
   });
 
-  it("回调按分解析，不会放大 100 倍", () => {
+  it("下单：JSON、元、签名与 node:crypto 一致", () => {
+    const req = buildCreateRequest(XARRPAY_NATIVE_MAPPING, ctx());
+    expect(req.url).toBe("https://pay.example.com/xpay/order/create");
+    const p = bodyParams(req.body, "json");
+    expect(p.money).toBe("12.34");
+    expect(p.pay_type).toBe("alipay");
+    expect(p.pid).toBe("M1000"); // ctx 默认非数字，保持原样
+    expect(p.sign).toBe(refSign(p, ["sign"], ""));
+    const r = parseCreateResponse(XARRPAY_NATIVE_MAPPING, {
+      code: 200,
+      data: { trade_no: "P-1", uri: "https://pay.example.com/cashier/1" },
+    });
+    expect(r).toMatchObject({ ok: true, tradeNo: "P-1", payUrl: "https://pay.example.com/cashier/1" });
+  });
+
+  it("查单：POST /xpay/order/status，sign 参与；status=2 已付", () => {
+    const req = buildQueryRequest(XARRPAY_NATIVE_MAPPING, ctx({ merchant: "10001" }));
+    expect(req.url).toBe("https://pay.example.com/xpay/order/status");
+    const p = bodyParams(req.body, "form");
+    expect(p.out_order_id).toBe("ORD-20261024-0001");
+    // XArrPay 原生查单是 form，pid 保持字符串；JSON 下单才按数字
+    expect(p.pid).toBe("10001");
+    expect(p.sign).toBe(refSign(p, ["sign"], ""));
+    expect(parseQueryResponse(XARRPAY_NATIVE_MAPPING, { code: 200, data: { status: 2 } }).paid).toBe(true);
+    expect(parseQueryResponse(XARRPAY_NATIVE_MAPPING, { code: 200, data: { status: 3 } }).terminal).toBe(true);
+  });
+
+  it("通知：金额分、status=2 已付", () => {
     const params: Record<string, unknown> = {
-      trade_order_id: "ORD-20261024-0001",
-      amount: "1234",
-      status: "OD",
+      out_trade_no: "ORD-20261024-0001",
+      trade_no: "P-1",
+      amount: 1234,
+      status: 2,
     };
-    params.hash = refSign(params, ["hash"], "");
-    expect(parseNotify(mixed, params, KEY).amountMinor).toBe(1234);
+    params.sign = refSign(params, ["sign"], "");
+    const n = parseNotify(XARRPAY_NATIVE_MAPPING, params, KEY);
+    expect(n.signOk).toBe(true);
+    expect(n.paid).toBe(true);
+    expect(n.amountMinor).toBe(1234);
+  });
+});
+
+describe("夹具：布拉格（JSON + 分 + 响应验签）", () => {
+  it("自校验通过", () => {
+    expect(validateMapping(PRAGUE_MAPPING).ok).toBe(true);
   });
 
-  it("不配 notify_amount_unit 时才跟随 amount_unit（这里会错成 123400，说明为什么必须配）", () => {
-    const wrong = { ...mixed, notify_amount_unit: undefined };
-    const params: Record<string, unknown> = { trade_order_id: "X", amount: "1234", status: "OD" };
-    params.hash = refSign(params, ["hash"], "");
-    expect(parseNotify(wrong, params, KEY).amountMinor).toBe(123400);
+  it("下单：JSON、分、&key= 签名、响应 sign over data", () => {
+    const req = buildCreateRequest(PRAGUE_MAPPING, ctx({ channelCodes: { alipay: 901, wechat: 902 } }));
+    expect(req.url).toBe("https://pay.example.com/api/pay/unifiedorder");
+    const p = bodyParams(req.body, "json");
+    expect(p.amount).toBe(1234);
+    expect(p.wayCode).toBe(901);
+    expect(p.sign).toBe(refSign(p, ["sign"], "&key="));
+
+    const data = {
+      mchId: "M1000",
+      tradeNo: "P-1",
+      outTradeNo: "ORD-20261024-0001",
+      amount: "1234",
+      payUrl: "https://pay.example.com/pay/1",
+    };
+    const sign = refSign(data, ["sign"], "&key=");
+    const payload = { code: 0, message: "success", sign, data };
+    const r = parseCreateResponse(PRAGUE_MAPPING, payload, KEY);
+    expect(r).toMatchObject({ ok: true, tradeNo: "P-1", payUrl: "https://pay.example.com/pay/1" });
+    expect(parseCreateResponse(PRAGUE_MAPPING, { ...payload, sign: "bad" }, KEY).ok).toBe(false);
+  });
+
+  it("查单：JSON、data.state=1 已付、响应验签", () => {
+    const req = buildQueryRequest(PRAGUE_MAPPING, ctx({ channelCodes: { alipay: 901, wechat: 902 } }));
+    expect(req.url).toBe("https://pay.example.com/api/pay/query");
+    const p = bodyParams(req.body, "json");
+    expect(p.outTradeNo).toBe("ORD-20261024-0001");
+    expect(p.reqTime).toBe(String(NOW.getTime()));
+    expect(p.sign).toBe(refSign(p, ["sign"], "&key="));
+
+    const data = { state: 1, amount: "1234", tradeNo: "P-1" };
+    const sign = refSign(data, ["sign"], "&key=");
+    const r = parseQueryResponse(PRAGUE_MAPPING, { code: 0, sign, data }, KEY);
+    expect(r).toMatchObject({ paid: true, amountMinor: 1234, tradeNo: "P-1" });
+    expect(parseQueryResponse(PRAGUE_MAPPING, { code: 0, sign: "bad", data }, KEY).paid).toBe(false);
+  });
+
+  it("通知：state=1 已付、SUCCESS 应答", () => {
+    const params: Record<string, unknown> = {
+      outTradeNo: "ORD-20261024-0001",
+      tradeNo: "P-1",
+      amount: 1234,
+      state: 1,
+    };
+    params.sign = refSign(params, ["sign"], "&key=");
+    const n = parseNotify(PRAGUE_MAPPING, params, KEY);
+    expect(n.signOk).toBe(true);
+    expect(n.paid).toBe(true);
+    expect(n.amountMinor).toBe(1234);
   });
 });

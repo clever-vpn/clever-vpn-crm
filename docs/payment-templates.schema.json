@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clever-vpn-crm.local/schemas/payment-template.schema.json",
+  "title": "Clever VPN 支付接口模板 / 高级 JSON (v2)",
+  "oneOf": [
+    { "$ref": "#/$defs/templateFile" },
+    { "$ref": "#/$defs/templateWrapper" },
+    { "$ref": "#/$defs/templateCatalog" }
+  ],
+  "$defs": {
+    "source": { "enum": ["official", "community", "ai", "imported"] },
+    "templateItem": {
+      "type": "object",
+      "required": ["id", "name", "mapping"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string" },
+        "source": { "$ref": "#/$defs/source" },
+        "mapping": { "$ref": "#/$defs/mapping" }
+      }
+    },
+    "templateFile": {
+      "type": "object",
+      "required": ["schema_version", "id", "name", "mapping"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": 2 },
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string" },
+        "source": { "$ref": "#/$defs/source" },
+        "mapping": { "$ref": "#/$defs/mapping" }
+      }
+    },
+    "templateWrapper": {
+      "type": "object",
+      "required": ["schema_version", "template"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": 2 },
+        "template": { "$ref": "#/$defs/templateItem" }
+      }
+    },
+    "templateCatalog": {
+      "type": "object",
+      "required": ["schema_version", "templates"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": 2 },
+        "templates": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/templateItem" } }
+      }
+    },
+    "when": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "equals": { "type": ["string", "number"] },
+        "in": { "type": "array", "minItems": 1, "items": { "type": ["string", "number"] } }
+      },
+      "oneOf": [
+        { "required": ["equals"], "not": { "required": ["in"] } },
+        { "required": ["in"], "not": { "required": ["equals"] } }
+      ]
+    },
+    "sign": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "algo": { "enum": ["md5", "sha256"] },
+        "key_append": { "type": "string" },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "upper": { "type": "boolean" },
+        "encode": { "type": "boolean" }
+      }
+    },
+    "responseSign": {
+      "type": "object",
+      "required": ["field"],
+      "additionalProperties": false,
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "data_path": { "type": "string" },
+        "spec": { "$ref": "#/$defs/sign" }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["header", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "header": { "type": "string", "minLength": 1 },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    },
+    "field": {
+      "type": "object",
+      "required": ["field"],
+      "additionalProperties": false,
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "role": {
+          "enum": [
+            "merchant", "order_no", "amount", "subject", "body",
+            "notify_url", "return_url", "client_ip", "channel",
+            "timestamp", "nonce", "pay_url", "trade_no", "expires_at", "message"
+          ]
+        },
+        "value": { "type": "string" },
+        "unit": { "enum": ["yuan", "cent"] },
+        "format": { "enum": ["s", "ms", "ymdhms"] },
+        "timezone": { "type": "string" },
+        "length": { "type": "integer", "minimum": 2 },
+        "numeric": { "type": "boolean" }
+      }
+    },
+    "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+    "requestCommon": {
+      "type": "object",
+      "properties": {
+        "method": { "enum": ["GET", "POST"] },
+        "format": { "enum": ["form", "json"] }
+      }
+    },
+    "create": {
+      "type": "object",
+      "required": ["request", "response"],
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "type": "object",
+          "required": ["path", "fields", "sign"],
+          "additionalProperties": false,
+          "properties": {
+            "method": { "enum": ["GET", "POST"] },
+            "path": { "type": "string", "minLength": 1 },
+            "format": { "enum": ["form", "json"] },
+            "fields": { "$ref": "#/$defs/fields" },
+            "auth": { "$ref": "#/$defs/auth" },
+            "sign": { "$ref": "#/$defs/sign" }
+          }
+        },
+        "response": {
+          "type": "object",
+          "required": ["ok", "fields"],
+          "additionalProperties": false,
+          "properties": {
+            "ok": { "$ref": "#/$defs/when" },
+            "fields": { "$ref": "#/$defs/fields" },
+            "sign": { "$ref": "#/$defs/responseSign" }
+          }
+        }
+      }
+    },
+    "notify": {
+      "type": "object",
+      "required": ["request", "response"],
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "type": "object",
+          "required": ["fields", "paid_when", "sign"],
+          "additionalProperties": false,
+          "properties": {
+            "method": { "enum": ["GET", "POST"] },
+            "format": { "enum": ["form", "json"] },
+            "fields": { "$ref": "#/$defs/fields" },
+            "paid_when": { "$ref": "#/$defs/when" },
+            "sign": { "$ref": "#/$defs/sign" }
+          }
+        },
+        "response": {
+          "type": "object",
+          "required": ["reply"],
+          "additionalProperties": false,
+          "properties": { "reply": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "query": {
+      "type": "object",
+      "required": ["request", "response"],
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "type": "object",
+          "required": ["path", "fields", "sign"],
+          "additionalProperties": false,
+          "properties": {
+            "method": { "enum": ["GET", "POST"] },
+            "path": { "type": "string", "minLength": 1 },
+            "format": { "enum": ["form", "json"] },
+            "fields": { "$ref": "#/$defs/fields" },
+            "auth": { "$ref": "#/$defs/auth" },
+            "sign": {
+              "oneOf": [
+                { "$ref": "#/$defs/sign" },
+                {
+                  "type": "object",
+                  "required": ["mode"],
+                  "additionalProperties": false,
+                  "properties": { "mode": { "const": "none" } }
+                }
+              ]
+            }
+          }
+        },
+        "response": {
+          "type": "object",
+          "required": ["paid_when", "fields"],
+          "additionalProperties": false,
+          "properties": {
+            "ok": { "$ref": "#/$defs/when" },
+            "paid_when": { "$ref": "#/$defs/when" },
+            "terminal_when": { "$ref": "#/$defs/when" },
+            "fields": { "$ref": "#/$defs/fields" },
+            "sign": { "$ref": "#/$defs/responseSign" }
+          }
+        }
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "required": ["create", "notify", "query"],
+      "additionalProperties": false,
+      "properties": {
+        "create": { "$ref": "#/$defs/create" },
+        "notify": { "$ref": "#/$defs/notify" },
+        "query": { "$ref": "#/$defs/query" }
+      }
+    }
+  }
+}

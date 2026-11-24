@@ -128,7 +128,7 @@ plans (id, name, kind, price_minor, currency, licence_limit,
 
 | 渠道 | 在哪卖 | 需要商品 ID |
 |---|---|---|
-| `web_checkout` | 自有收银台（具体能用哪些支付方式由 `payment_gateways` 决定） | 不需要 |
+| `web_checkout` | 自有收银台（具体能用哪些支付方式由 `payment_gateways` 决定；设计器可勾支付宝/微信/Stripe/PayPal） | 不需要 |
 | `apple_iap` | App 内购买（App Store） | 需要 `apple` |
 | `google_play` | App 内购买（Google Play） | 需要 `google` |
 

@@ -492,3 +492,23 @@ tbody tr:last-child td { border-bottom: 0; }
   .auth { grid-template-columns: 1fr; }
   .auth-brand { display: none; }
 }
+
+/* 支付网关详情页：操作收进页签栏，页签栏粘性吸顶 */
+.gateway-tabs .ant-tabs-nav {
+  margin-bottom: var(--sp-3);
+}
+.gateway-tabs .gateway-editor-title {
+  max-width: 320px;
+}
+@media (max-width: 767.98px) {
+  .gateway-tabs .ant-tabs-nav {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+  }
+  .gateway-tabs .gateway-editor-title {
+    display: none;
+  }
+  .gateway-tabs .ant-tabs-extra-content {
+    margin-inline-start: auto;
+  }
+}
