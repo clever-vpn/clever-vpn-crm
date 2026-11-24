@@ -165,8 +165,9 @@ mapping 规则：
 - 常量字段只写 field + value，不写 role；响应字段不写 value；
 - **fields 里不要写 sign / sign_type 等签名字段**：签名由 sign 配置生成，不属于请求参数；
   role 只能是上面列出的值（sign/sign_type 都不是 role）；
-- 每个请求字段必须二选一：有 role + value，或常量只有 field + value（无 role）；
-  不要出现既无 role 又无 value 的字段；
+- create/query 的请求字段必须同时写 role + value（如 { "field":"out_trade_no","role":"order_no","value":"{order_no}" }）；
+  notify.request 是入站回调参数，可以只写 role（值由对方传入）；
+  常量只写 field + value（无 role）；不要出现既无 role 又无 value 的字段；
 - amount 字段必须写 unit；timestamp 字段写 format（ymdhms 固定 Asia/Shanghai）；
 - sign: {field?（默认 sign）, algo?("md5"|"sha256"), key_append?, exclude?, upper?, encode?}；
   key_append 是**密钥前的字面量分隔符**（如 "&key="），不要把 {secret} 写进去；
@@ -549,6 +550,44 @@ function dropUnusableRequestFields(mapping: Record<string, unknown>): string[] {
   return dropped;
 }
 
+const REQUEST_VALUE_BY_ROLE: Record<string, string> = {
+  merchant: "{merchant}",
+  order_no: "{order_no}",
+  amount: "{amount}",
+  subject: "{subject}",
+  body: "{body}",
+  notify_url: "{notify_url}",
+  return_url: "{return_url}",
+  client_ip: "{client_ip}",
+  channel: "{channel}",
+  timestamp: "{timestamp}",
+  nonce: "{nonce}",
+};
+
+/**
+ * 模型有时只写 create/query 请求字段的 role，忘了 value。role 本身不会带入值，
+ * 解释器会把它当成 undefined；按 role 补上规范占位符，并记录 uncertainty。
+ * notify 是入站参数，不补。
+ */
+function fillMissingRequestValues(mapping: Record<string, unknown>): string[] {
+  const filled: string[] = [];
+  for (const api of ["create", "query"]) {
+    const node = mapping[api];
+    if (!isObject(node)) continue;
+    const request = node.request;
+    if (!isObject(request) || !Array.isArray(request.fields)) continue;
+    for (const field of request.fields) {
+      if (!isObject(field)) continue;
+      if (field.value !== undefined || typeof field.role !== "string") continue;
+      const value = REQUEST_VALUE_BY_ROLE[field.role];
+      if (!value) continue;
+      field.value = value;
+      filled.push(`${api}.request.${String(field.field ?? field.role)}`);
+    }
+  }
+  return filled;
+}
+
 /**
  * 模型输出 → 草稿。任何不合法都返回**可照做的**错误（字段路径 + 原因），
  * 不把原始文本回显给前端。
@@ -649,6 +688,10 @@ export function parseAiDraft(raw: string): ParseResult {
         const droppedDataPath = dropRequestSignDataPath(rawTemplate.mapping);
         if (droppedDataPath.length) {
           uncertainty.push(`已忽略 request.sign.data_path（仅 response.sign 支持）：${droppedDataPath.join("、")}`);
+        }
+        const filledValues = fillMissingRequestValues(rawTemplate.mapping);
+        if (filledValues.length) {
+          uncertainty.push(`已按 role 补全请求字段占位符：${filledValues.join("、")}`);
         }
         const mapping = validateMapping(rawTemplate.mapping);
         if (!mapping.ok) {

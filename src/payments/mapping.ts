@@ -276,7 +276,13 @@ function checkAuth(value: unknown, label: string, errors: string[]): void {
   }
 }
 
-function checkField(value: unknown, label: string, errors: string[], request: boolean): FieldSpec | null {
+function checkField(
+  value: unknown,
+  label: string,
+  errors: string[],
+  request: boolean,
+  requireValue: boolean,
+): FieldSpec | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     errors.push(`${label} 必须是对象`);
     return null;
@@ -293,6 +299,11 @@ function checkField(value: unknown, label: string, errors: string[], request: bo
     // 常量：没有 role/value 不合法；常量必须至少体现“字面量”
     errors.push(`${label} 需要 value（常量）或 role`);
   }
+  if (request && requireValue && f.value === undefined) {
+    // create/query 是出站请求：role 只说明语义，值仍必须由占位符提供。
+    // notify 是入站回调，字段由对方传入，不需要 value。
+    errors.push(`${label} 有 role 时必须写 value 占位符（如 {order_no}）`);
+  }
   if (f.unit !== undefined && !AMOUNT_UNITS.includes(f.unit)) errors.push(`${label}.unit 只能是 yuan / cent`);
   if (f.format !== undefined && !["s", "ms", "ymdhms"].includes(f.format)) errors.push(`${label}.format 只能是 s / ms / ymdhms`);
   if (f.timezone !== undefined && typeof f.timezone !== "string") errors.push(`${label}.timezone 必须是字符串`);
@@ -302,7 +313,13 @@ function checkField(value: unknown, label: string, errors: string[], request: bo
   return f;
 }
 
-function checkFields(value: unknown, label: string, errors: string[], request: boolean): FieldSpec[] {
+function checkFields(
+  value: unknown,
+  label: string,
+  errors: string[],
+  request: boolean,
+  requireValue = false,
+): FieldSpec[] {
   if (!Array.isArray(value)) {
     errors.push(`${label} 必须是数组`);
     return [];
@@ -310,7 +327,7 @@ function checkFields(value: unknown, label: string, errors: string[], request: b
   const out: FieldSpec[] = [];
   const seen = new Set<string>();
   for (const [i, item] of value.entries()) {
-    const f = checkField(item, `${label}[${i}]`, errors, request);
+    const f = checkField(item, `${label}[${i}]`, errors, request, requireValue);
     if (f) {
       if (seen.has(f.field)) errors.push(`${label}[${i}].field 重复：${f.field}`);
       seen.add(f.field);
@@ -343,7 +360,7 @@ export function validateMapping(input: unknown, opts: MappingValidationOptions =
       if (req.method !== undefined && !["GET", "POST"].includes(String(req.method))) errors.push("create.request.method 只能是 GET / POST");
       if (req.format !== undefined && !["form", "json"].includes(String(req.format))) errors.push("create.request.format 只能是 form / json");
       checkAuth(req.auth, "create.request.auth", errors);
-      const fields = checkFields(req.fields, "create.request.fields", errors, true);
+      const fields = checkFields(req.fields, "create.request.fields", errors, true, true);
       for (const role of ["merchant", "order_no", "amount"] as const) {
         if (!hasRole(fields, role)) errors.push(`create.request.fields 缺少 role=${role}`);
       }
@@ -411,7 +428,7 @@ export function validateMapping(input: unknown, opts: MappingValidationOptions =
       if (req.method !== undefined && !["GET", "POST"].includes(String(req.method))) errors.push("query.request.method 只能是 GET / POST");
       if (req.format !== undefined && !["form", "json"].includes(String(req.format))) errors.push("query.request.format 只能是 form / json");
       checkAuth(req.auth, "query.request.auth", errors);
-      const fields = checkFields(req.fields, "query.request.fields", errors, true);
+      const fields = checkFields(req.fields, "query.request.fields", errors, true, true);
       const amount = fields.filter((f) => f.role === "amount");
       if (amount.length > 1) errors.push("query.request.fields 只能有一个 role=amount");
       const sign = req.sign as unknown;

@@ -110,6 +110,32 @@ describe("ai.md 的完整示例（契约可执行）", () => {
     expect(result.draft.uncertainty.join("；")).toContain("sign_type");
   });
 
+  it("create/query 请求字段只写 role 时，按 role 补全占位符", () => {
+    const draft = cloneSample();
+    const mapping = mappingOf(draft) as Record<string, unknown>;
+    const query = mapping.query as Record<string, unknown>;
+    const request = query.request as Record<string, unknown>;
+    const fields = request.fields as Record<string, unknown>[];
+    const order = fields.find((f) => f.role === "order_no");
+    expect(order).toBeDefined();
+    delete order!.value;
+    const result = parseAiDraft(JSON.stringify(draft));
+    expect(result.ok, result.ok ? "" : result.errors.join("；")).toBe(true);
+    if (!result.ok) return;
+    expect(result.draft.template?.mapping.query?.request.fields.find((f) => f.role === "order_no")?.value).toBe("{order_no}");
+    expect(result.draft.uncertainty.join("；")).toContain("补全请求字段占位符");
+  });
+
+  it("validateMapping 仍拒绝 create/query 有 role 无 value（AI 归一化之外的硬校验）", () => {
+    const mapping = structuredClone(mappingOf(sample!)) as Record<string, unknown>;
+    const query = mapping.query as Record<string, unknown>;
+    const request = query.request as Record<string, unknown>;
+    const fields = request.fields as Record<string, unknown>[];
+    const order = fields.find((f) => f.role === "order_no")!;
+    delete order.value;
+    expect(validateMapping(mapping).ok).toBe(false);
+  });
+
   it("request.sign 上多余的 data_path 被忽略，不导致整份草稿 422", () => {
     const draft = cloneSample();
     const mapping = mappingOf(draft) as Record<string, unknown>;

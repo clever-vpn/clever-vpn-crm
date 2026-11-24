@@ -143,6 +143,9 @@
 
 - `create/notify/query.request.sign.data_path` 没有这个键（`data_path` 只属于
   `response.sign`），忽略该冗余键；
+- `create/query` 请求字段只写 role、漏了 value 时，按 role 补上规范占位符
+  （如 `{order_no}`），并写入 uncertainty；`notify` 入站参数不补；
+- `validateMapping` 仍会对 create/query 的“有 role 无 value”报错，`notify` 例外；
 - `request.fields` 里既无 `role` 又无 `value` 的项（常见是模型把
   `sign/sign_type` 当请求字段）没有语义，忽略该项；
 - 这两类归一化避免一份本可用草稿因为一个冗余键整体 422；必填字段/角色仍由
