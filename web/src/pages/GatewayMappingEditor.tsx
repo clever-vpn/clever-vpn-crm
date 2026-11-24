@@ -40,6 +40,7 @@ import {
 } from "../mapping-form";
 import { OFFICIAL_TEMPLATES, parseTemplateText, type PaymentTemplate } from "../payment-templates";
 import { api, ApiError, type GatewayAiDraft } from "../api";
+import { readAiDocument } from "../ai-doc";
 
 interface Props {
   initial: unknown;
@@ -352,6 +353,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const [importPick, setImportPick] = useState("");
   const [templatePick, setTemplatePick] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const aiFileRef = useRef<HTMLInputElement | null>(null);
   const [openSections, setOpenSections] = useState<string[]>(["create"]);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [aiDoc, setAiDoc] = useState("");
@@ -359,6 +361,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const [aiDraft, setAiDraft] = useState<GatewayAiDraft | null>(null);
   const [aiErrors, setAiErrors] = useState<string[]>([]);
   const [aiApplied, setAiApplied] = useState(false);
+  const [aiFileName, setAiFileName] = useState("");
 
   useEffect(() => {
     if (attempted) setOpenSections(["create"]);
@@ -442,6 +445,21 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     } finally {
       setAiBusy(false);
     }
+  }
+
+  async function readAiFile(file: File): Promise<void> {
+    setAiErrors([]);
+    const raw = await file.text();
+    const result = readAiDocument(file.name, raw);
+    if (result.error) {
+      setAiErrors([result.error]);
+      return;
+    }
+    setAiDoc(result.text);
+    setAiFileName(file.name);
+    setAiDraft(null);
+    setAiApplied(false);
+    message.success(`已导入 ${file.name}（${[...result.text].length} 字）`);
   }
 
   function applyAiDraft(): void {
@@ -884,8 +902,8 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
         />
         <Button onClick={() => setImportOpen((v) => !v)}>导入模板</Button>
         <Button onClick={openExport}>导出模板</Button>
-        <Button type="link" size="small" onClick={() => setAiOpen((v) => !v)} style={{ paddingInline: 0 }}>
-          AI 配置助手（{aiOpen ? "收起" : "展开"}）
+        <Button type={aiOpen ? "primary" : "default"} aria-pressed={aiOpen} onClick={() => setAiOpen((v) => !v)}>
+          AI 配置助手
         </Button>
       </Space>
       {importOpen && (
@@ -950,7 +968,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
           <div className="card" style={{ padding: 12 }}>
             <Space direction="vertical" size={8} style={{ width: "100%" }}>
               <Typography.Text type="secondary">
-                粘贴厂商接口文档（三端点、签名、金额单位、状态码）。只生成协议类型，不含网关地址/商户号/密钥/通道号；
+                粘贴或导入厂商接口文档（三端点、签名、金额单位、状态码）。只生成协议类型，不含网关地址/商户号/密钥/通道号；
                 不会自动保存或发布。
               </Typography.Text>
               {!aiReady && (
@@ -961,13 +979,40 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                   description="服务端需要 AI binding 与 CLOUDFLARE_GATEWAY_ID（AI Gateway）才会开放；现在仍可用模板导入。"
                 />
               )}
+              <input
+                ref={aiFileRef}
+                type="file"
+                accept=".txt,.md,.markdown,.json,.html,.htm,.mhtml,.mht,text/plain,text/markdown,application/json,text/html"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void readAiFile(file);
+                  e.target.value = "";
+                }}
+              />
+              <Space wrap align="center">
+                <Button size="small" disabled={!aiReady || aiBusy} onClick={() => aiFileRef.current?.click()}>
+                  导入文档文件
+                </Button>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  支持 .txt / .md / .json / .html / .mhtml；文件只在本地转成文本，不上传原文件
+                </Typography.Text>
+                {aiFileName && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    已导入：{aiFileName}
+                  </Typography.Text>
+                )}
+              </Space>
               <Input.TextArea
                 rows={8}
                 className="mono"
                 value={aiDoc}
                 disabled={!aiReady || aiBusy}
-                onChange={(e) => setAiDoc(e.target.value)}
-                placeholder="粘贴厂商接口文档正文（下单 / 回调 / 查单、签名、金额单位、状态码）"
+                onChange={(e) => {
+                  setAiDoc(e.target.value);
+                  setAiFileName("");
+                }}
+                placeholder="粘贴厂商接口文档正文，或点「导入文档文件」（下单 / 回调 / 查单、签名、金额单位、状态码）"
               />
               <Space align="center">
                 <Button
