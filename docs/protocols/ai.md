@@ -136,6 +136,15 @@
 - 服务端只把文档正文发给模型提供商（经 AI Gateway；日志不存 payload），
   审计只记「谁、何时、是否成功」，不记正文。
 
+解析时的无害归一化（会写入 `uncertainty`，不是静默改语义）：
+
+- `create/notify/query.request.sign.data_path` 没有这个键（`data_path` 只属于
+  `response.sign`），忽略该冗余键；
+- `request.fields` 里既无 `role` 又无 `value` 的项（常见是模型把
+  `sign/sign_type` 当请求字段）没有语义，忽略该项；
+- 这两类归一化避免一份本可用草稿因为一个冗余键整体 422；必填字段/角色仍由
+  `validateMapping` 严格校验。
+
 ## 7. UI 位置
 
 - 只在 `generic_json_v1` 的「接口配置」Tab 内出现，默认折叠；入口是**二态按钮**

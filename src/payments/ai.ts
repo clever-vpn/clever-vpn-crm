@@ -169,6 +169,7 @@ mapping 规则：
 - amount 字段必须写 unit；timestamp 字段写 format（ymdhms 固定 Asia/Shanghai）；
 - sign: {field?（默认 sign）, algo?("md5"|"sha256"), key_append?, exclude?, upper?, encode?}；
   key_append 是**密钥前的字面量分隔符**（如 "&key="），不要把 {secret} 写进去；
+- **data_path 只属于 response.sign**；create/notify/query 的 request.sign 绝对不能写 data_path（非法键）；
 - 状态/判定字段（status、code、state 等）不要放进 fields：它们由 paid_when / response.ok
   表达；fields 只列运行时需要读取的字段（如 order_no / trade_no / amount）；
 - response.sign 只在文档**明确有响应验签**时写；field 是点号路径时 data_path 写父对象
@@ -424,6 +425,49 @@ function dropSignRoleFields(mapping: Record<string, unknown>): string[] {
 }
 
 /**
+ * 模型偶尔把 response.sign 的 `data_path` 写到 request.sign 上。
+ * request.sign 没有这个键，但它不影响签名语义；丢弃并记录，避免整份草稿 422。
+ */
+function dropRequestSignDataPath(mapping: Record<string, unknown>): string[] {
+  const dropped: string[] = [];
+  for (const api of ["create", "notify", "query"]) {
+    const node = mapping[api];
+    if (!isObject(node)) continue;
+    const request = node.request;
+    if (!isObject(request) || !isObject(request.sign)) continue;
+    if ("data_path" in request.sign) {
+      delete request.sign.data_path;
+      dropped.push(`${api}.request.sign.data_path`);
+    }
+  }
+  return dropped;
+}
+
+/**
+ * request.fields 里既无 role 又无 value 的项没有语义，映射解释器也用不到。
+ * 典型是模型把 sign / sign_type 当成请求字段（只写 field）；丢掉并记录，
+ * 避免一个冗余项让整份可用草稿 422。
+ */
+function dropUnusableRequestFields(mapping: Record<string, unknown>): string[] {
+  const dropped: string[] = [];
+  for (const api of ["create", "notify", "query"]) {
+    const node = mapping[api];
+    if (!isObject(node)) continue;
+    const request = node.request;
+    if (!isObject(request) || !Array.isArray(request.fields)) continue;
+    request.fields = request.fields.filter((field) => {
+      if (!isObject(field)) return true;
+      if (field.role === undefined && field.value === undefined) {
+        dropped.push(`${api}.request.${String(field.field ?? "?")}`);
+        return false;
+      }
+      return true;
+    });
+  }
+  return dropped;
+}
+
+/**
  * 模型输出 → 草稿。任何不合法都返回**可照做的**错误（字段路径 + 原因），
  * 不把原始文本回显给前端。
  */
@@ -516,6 +560,14 @@ export function parseAiDraft(raw: string): ParseResult {
           errors.push("template.mapping 不能包含 channel_codes（通道号属于网关实例）");
         }
         dropSignRoleFields(rawTemplate.mapping);
+        const droppedFields = dropUnusableRequestFields(rawTemplate.mapping);
+        if (droppedFields.length) {
+          uncertainty.push(`已忽略缺少 role/value 的请求字段：${droppedFields.join("、")}`);
+        }
+        const droppedDataPath = dropRequestSignDataPath(rawTemplate.mapping);
+        if (droppedDataPath.length) {
+          uncertainty.push(`已忽略 request.sign.data_path（仅 response.sign 支持）：${droppedDataPath.join("、")}`);
+        }
         const mapping = validateMapping(rawTemplate.mapping);
         if (!mapping.ok) {
           for (const err of mapping.errors) errors.push(`mapping：${err}`);

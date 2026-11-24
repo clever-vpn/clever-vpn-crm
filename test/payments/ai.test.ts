@@ -95,6 +95,35 @@ describe("ai.md 的完整示例（契约可执行）", () => {
     expect(result.draft.uncertainty).toHaveLength(1);
   });
 
+  it("request.fields 里既无 role 又无 value 的项被忽略，不导致 422", () => {
+    const draft = cloneSample();
+    const mapping = mappingOf(draft) as Record<string, unknown>;
+    const create = mapping.create as Record<string, unknown>;
+    const request = create.request as Record<string, unknown>;
+    (request.fields as unknown[]).push({ field: "sign_type" });
+    const result = parseAiDraft(JSON.stringify(draft));
+    expect(result.ok, result.ok ? "" : result.errors.join("；")).toBe(true);
+    if (!result.ok) return;
+    const fields = result.draft.template?.mapping.create.request.fields ?? [];
+    expect(fields.some((f) => f.field === "sign_type")).toBe(false);
+    expect(result.draft.uncertainty.join("；")).toContain("sign_type");
+  });
+
+  it("request.sign 上多余的 data_path 被忽略，不导致整份草稿 422", () => {
+    const draft = cloneSample();
+    const mapping = mappingOf(draft) as Record<string, unknown>;
+    const notify = mapping.notify as Record<string, unknown>;
+    const request = notify.request as Record<string, unknown>;
+    const sign = request.sign as Record<string, unknown>;
+    sign.data_path = "data";
+    const result = parseAiDraft(JSON.stringify(draft));
+    expect(result.ok, result.ok ? "" : result.errors.join("；")).toBe(true);
+    if (!result.ok) return;
+    const parsedSign = result.draft.template?.mapping.notify.request.sign as Record<string, unknown>;
+    expect(parsedSign.data_path).toBeUndefined();
+    expect(result.draft.uncertainty.join("；")).toContain("data_path");
+  });
+
   it("允许被 ```json 代码块包裹（只剥一层）", () => {
     const fenced = "```json\n" + JSON.stringify(sample) + "\n```";
     expect(parseAiDraft(fenced).ok).toBe(true);
