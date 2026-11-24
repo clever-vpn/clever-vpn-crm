@@ -52,6 +52,8 @@ export const AI_LIMITS = {
   maxDocBytes: 60 * 1024,
   /** 每小时每租户生成次数（按 audit_log 计，跨 isolate） */
   perHour: 20,
+  /** 每小时每租户 URL 文档抓取次数 */
+  fetchPerHour: 10,
   requestTimeoutMs: 45_000,
   /** 首次 + 一次「按校验错误重写」；不做无界重试 */
   maxAttempts: 2,
@@ -252,7 +254,7 @@ function contentOf(body: unknown): string | null {
 export async function completeAiJson(
   runtime: AiRuntime,
   prompt: { system: string; user: string },
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; maxTokens?: number } = {},
 ): Promise<AiCompletion> {
   return completeAiMessages(
     runtime,
@@ -268,7 +270,7 @@ export async function completeAiJson(
 export async function completeAiMessages(
   runtime: AiRuntime,
   messages: AiMessage[],
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; maxTokens?: number } = {},
 ): Promise<AiCompletion> {
   const route = providerRouteOf(runtime.model);
   if (!route) {
@@ -292,7 +294,7 @@ export async function completeAiMessages(
           model: route.model,
           messages,
           temperature: 0,
-          max_tokens: 8192,
+          max_tokens: options.maxTokens ?? 8192,
           response_format: { type: "json_object" },
           // DeepSeek flash 默认会先消耗 reasoning tokens；关掉思考，
           // 否则大文档会把 max_tokens 吃光、content 为空（实测 QWGUA）。

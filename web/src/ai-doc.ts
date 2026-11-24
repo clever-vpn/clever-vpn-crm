@@ -217,7 +217,7 @@ export function mergeAiSubmission(paste: string, files: AiDocFilePart[]): Merged
       chars: 0,
       pasteChars,
       fileChars,
-      error: `附件最多 ${AI_DOC_MAX_FILES} 个；请合并/删减后再试`,
+      error: `附件/页面最多 ${AI_DOC_MAX_FILES} 个；请合并/删减后再试`,
     };
   }
 

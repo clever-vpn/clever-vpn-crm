@@ -114,6 +114,9 @@ AI_EVAL=1 npm run ai:eval         # 四家样本 → 报告 + gate/差异
 - 报告默认写 `/tmp/ai-eval-report.json`，可用 `AI_EVAL_OUT` 改路径；
 - XArrPay 文档来自外链，抓取失败会跳过该样本；可用 `AI_EVAL_XARRPAY_FILE` 指定本地快照。
 
+URL 文档抓取是手动功能：在 AI 面板填公开文档入口 URL，服务端只抓同源、
+公开、静态 HTML 的一层页面（最多 8 页、60KB）；不需要额外配置。
+
 **域名页不可用**：`MODE=single` 下 `/api/admin/domains` 返回 `supported:false`，
 页面只显示自部署说明。需要测试域名功能时用 multi 环境，不走这个入口。
 

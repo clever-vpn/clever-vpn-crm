@@ -22,6 +22,7 @@ import { consumeCode, issueCode } from "./email-code";
 import { handleAdminPlans } from "./plans";
 import { handleAdminGateways } from "./gateways";
 import { handleAdminGatewayAi } from "./gateway-ai";
+import { handleAdminGatewayDocFetch } from "./gateway-ai-fetch";
 import { handleAdminStoreChannels } from "./store-channels";
 import { handleAdminPromotions } from "./promotions";
 import { handleAdminSettings } from "./settings";
@@ -497,6 +498,10 @@ export async function handleAdminApi(
   // ── AI 配置助手：文档 → 模板 v2 草稿（只生成、不落库）──────────────
   const gatewayAiResponse = await handleAdminGatewayAi(request, env, admin.email, tenantId);
   if (gatewayAiResponse) return gatewayAiResponse;
+
+  // ── 文档网址抓取：同源相关页 → 合并正文（不落库）──────────────────
+  const gatewayDocFetchResponse = await handleAdminGatewayDocFetch(request, env, admin.email, tenantId);
+  if (gatewayDocFetchResponse) return gatewayDocFetchResponse;
 
   // ── 商店渠道（Apple / Google 凭证；不是网关，见契约 §2.4.3.1）──────
   const storesResponse = await handleAdminStoreChannels(request, env, admin.email);

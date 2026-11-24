@@ -127,7 +127,9 @@
 ## 6. 数据边界
 
 - 文档是外部数据，不是指令；
-- 只接受**粘贴/上传的文本**，不抓任意 URL；
+- 接受**粘贴、上传的文本文件，或用户提供的公开文档 URL**；
+  URL 抓取只走同源、公开、静态 HTML/文本，最多 8 页、总正文 ≤60KB；
+  不抓登录态/付费/反爬页面，不做跨站/递归全站；
 - 原始文档的版权/授权按内部语料约定；
 - 仓库只放规范/映射/夹具说明，原始大文件引用来源路径/URL；
 - 不把密钥、商户号、通道号放进 prompt；
@@ -144,21 +146,25 @@
 - **附件不写入 textarea**：textarea 只放粘贴/手写内容；提交时合并
   `粘贴 + 附件`（附件带文件名分隔头），合并后 ≤60KB、最多 8 个附件；
   附件列表可逐个移除；超过上限/超 60KB 整批拒绝，不静默截断；
-- **单动作「生成配置」**：生成成功后自动填入表单（未保存）；失败不填表，
-  显示具体原因和「如何整理 API 文档」清单；`soft_gaps` 自动填入但显示黄色警告，
-  `insufficient` 不填表；
-- Stripe/PayPal/epay_v2/epay_v1 不显示；
-- 单动作「生成配置」：成功（`complete`/`soft_gaps`）自动填入同一张映射表单，并提示未保存；
-  失败不填表，显示具体原因 + 「如何整理 API 文档」清单；
+- **URL 抓取**：输入公开文档入口 URL → 服务端抓同源相关页；AI 选页 +
+  关键词兜底；页面用复选框确认，勾选页与附件一起作为提交正文（不写入 textarea）；
+- **单动作「生成配置」**：成功（`complete`/`soft_gaps`）自动填入同一张映射表单，
+  并提示未保存；失败不填表，显示具体原因 + 「如何整理 API 文档」清单；
 - `soft_gaps` 黄色警告并列出未证实项；`insufficient` 红色警告且不填表，
   提示向厂商索取更完整的文档；
+- Stripe/PayPal/epay_v2/epay_v1 不显示；
 - 不自动保存、不自动发布，永不接触密钥；
 - 应用后仍必须走「创建 + 查单」测试；开启 `test_require_callback` 时还要真实回调；
 - 列表页仍保留发布/测试。
 
 ## 8. AI 配置助手（已接入）
 
-服务端端点：`POST /api/admin/gateways/ai-draft`（管理后台会话 + CSRF）。
+服务端端点：
+
+- `POST /api/admin/gateways/ai-draft`：文档正文 → v2 草稿；
+- `POST /api/admin/gateways/ai-fetch-doc`：公开文档 URL → 同源相关页 + 合并正文。
+
+两者都需要管理后台会话 + CSRF；URL 抓取每小时 10 次。
 
 | 项 | 说明 |
 |---|---|
@@ -169,6 +175,21 @@
 | 未配置 | `503 ai_unavailable`（没配 AI binding / `CLOUDFLARE_GATEWAY_ID`，或租户 ID 不是数字） |
 | 超限 | `429 ai_rate_limited`，每小时 20 次 |
 | 模型故障 | `502 ai_upstream_error`，不把厂商原始报文回给前端 |
+
+URL 抓取响应：
+
+```json
+{
+  "entry": "https://.../index.html",
+  "pages": [{ "url": "...", "title": "...", "text": "...", "chars": 1234, "selected": true, "reason": "ai | keyword | entry" }],
+  "document": "===== 页面 1/N ... =====",
+  "warnings": ["..."],
+  "ai_used": true
+}
+```
+
+错误：`400 invalid_url`、`403 blocked_host`、`422 no_document`、
+`413 document_too_large`、`502 doc_fetch_failed`、`429 ai_fetch_rate_limited`。
 
 `gate` 形如：
 
