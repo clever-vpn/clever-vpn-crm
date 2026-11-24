@@ -61,8 +61,9 @@ npx wrangler login      # scope 要含 ai (write)
 （同账号建 `studio-dev` 网关并配 DeepSeek BYOK）；`CLOUDFLARE_GATEWAY_ID= npm run dev:local`
 关闭 AI（面板显示未配置）。线上网关的调用会真花钱、真写网关日志。
 
-默认模型是 `deepseek/deepseek-flash`。如果你的网关里没有这个模型（返回
-`Model not found`），可以显式换一个已开通的：
+默认模型是 `deepseek/deepseek-flash`，走 **provider-native + 网关 BYOK**：
+用你自己的 DeepSeek 账号即可，不需要 Cloudflare Unified Billing credits。
+要换模型显式指定即可，例如
 `CLOUDFLARE_AI_MODEL=deepseek/deepseek-chat npm run dev:local`。
 
 日志：

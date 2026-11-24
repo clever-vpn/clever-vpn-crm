@@ -122,7 +122,8 @@ Variables（明文）：
    本地 `npm run dev:local` 默认连线上网关 `studio`，需要先 `wrangler login`；
    自部署测试自己的网关时用 `CLOUDFLARE_GATEWAY_ID=<你的网关> npm run dev:local`。
 
-模型默认 `deepseek/deepseek-flash`（`CLOUDFLARE_AI_MODEL` 可覆盖）。每条请求都带 `metadata`：
+模型默认 `deepseek/deepseek-flash`（`CLOUDFLARE_AI_MODEL` 可覆盖），走 **provider-native +
+网关 BYOK**，用你自己的 DeepSeek key 即可，不需要 Cloudflare credits。每条请求都带 `metadata`：
 
 | 键 | 值 |
 |---|---|

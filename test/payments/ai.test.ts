@@ -19,6 +19,7 @@ import {
   aiReady,
   aiRuntime,
   buildPrompt,
+  providerRouteOf,
   completeAiJson,
   parseAiDraft,
 } from "../../src/payments/ai";
@@ -219,6 +220,12 @@ describe("模型配置与 prompt", () => {
     expect(
       aiRuntime({ ...env, CLOUDFLARE_AI_MODEL: "deepseek/deepseek-chat" }, "7")?.model,
     ).toBe("deepseek/deepseek-chat");
+    expect(providerRouteOf("deepseek/deepseek-flash")).toEqual({
+      provider: "deepseek",
+      model: "deepseek-flash",
+    });
+    expect(providerRouteOf("deepseek-flash")).toBeNull();
+    expect(aiRuntime({ ...env, CLOUDFLARE_AI_MODEL: "openai/gpt-4.1" }, "7")).toBeNull();
     expect(AI_PRODUCT).toBe("crm");
   });
 
@@ -232,21 +239,37 @@ describe("模型配置与 prompt", () => {
   });
 });
 
-describe("completeAiJson：AI Gateway binding 接线", () => {
+describe("completeAiJson：AI Gateway provider-native 路径", () => {
   const prompt = { system: "s", user: "u" };
-  const model = AI_MODEL;
+
+  interface Entry {
+    provider: string;
+    endpoint: string;
+    headers: Record<string, string>;
+    query: {
+      model: string;
+      temperature: number;
+      response_format: { type: string };
+      messages: { role: string }[];
+    };
+  }
 
   interface RunCall {
-    model: string;
-    inputs: Record<string, unknown>;
-    options: Record<string, unknown>;
+    gatewayId: string;
+    entry: Entry;
+    options: {
+      gateway: { id: string; metadata: Record<string, string> };
+      extraHeaders: Record<string, string>;
+      signal: AbortSignal;
+    };
   }
 
   function runtimeWith(run: (call: RunCall) => Promise<unknown>): AiRuntime {
     return {
       binding: {
-        run: (model: string, inputs: Record<string, unknown>, options: Record<string, unknown>) =>
-          run({ model, inputs, options }),
+        gateway: (gatewayId: string) => ({
+          run: (entry: Entry, options: RunCall["options"]) => run({ gatewayId, entry, options }),
+        }),
       } as unknown as Ai,
       gatewayId: "studio",
       model: "deepseek/deepseek-flash",
@@ -254,7 +277,7 @@ describe("completeAiJson：AI Gateway binding 接线", () => {
     };
   }
 
-  it("默认模型 deepseek flash；网关/元数据/隐私头一次带全", async () => {
+  it("走 provider-native：deepseek/chat/completions + BYOK，body 用模型自身 id", async () => {
     const calls: RunCall[] = [];
     const runtime = runtimeWith(async (call) => {
       calls.push(call);
@@ -265,38 +288,23 @@ describe("completeAiJson：AI Gateway binding 接线", () => {
     expect(r).toEqual({ ok: true, content: '{"ok":true}' });
 
     const call = calls[0]!;
-    expect(call.model).toBe("deepseek/deepseek-flash");
-    expect(call.model).toBe(model);
+    expect(call.gatewayId).toBe("studio");
+    expect(call.entry.provider).toBe("deepseek");
+    expect(call.entry.endpoint).toBe("chat/completions");
+    expect(call.entry.headers["content-type"]).toBe("application/json");
+    expect(call.entry.query.model).toBe("deepseek-flash");
+    expect(call.entry.query.temperature).toBe(0);
+    expect(call.entry.query.response_format.type).toBe("json_object");
+    expect(call.entry.query.messages.map((m) => m.role)).toEqual(["system", "user"]);
 
-    const body = call.inputs as {
-      temperature: number;
-      response_format: { type: string };
-      messages: { role: string }[];
-    };
-    expect(body.temperature).toBe(0);
-    expect(body.response_format.type).toBe("json_object");
-    expect(body.messages.map((m) => m.role)).toEqual(["system", "user"]);
-
-    const options = call.options as {
-      gateway: { id: string; metadata: Record<string, string> };
-      extraHeaders: Record<string, string>;
-      returnRawResponse: boolean;
-      signal: AbortSignal;
-    };
-    expect(options.gateway.id).toBe("studio");
-    expect(options.gateway.metadata).toEqual({
+    expect(call.options.gateway.id).toBe("studio");
+    expect(call.options.gateway.metadata).toEqual({
       tenant: "7",
       product: "crm",
       task: "gateway-mapping",
     });
-    expect(options.extraHeaders["cf-aig-collect-log-payload"]).toBe("false");
-    expect(options.returnRawResponse).toBe(true);
-    expect(options.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it("binding 直接回对象（非 Response）也能解析", async () => {
-    const runtime = runtimeWith(async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }));
-    expect(await completeAiJson(runtime, prompt)).toEqual({ ok: true, content: '{"ok":true}' });
+    expect(call.options.extraHeaders["cf-aig-collect-log-payload"]).toBe("false");
+    expect(call.options.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("网关 HTTP 错误 → ai_upstream_error（不泄漏上游报文）", async () => {
@@ -335,7 +343,7 @@ describe("completeAiJson：AI Gateway binding 接线", () => {
     const runtime = runtimeWith(
       (call) =>
         new Promise((_resolve, reject) => {
-          (call.options.signal as AbortSignal).addEventListener("abort", () => {
+          call.options.signal.addEventListener("abort", () => {
             reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
           });
         }),
@@ -351,7 +359,9 @@ describe("completeAiJson：AI Gateway binding 接线", () => {
     const notJson = runtimeWith(async () => new Response("hello", { status: 200 }));
     expect((await completeAiJson(notJson, prompt)).ok).toBe(false);
 
-    const empty = runtimeWith(async () => ({ choices: [] }));
+    const empty = runtimeWith(async () =>
+      new Response(JSON.stringify({ choices: [] }), { status: 200 }),
+    );
     const b = await completeAiJson(empty, prompt);
     expect(b.ok).toBe(false);
     if (!b.ok) expect(b.message).toContain("没有返回内容");

@@ -137,7 +137,7 @@
 |---|---|
 | `env.AI` | `wrangler.jsonc` 的 `ai` binding（账号内预认证；本地 dev 恒为 remote，需 `wrangler login`） |
 | `CLOUDFLARE_GATEWAY_ID` | AI Gateway 名称，默认 `studio`；本地可用 `studio-dev` 分账。空 = 不启用 |
-| 模型 | 默认 `deepseek/deepseek-flash`；可用 `CLOUDFLARE_AI_MODEL` 显式覆盖（本地网关没有 flash 时联调用） |
+| 模型 | 默认 `deepseek/deepseek-flash`；可用 `CLOUDFLARE_AI_MODEL` 显式覆盖（如 `deepseek/deepseek-chat`） |
 | 厂商 key | 只在 AI Gateway 的 **BYOK**（DeepSeek，`default` 别名）；不进 Worker、不进 GitHub Secrets |
 
 每条请求都带：
@@ -146,6 +146,10 @@
 { "metadata": { "tenant": "<accounts.id>", "product": "crm", "task": "gateway-mapping" } }
 ```
 
+- **调用路径是 provider-native**：`env.AI.gateway(id).run({ provider, endpoint, query })`，
+  走网关存的 **BYOK** DeepSeek key（用自己的 DeepSeek 账号即可，不需要 Cloudflare credits）。
+  **不要**改成 `env.AI.run("deepseek/...")`：那是 unified-billing run catalog，
+  `deepseek-v4-flash` 会报 402（缺 credits）、`deepseek-flash` 会报 404（不在 run catalog）。
 - `metadata.tenant` 就是 cf-api 的计费键（契约 `usage.md` §9）：必须是数字；
   缺了/非数字会落到 `unattributed`，所以服务端直接拒绝（`ai_unavailable`）；
 - 另带 `cf-aig-collect-log-payload: false`：网关日志只留元数据与用量，不留 prompt/response；

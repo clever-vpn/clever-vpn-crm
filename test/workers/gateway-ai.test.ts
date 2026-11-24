@@ -86,11 +86,13 @@ function modelReply(content: unknown): () => Promise<Response> {
     });
 }
 
-function fakeAi(run: (...args: never[]) => Promise<unknown>): Ai {
-  return { run } as unknown as Ai;
+function fakeAi(run: (entry: Record<string, unknown>, options: Record<string, unknown>) => Promise<unknown>): Ai {
+  return { gateway: () => ({ run }) } as unknown as Ai;
 }
 
-async function configureAi(run: (...args: never[]) => Promise<unknown> = modelReply(VALID_DRAFT)): Promise<void> {
+async function configureAi(
+  run: (entry: Record<string, unknown>, options: Record<string, unknown>) => Promise<unknown> = modelReply(VALID_DRAFT),
+): Promise<void> {
   const raw = env as unknown as Record<string, unknown>;
   raw.AI = fakeAi(run);
   raw.CLOUDFLARE_GATEWAY_ID = "studio";
@@ -179,12 +181,18 @@ describe("AI 配置助手端点", () => {
     expect(body.draft.template.source).toBe("ai");
     expect(run).toHaveBeenCalledTimes(1);
 
-    // 计费键：测试环境 CRM_TENANT_ID=0；网关名与产品名一起进 metadata
-    const [, , options] = run.mock.calls[0] as unknown as [
-      string,
-      Record<string, unknown>,
+    // provider-native：entry 带 provider/endpoint/厂商模型 id；options 带计费 metadata
+    const [entry, options] = run.mock.calls[0] as unknown as [
+      {
+        provider: string;
+        endpoint: string;
+        query: { model: string };
+      },
       { gateway: { id: string; metadata: Record<string, string> }; extraHeaders: Record<string, string> },
     ];
+    expect(entry.provider).toBe("deepseek");
+    expect(entry.endpoint).toBe("chat/completions");
+    expect(entry.query.model).toBe("deepseek-flash");
     expect(options.gateway.id).toBe("studio");
     expect(options.gateway.metadata).toMatchObject({
       tenant: "0",

@@ -68,6 +68,18 @@ export const AI_PRODUCT = "crm";
 /** 一次生成在网关日志里的任务名（排障用，不参与记账） */
 export const AI_TASK = "gateway-mapping";
 
+/**
+ * `deepseek/deepseek-flash` → provider `deepseek` + provider-native 模型 id
+ * `deepseek-flash`。走 gateway 的 provider-native 路径（BYOK）时，body 里的
+ * `model` 是厂商自己的 id，不带 provider 前缀。
+ */
+export function providerRouteOf(model: string): { provider: string; model: string } | null {
+  const slash = model.indexOf("/");
+  if (slash <= 0 || slash === model.length - 1) return null;
+  if (model.slice(0, slash) !== "deepseek") return null;
+  return { provider: "deepseek", model: model.slice(slash + 1) };
+}
+
 export interface AiRuntime {
   binding: Ai;
   gatewayId: string;
@@ -102,11 +114,12 @@ export function aiReady(env: AiEnv): boolean {
 export function aiRuntime(env: AiEnv, tenantId: string): AiRuntime | null {
   const gatewayId = gatewayIdOf(env);
   const tenant = tenantId.trim();
-  if (!env.AI || !gatewayId || !/^\d+$/.test(tenant)) return null;
+  const model = modelOf(env);
+  if (!env.AI || !gatewayId || !/^\d+$/.test(tenant) || !providerRouteOf(model)) return null;
   return {
     binding: env.AI,
     gatewayId,
-    model: modelOf(env),
+    model,
     metadata: { tenant, product: AI_PRODUCT, task: AI_TASK },
   };
 }
@@ -199,10 +212,13 @@ function contentOf(body: unknown): string | null {
 }
 
 /**
- * 经 AI binding → AI Gateway 调一次模型。
+ * 经 AI binding → AI Gateway 的 **provider-native** 路径调一次模型。
  *
- * - 认证：binding 在账号内预认证；厂商 key 由网关 BYOK 注入 ⇒ 这里没有 key；
- * - 模型：`runtime.model`（默认 `deepseek/deepseek-flash`，可用 `CLOUDFLARE_AI_MODEL` 显式覆盖）；
+ * 与 site-studio 同一条路：`env.AI.gateway(id).run({ provider, endpoint, query })`。
+ * 它用网关里存的 **BYOK** 厂商 key（`default` 别名），不走 unified billing —
+ * 所以用自己的 DeepSeek 账号也能调 `deepseek-flash`，不需要 Cloudflare credits。
+ *
+ * - 模型：`runtime.model`（默认 `deepseek/deepseek-flash`；body 里只发 `deepseek-flash`）；
  * - 记账：`gateway.metadata.tenant` 原样落到网关日志，cf-api 按它聚合；
  * - 隐私：`cf-aig-collect-log-payload: false`，日志不留 prompt/response；
  * - 失败：只回稳定错误码，不把网关/厂商原文回给前端。
@@ -212,26 +228,38 @@ export async function completeAiJson(
   prompt: { system: string; user: string },
   options: { timeoutMs?: number } = {},
 ): Promise<AiCompletion> {
+  const route = providerRouteOf(runtime.model);
+  if (!route) {
+    return {
+      ok: false,
+      code: "ai_upstream_error",
+      message: "模型必须是 deepseek/<model>（例如 deepseek/deepseek-flash）",
+    };
+  }
   const timeoutMs = options.timeoutMs ?? AI_LIMITS.requestTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let raw: unknown;
+  let response: Response;
   try {
-    raw = await runtime.binding.run(
-      runtime.model,
+    response = await runtime.binding.gateway(runtime.gatewayId).run(
       {
-        messages: [
-          { role: "system", content: prompt.system },
-          { role: "user", content: prompt.user },
-        ],
-        temperature: 0,
-        max_tokens: 4096,
-        response_format: { type: "json_object" },
+        provider: route.provider,
+        endpoint: "chat/completions",
+        headers: { "content-type": "application/json" },
+        query: {
+          model: route.model,
+          messages: [
+            { role: "system", content: prompt.system },
+            { role: "user", content: prompt.user },
+          ],
+          temperature: 0,
+          max_tokens: 4096,
+          response_format: { type: "json_object" },
+        },
       },
       {
         gateway: { id: runtime.gatewayId, metadata: runtime.metadata },
         extraHeaders: { "cf-aig-collect-log-payload": "false" },
-        returnRawResponse: true,
         signal: controller.signal,
       },
     );
@@ -250,20 +278,19 @@ export async function completeAiJson(
     clearTimeout(timer);
   }
 
-  let body: unknown = raw;
-  if (raw instanceof Response) {
-    if (!raw.ok) {
-      return {
-        ok: false,
-        code: "ai_upstream_error",
-        message: `AI Gateway 返回 HTTP ${raw.status}；检查 CLOUDFLARE_GATEWAY_ID、DeepSeek BYOK 与模型名`,
-      };
-    }
-    try {
-      body = await raw.json();
-    } catch {
-      return { ok: false, code: "ai_upstream_error", message: "AI Gateway 返回的不是 JSON" };
-    }
+  if (!response.ok) {
+    return {
+      ok: false,
+      code: "ai_upstream_error",
+      message: `AI Gateway 返回 HTTP ${response.status}；检查 CLOUDFLARE_GATEWAY_ID、DeepSeek BYOK 与模型名`,
+    };
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { ok: false, code: "ai_upstream_error", message: "AI Gateway 返回的不是 JSON" };
   }
 
   // 网关自己的错误信封：{ success:false, error:[{code,message}] } —— 不把 message 外泄
@@ -279,7 +306,6 @@ export async function completeAiJson(
   if (!content) return { ok: false, code: "ai_upstream_error", message: "模型没有返回内容" };
   return { ok: true, content };
 }
-
 // ─────────────────────────────────────────────────────────────
 // 解析 + 校验
 // ─────────────────────────────────────────────────────────────
