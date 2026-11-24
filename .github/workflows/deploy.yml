@@ -15,10 +15,8 @@
 #   Variables: CRM_TENANT_ID（必填；为空则本工作流整体跳过）
 #              CLOUDFLARE_ACCOUNT_ID
 #              D1_NAME / WORKER_NAME / CF_API_BASE（可选，有默认值）
-# 可选（AI 配置助手，三项齐全才开放）：
-#   Secrets:   AI_API_KEY
-#   Variables: AI_BASE_URL（OpenAI 兼容基址）、AI_MODEL
-#   缺任何一项 ⇒ 后台显示"AI 配置助手未配置"，模板导入不受影响。
+# 可选（AI 配置助手）：Variables CLOUDFLARE_GATEWAY_ID（如 studio；空 = 不开放）。
+#   厂商 key 由 AI Gateway 的 BYOK 注入，不是 GitHub secret；Worker 里没有任何厂商密钥。
 name: deploy
 
 on:
@@ -62,8 +60,7 @@ jobs:
       # studio 票据的跳转落点（空 = 该产品未上线，签票会返回 500 studio_not_configured）
       STUDIO_SITE_URL: ${{ vars.STUDIO_SITE_URL }}
       STUDIO_APP_URL: ${{ vars.STUDIO_APP_URL }}
-      AI_BASE_URL: ${{ vars.AI_BASE_URL }}
-      AI_MODEL: ${{ vars.AI_MODEL }}
+      CLOUDFLARE_GATEWAY_ID: ${{ vars.CLOUDFLARE_GATEWAY_ID }}
       CRM_CODE_VERSION: ${{ needs.resolve.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
@@ -169,7 +166,6 @@ jobs:
         env:
           APP_SECRET: ${{ secrets.APP_SECRET }}
           SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${APP_SECRET:-}" ]; then
@@ -181,11 +177,7 @@ jobs:
           else
             echo "::warning::未配置 SETUP_TOKEN，管理后台首次初始化会被禁用（见 docs/admin.md）"
           fi
-          if [ -n "${AI_API_KEY:-}" ]; then
-            printf '%s' "$AI_API_KEY" | npx wrangler secret put AI_API_KEY --config wrangler.ci.jsonc
-          else
-            echo "::warning::未配置 AI_API_KEY，AI 配置助手不可用（模板导入不受影响）"
-          fi
+
 
       - name: 摘要
         run: |

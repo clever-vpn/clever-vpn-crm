@@ -616,10 +616,13 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
     （create + query；PayPal capture；见 §6.4）
 12. **Webhook + 回跳页**：`src/payments/webhook.ts`（验签→查单）、
     `src/payments/return.ts` + `return-token.ts`（客户端 refresh / CRM 兜底页；见 §6.5）
-13. **AI 配置助手**：`src/payments/ai.ts`（prompt + 模型调用 + envelope/`validateMapping` 校验）
-    + `src/admin/gateway-ai.ts`（`POST /api/admin/gateways/ai-draft`，会话 + 每小时 20 次限流）
-    + 映射编辑器内的「粘贴文档 → 生成 → 预览 → 应用」面板。只产 v2 草稿，不落库、不保存、不发布；
-    `AI_API_KEY`/`AI_MODEL`/`AI_BASE_URL` 三项齐全才开放，否则 `ai_unavailable`。
+13. **AI 配置助手**：`src/payments/ai.ts`（prompt + AI binding→AI Gateway 调用 +
+    envelope/`validateMapping` 校验）+ `src/admin/gateway-ai.ts`
+    （`POST /api/admin/gateways/ai-draft`，会话 + 每小时 20 次限流）+ 映射编辑器内的
+    「粘贴文档 → 生成 → 预览 → 应用」面板。只产 v2 草稿，不落库、不保存、不发布；
+    模型固定 `deepseek/deepseek-flash`，厂商 key 在网关 BYOK；每条请求带
+    `metadata.tenant`（cf-api 计费键）与 `product=crm`。未配 AI binding /
+    `CLOUDFLARE_GATEWAY_ID` 时 `ai_unavailable`。
 
 
 **主动查单**（`src/payments/poll.ts`，v20）：

@@ -495,7 +495,7 @@ export async function handleAdminApi(
   if (gatewaysResponse) return gatewaysResponse;
 
   // ── AI 配置助手：文档 → 模板 v2 草稿（只生成、不落库）──────────────
-  const gatewayAiResponse = await handleAdminGatewayAi(request, env, admin.email);
+  const gatewayAiResponse = await handleAdminGatewayAi(request, env, admin.email, tenantId);
   if (gatewayAiResponse) return gatewayAiResponse;
 
   // ── 商店渠道（Apple / Google 凭证；不是网关，见契约 §2.4.3.1）──────

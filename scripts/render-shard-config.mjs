@@ -90,9 +90,9 @@ const vars = {
   // 而"不对访客开放"由网关自身的白名单保证（`driver='mock'` 白名单为空 =
   // 对任何人都不存在）。自部署由租户自己决定。
   ALLOW_MOCK_PAYMENTS: process.env.ALLOW_MOCK_PAYMENTS ?? "true",
-  // AI 配置助手：空 = 不开放（AI_API_KEY 是 Worker secret，由运维单独写入）
-  AI_BASE_URL: process.env.AI_BASE_URL ?? "",
-  AI_MODEL: process.env.AI_MODEL ?? "",
+  // AI 配置助手：走平台共用的 AI Gateway（site-studio 也用这个），厂商 key 在网关 BYOK。
+  // 空 = 不开放；托管分片默认 `studio`。
+  CLOUDFLARE_GATEWAY_ID: process.env.CLOUDFLARE_GATEWAY_ID ?? "studio",
 };
 
 /** wrangler 配置：代码 + 资源 + 绑定（首次部署与升级都用它） */
@@ -108,6 +108,7 @@ const config = `// ⚠️ 自动生成，不要提交（.gitignore 已排除）�
     "html_handling": "none"
   },
   "observability": { "enabled": true },
+  "ai": { "binding": "AI" },
   "send_email": [{ "name": "EMAIL" }],
   "kv_namespaces": [{ "binding": "HOSTS", "id": ${JSON.stringify(hostsKvId)} }],
   "r2_buckets": [{ "binding": "SITES", "bucket_name": ${JSON.stringify(sitesBucket)} }],

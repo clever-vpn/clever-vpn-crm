@@ -3,7 +3,8 @@
  *
  * 契约见 `docs/protocols/ai.md`。这个文件只做三件纯逻辑的事：
  *   1. prompt（文档是外部数据，不是指令）；
- *   2. 调 OpenAI 兼容端点（key 只在服务端；注入 fetch 便于单测/超时）；
+ *   2. 通过 **AI binding → AI Gateway** 调 `deepseek/deepseek-flash`（厂商 key 在网关
+ *      BYOK，Worker 里没有；每条请求带 `metadata.tenant` 供 cf-api 计费）；
  *   3. 解析 + envelope 校验 + `validateMapping` —— 模型输出是不可信数据，
  *      没有通过这一层之前，路由不得把它返回给前端。
  *
@@ -54,32 +55,52 @@ export const AI_LIMITS = {
   requestTimeoutMs: 45_000,
 } as const;
 
-export interface AiModelConfig {
-  baseUrl: string;
-  model: string;
-  apiKey: string;
+/**
+ * 固定模型：与 site-studio 同一档。换模型改这里 + 文档，不在运行时按环境变量
+ * 偷偷切（模型差异会直接体现在草稿质量和网关上）。
+ */
+export const AI_MODEL = "deepseek/deepseek-flash";
+/**
+ * 网关日志里的产品名。cf-api 聚合只按 `metadata.tenant`；`product` 只用于报表区分。
+ * 契约 `usage.md` §9.2 的枚举因此增加了 `crm`。
+ */
+export const AI_PRODUCT = "crm";
+/** 一次生成在网关日志里的任务名（排障用，不参与记账） */
+export const AI_TASK = "gateway-mapping";
+
+export interface AiRuntime {
+  binding: Ai;
+  gatewayId: string;
+  metadata: { tenant: string; product: string; task: string };
 }
 
 type AiEnv = {
-  AI_BASE_URL?: string;
-  AI_MODEL?: string;
-  AI_API_KEY?: string;
+  AI?: Ai;
+  CLOUDFLARE_GATEWAY_ID?: string;
 };
 
-/**
- * 三项齐全才算「已配置」。缺任何一项都返回 null —— 调用方回 `ai_unavailable`，
- * 不偷偷换模型或换厂商（换模型必须显式改配置）。
- */
-export function aiConfig(env: AiEnv): AiModelConfig | null {
-  const baseUrl = (env.AI_BASE_URL ?? "").trim().replace(/\/+$/, "");
-  const model = (env.AI_MODEL ?? "").trim();
-  const apiKey = (env.AI_API_KEY ?? "").trim();
-  if (!baseUrl || !model || !apiKey) return null;
-  return { baseUrl, model, apiKey };
+export function gatewayIdOf(env: AiEnv): string {
+  return (env.CLOUDFLARE_GATEWAY_ID ?? "").trim();
 }
 
+/** 有 binding + 网关名才算「已配置」；缺一个都回 `ai_unavailable`。 */
 export function aiReady(env: AiEnv): boolean {
-  return aiConfig(env) !== null;
+  return Boolean(env.AI) && gatewayIdOf(env) !== "";
+}
+
+/**
+ * 租户 id 是 cf-api 的 `accounts.id`（契约 `usage.md` §9.2）：必须是非空数字串，
+ * 否则网关日志会落到 `unattributed`。缺少/非数字时直接不可用，别让账单悄悄丢。
+ */
+export function aiRuntime(env: AiEnv, tenantId: string): AiRuntime | null {
+  const gatewayId = gatewayIdOf(env);
+  const tenant = tenantId.trim();
+  if (!env.AI || !gatewayId || !/^\d+$/.test(tenant)) return null;
+  return {
+    binding: env.AI,
+    gatewayId,
+    metadata: { tenant, product: AI_PRODUCT, task: AI_TASK },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -147,33 +168,42 @@ export type AiCompletion =
   | { ok: true; content: string }
   | { ok: false; code: "ai_upstream_error" | "ai_timeout"; message: string };
 
-interface ChatCompletionBody {
-  choices?: { message?: { content?: unknown } }[];
+/** 从网关返回体取文本：OpenAI 兼容 `choices[0].message.content`，兼容 Workers AI 的 `response`。 */
+function contentOf(body: unknown): string | null {
+  if (!isObject(body)) return null;
+  const choices = body.choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const first = choices[0];
+    const message = isObject(first) ? first.message : undefined;
+    if (isObject(message) && typeof message.content === "string" && message.content.trim()) {
+      return message.content;
+    }
+  }
+  if (typeof body.response === "string" && body.response.trim()) return body.response;
+  return null;
 }
 
 /**
- * 超时/网络错误都映射成稳定的错误码；上游报文**不**回给前端（可能含厂商 key/提示词）。
- * `fetchImpl` 只用于测试注入。
+ * 经 AI binding → AI Gateway 调一次模型。
+ *
+ * - 认证：binding 在账号内预认证；厂商 key 由网关 BYOK 注入 ⇒ 这里没有 key；
+ * - 记账：`gateway.metadata.tenant` 原样落到网关日志，cf-api 按它聚合；
+ * - 隐私：`cf-aig-collect-log-payload: false`，日志不留 prompt/response；
+ * - 失败：只回稳定错误码，不把网关/厂商原文回给前端。
  */
 export async function completeAiJson(
-  config: AiModelConfig,
+  runtime: AiRuntime,
   prompt: { system: string; user: string },
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<AiCompletion> {
-  const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? AI_LIMITS.requestTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let response: Response;
+  let raw: unknown;
   try {
-    response = await fetchImpl(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
+    raw = await runtime.binding.run(
+      AI_MODEL,
+      {
         messages: [
           { role: "system", content: prompt.system },
           { role: "user", content: prompt.user },
@@ -181,37 +211,56 @@ export async function completeAiJson(
         temperature: 0,
         max_tokens: 4096,
         response_format: { type: "json_object" },
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
+      },
+      {
+        gateway: { id: runtime.gatewayId, metadata: runtime.metadata },
+        extraHeaders: { "cf-aig-collect-log-payload": "false" },
+        returnRawResponse: true,
+        signal: controller.signal,
+      },
+    );
   } catch (error) {
-    const aborted = controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
+    const aborted =
+      controller.signal.aborted ||
+      (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"));
     return aborted
       ? { ok: false, code: "ai_timeout", message: `模型超过 ${Math.round(timeoutMs / 1000)} 秒未返回，请重试或缩短文档` }
-      : { ok: false, code: "ai_upstream_error", message: "模型请求失败（网络错误），请稍后重试" };
+      : {
+          ok: false,
+          code: "ai_upstream_error",
+          message: "AI Gateway 调用失败：检查 CLOUDFLARE_GATEWAY_ID、网关里的 DeepSeek BYOK 与模型名",
+        };
   } finally {
     clearTimeout(timer);
   }
 
-  if (!response.ok) {
+  let body: unknown = raw;
+  if (raw instanceof Response) {
+    if (!raw.ok) {
+      return {
+        ok: false,
+        code: "ai_upstream_error",
+        message: `AI Gateway 返回 HTTP ${raw.status}；检查 CLOUDFLARE_GATEWAY_ID、DeepSeek BYOK 与模型名`,
+      };
+    }
+    try {
+      body = await raw.json();
+    } catch {
+      return { ok: false, code: "ai_upstream_error", message: "AI Gateway 返回的不是 JSON" };
+    }
+  }
+
+  // 网关自己的错误信封：{ success:false, error:[{code,message}] } —— 不把 message 外泄
+  if (isObject(body) && body.success === false) {
     return {
       ok: false,
       code: "ai_upstream_error",
-      message: `模型返回 HTTP ${response.status}；请检查 AI_BASE_URL / AI_MODEL / AI_API_KEY 与提供商的 JSON 输出支持`,
+      message: "AI Gateway 拒绝了请求：检查 CLOUDFLARE_GATEWAY_ID、DeepSeek BYOK 与模型名",
     };
   }
 
-  let body: ChatCompletionBody;
-  try {
-    body = (await response.json()) as ChatCompletionBody;
-  } catch {
-    return { ok: false, code: "ai_upstream_error", message: "模型返回的不是 JSON" };
-  }
-  const content = body.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) {
-    return { ok: false, code: "ai_upstream_error", message: "模型没有返回内容" };
-  }
+  const content = contentOf(body);
+  if (!content) return { ok: false, code: "ai_upstream_error", message: "模型没有返回内容" };
   return { ok: true, content };
 }
 

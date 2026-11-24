@@ -817,7 +817,7 @@ export interface GatewaysResponse {
   gateways: GatewayView[];
   mock_enabled: boolean;
   secret_key_ready: boolean;
-  /** AI 配置助手是否已配置（AI_API_KEY / AI_MODEL / AI_BASE_URL 齐全） */
+  /** AI 配置助手是否已配置（AI binding + CLOUDFLARE_GATEWAY_ID） */
   ai_ready: boolean;
   drivers: { driver: string; methods: string[] }[];
   all_methods: string[];

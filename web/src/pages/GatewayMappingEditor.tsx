@@ -958,7 +958,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                   type="warning"
                   showIcon
                   message="AI 配置助手未配置"
-                  description="服务端需要同时设置 AI_API_KEY、AI_MODEL、AI_BASE_URL 才会开放；现在仍可用模板导入。"
+                  description="服务端需要 AI binding 与 CLOUDFLARE_GATEWAY_ID（AI Gateway）才会开放；现在仍可用模板导入。"
                 />
               )}
               <Input.TextArea

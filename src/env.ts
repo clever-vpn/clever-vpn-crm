@@ -100,14 +100,16 @@ export interface Env {
   TURNSTILE_SECRET?: string;
 
   /**
-   * AI 配置助手（`docs/protocols/ai.md` §8）：OpenAI 兼容端点。
+   * AI 配置助手（`docs/protocols/ai.md` §8）：走 **Cloudflare AI Gateway**。
    *
-   * 三项**必须同时配置**才算可用；缺一项返回 `ai_unavailable`，不会偷偷换模型。
-   * key 只在这里（`wrangler secret put AI_API_KEY`），永不进前端。
+   * 与 site-studio 同一个模式：AI binding 在账号内预认证，厂商 key 由网关
+   * **BYOK** 注入 ⇒ Worker 里没有 DeepSeek key，也没有 Cloudflare token。
+   * 模型固定 `deepseek/deepseek-flash`；每条请求带 `metadata.tenant`，cf-api 按
+   * 网关日志聚合计费（契约 `usage.md` §9）。
    */
-  AI_BASE_URL?: string;
-  AI_MODEL?: string;
-  AI_API_KEY?: string;
+  AI?: Ai;
+  /** AI Gateway 名称（我们的是 `studio`）。空 = 不启用 AI 配置助手。 */
+  CLOUDFLARE_GATEWAY_ID?: string;
 
   /**
    * **测试网关（`driver = 'mock'`）的总开关**，默认关闭（`docs/payments.md` §5.3）。

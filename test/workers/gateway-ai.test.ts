@@ -3,12 +3,12 @@
  *
  * 钉住四件事：
  *   1. 未登录打不进来（会话门禁在 admin router，不在本端点里重写）；
- *   2. 没配模型三项 → `503 ai_unavailable`，不是“悄悄换一个模型”；
- *   3. 合法模型输出 → 200 + v2 草稿；审计只记元数据，不记文档正文；
+ *   2. 没配 AI binding / 网关 → `503 ai_unavailable`，不是“悄悄换一个模型”；
+ *   3. 合法模型输出 → 200 + v2 草稿；请求带 metadata.tenant，审计只记元数据；
  *   4. 非法输出 → 422 可解释错误；每秒/每小时限流 → 429。
  */
 import { exports as rawExports } from "cloudflare:workers";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { env } from "./apply-migrations";
 
@@ -79,25 +79,27 @@ const VALID_DRAFT = {
   uncertainty: [],
 };
 
-function modelReply(content: unknown): typeof fetch {
-  return (async () =>
+function modelReply(content: unknown): () => Promise<Response> {
+  return async () =>
     new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), {
       status: 200,
-    })) as typeof fetch;
+    });
 }
 
-async function configureAi(): Promise<void> {
+function fakeAi(run: (...args: never[]) => Promise<unknown>): Ai {
+  return { run } as unknown as Ai;
+}
+
+async function configureAi(run: (...args: never[]) => Promise<unknown> = modelReply(VALID_DRAFT)): Promise<void> {
   const raw = env as unknown as Record<string, unknown>;
-  raw.AI_BASE_URL = "https://model.test/v1";
-  raw.AI_MODEL = "demo-model";
-  raw.AI_API_KEY = "sk-test";
+  raw.AI = fakeAi(run);
+  raw.CLOUDFLARE_GATEWAY_ID = "studio";
 }
 
 async function disableAi(): Promise<void> {
   const raw = env as unknown as Record<string, unknown>;
-  delete raw.AI_BASE_URL;
-  delete raw.AI_MODEL;
-  delete raw.AI_API_KEY;
+  delete raw.AI;
+  delete raw.CLOUDFLARE_GATEWAY_ID;
 }
 
 async function draftRows(): Promise<number> {
@@ -123,10 +125,6 @@ beforeAll(async () => {
   cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
 describe("AI 配置助手端点", () => {
   it("未登录 → 401（会话门禁先行）", async () => {
     await configureAi();
@@ -134,7 +132,7 @@ describe("AI 配置助手端点", () => {
     expect(res.status).toBe(401);
   });
 
-  it("未配置模型三项 → 503 ai_unavailable；列表 ai_ready 同步为 false", async () => {
+  it("未配置 AI binding / 网关 → 503 ai_unavailable；列表 ai_ready 同步为 false", async () => {
     await disableAi();
     const list = (await (await call("/api/admin/gateways")).json()) as { ai_ready: boolean };
     expect(list.ai_ready).toBe(false);
@@ -150,9 +148,8 @@ describe("AI 配置助手端点", () => {
   });
 
   it("文档太短 / 太大 → 400（不调模型）", async () => {
-    await configureAi();
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
+    const run = vi.fn();
+    await configureAi(run as never);
 
     const short = await call("/api/admin/gateways/ai-draft", { method: "POST", body: { document: "太短" } });
     expect(short.status).toBe(400);
@@ -162,14 +159,13 @@ describe("AI 配置助手端点", () => {
       body: { document: "x".repeat(61 * 1024) },
     });
     expect(huge.status).toBe(400);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
-  it("合法输出 → 200 + v2 草稿；审计不写文档正文；不自动保存", async () => {
-    await configureAi();
+  it("合法输出 → 200 + v2 草稿；带 metadata.tenant；审计不写正文；不自动保存", async () => {
+    const run = vi.fn(modelReply(VALID_DRAFT));
+    await configureAi(run as never);
     const before = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM payment_gateways`).first<{ n: number }>())?.n ?? 0;
-    const fetchImpl = vi.fn(modelReply(VALID_DRAFT));
-    vi.stubGlobal("fetch", fetchImpl);
 
     const res = await call("/api/admin/gateways/ai-draft", { method: "POST", body: { document: DOCUMENT } });
     expect(res.status).toBe(200);
@@ -177,12 +173,25 @@ describe("AI 配置助手端点", () => {
       draft: { classification: string; template: { schema_version: number; source: string; mapping: Record<string, unknown> } };
       model: string;
     };
-    expect(body.model).toBe("demo-model");
+    expect(body.model).toBe("deepseek/deepseek-flash");
     expect(body.draft.classification).toBe("generic_mapping");
     expect(body.draft.template.schema_version).toBe(2);
     expect(body.draft.template.source).toBe("ai");
-    expect(JSON.stringify(body.draft)).not.toContain("sk-test");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    // 计费键：测试环境 CRM_TENANT_ID=0；网关名与产品名一起进 metadata
+    const [, , options] = run.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+      { gateway: { id: string; metadata: Record<string, string> }; extraHeaders: Record<string, string> },
+    ];
+    expect(options.gateway.id).toBe("studio");
+    expect(options.gateway.metadata).toMatchObject({
+      tenant: "0",
+      product: "crm",
+      task: "gateway-mapping",
+    });
+    expect(options.extraHeaders["cf-aig-collect-log-payload"]).toBe("false");
 
     const row = await env.DB.prepare(
       `SELECT detail FROM audit_log WHERE action = 'gateway_ai_draft' ORDER BY id DESC LIMIT 1`,
@@ -200,7 +209,7 @@ describe("AI 配置助手端点", () => {
       template: Record<string, unknown>;
     };
     bad.template.secret = "sk-leak";
-    vi.stubGlobal("fetch", vi.fn(modelReply(bad)));
+    await configureAi(vi.fn(modelReply(bad)) as never);
 
     const res = await call("/api/admin/gateways/ai-draft", { method: "POST", body: { document: DOCUMENT } });
     expect(res.status).toBe(422);
@@ -210,8 +219,7 @@ describe("AI 配置助手端点", () => {
   });
 
   it("模型 HTTP 失败 → 502，不泄漏上游报文", async () => {
-    await configureAi();
-    vi.stubGlobal("fetch", (async () => new Response("vendor: bad key", { status: 401 })) as typeof fetch);
+    await configureAi(vi.fn(async () => new Response("vendor: bad key", { status: 401 })) as never);
     const res = await call("/api/admin/gateways/ai-draft", { method: "POST", body: { document: DOCUMENT } });
     expect(res.status).toBe(502);
     const text = await res.text();
@@ -220,7 +228,8 @@ describe("AI 配置助手端点", () => {
   });
 
   it("每小时 20 次上限 → 429（计数在 audit_log，跨 isolate）", async () => {
-    await configureAi();
+    const run = vi.fn(modelReply(VALID_DRAFT));
+    await configureAi(run as never);
     const used = await draftRows();
     const now = new Date().toISOString();
     for (let i = used; i < 20; i += 1) {
@@ -230,10 +239,8 @@ describe("AI 配置助手端点", () => {
         .bind(now)
         .run();
     }
-    const fetchImpl = vi.fn(modelReply(VALID_DRAFT));
-    vi.stubGlobal("fetch", fetchImpl);
     const res = await call("/api/admin/gateways/ai-draft", { method: "POST", body: { document: DOCUMENT } });
     expect(res.status).toBe(429);
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 });

@@ -103,7 +103,8 @@
 - 原始文档的版权/授权按内部语料约定；
 - 仓库只放规范/映射/夹具说明，原始大文件引用来源路径/URL；
 - 不把密钥、商户号、通道号放进 prompt；
-- 服务端只把文档正文发给模型提供商，审计只记「谁、何时、是否成功」，不记正文。
+- 服务端只把文档正文发给模型提供商（经 AI Gateway；日志不存 payload），
+  审计只记「谁、何时、是否成功」，不记正文。
 
 ## 7. UI 位置
 
@@ -124,15 +125,29 @@
 | 成功（可生成） | `{ draft: { classification:"generic_mapping", template, evidence, uncertainty }, model }` |
 | 成功（不可生成） | `{ draft: { classification:"driver"\|"unsupported", template:null, evidence, uncertainty }, model }` |
 | 输出不合法 | `422 invalid_draft` + `details.errors[]`（字段路径 + 原因） |
-| 未配置 | `503 ai_unavailable`（没配 `AI_API_KEY` / `AI_MODEL`） |
+| 未配置 | `503 ai_unavailable`（没配 AI binding / `CLOUDFLARE_GATEWAY_ID`，或租户 ID 不是数字） |
 | 超限 | `429 ai_rate_limited`，每小时 20 次 |
 | 模型故障 | `502 ai_upstream_error`，不把厂商原始报文回给前端 |
 
-配置（全部在服务端，前端拿不到 key）：
+配置与 site-studio **同一套**：AI binding → AI Gateway，Worker 里没有任何厂商 key。
 
-- `AI_API_KEY`（secret）：模型提供商 key；
-- `AI_MODEL`（var）：模型 id，如 `deepseek-chat`；
-- `AI_BASE_URL`（var）：OpenAI 兼容端点基址，如 `https://api.deepseek.com/v1`。
+| 项 | 说明 |
+|---|---|
+| `env.AI` | wrangler 的 `ai` binding（账号内预认证） |
+| `CLOUDFLARE_GATEWAY_ID` | AI Gateway 名称；我们的是 `studio`。空 = 不启用该功能 |
+| 模型 | 固定 `deepseek/deepseek-flash`（`src/payments/ai.ts` 的 `AI_MODEL`） |
+| 厂商 key | 只在 AI Gateway 的 **BYOK**（DeepSeek，`default` 别名）；不进 Worker、不进 GitHub Secrets |
+
+每条请求都带：
+
+```json
+{ "metadata": { "tenant": "<accounts.id>", "product": "crm", "task": "gateway-mapping" } }
+```
+
+- `metadata.tenant` 就是 cf-api 的计费键（契约 `usage.md` §9）：必须是数字；
+  缺了/非数字会落到 `unattributed`，所以服务端直接拒绝（`ai_unavailable`）；
+- 另带 `cf-aig-collect-log-payload: false`：网关日志只留元数据与用量，不留 prompt/response；
+- 自部署怎么建网关、配 DeepSeek BYOK 见 [`../self-host.md`](../self-host.md) §2.6。
 
 行为约束：
 

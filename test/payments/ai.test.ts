@@ -14,12 +14,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   AI_LIMITS,
-  aiConfig,
+  AI_MODEL,
+  AI_PRODUCT,
   aiReady,
+  aiRuntime,
   buildPrompt,
   completeAiJson,
   parseAiDraft,
 } from "../../src/payments/ai";
+
+import type { AiRuntime } from "../../src/payments/ai";
 import { validateMapping } from "../../src/payments/mapping";
 
 const schema = JSON.parse(
@@ -178,15 +182,25 @@ describe("parseAiDraft：拒绝不可信的模型输出", () => {
 });
 
 describe("模型配置与 prompt", () => {
-  it("三项齐全才可用；不偷偷用默认模型/厂商", () => {
+  const fakeBinding = {} as Ai;
+
+  it("AI binding + 网关名才算可用；不偷偷用默认网关", () => {
     expect(aiReady({})).toBe(false);
-    expect(aiConfig({ AI_API_KEY: "k", AI_MODEL: "m" })).toBeNull();
-    expect(aiConfig({ AI_MODEL: "m", AI_BASE_URL: "https://x/v1" })).toBeNull();
-    expect(aiConfig({ AI_API_KEY: "k", AI_MODEL: "m", AI_BASE_URL: "https://x/v1/" })).toEqual({
-      apiKey: "k",
-      model: "m",
-      baseUrl: "https://x/v1",
+    expect(aiReady({ AI: fakeBinding })).toBe(false);
+    expect(aiReady({ AI: fakeBinding, CLOUDFLARE_GATEWAY_ID: "  " })).toBe(false);
+    expect(aiReady({ AI: fakeBinding, CLOUDFLARE_GATEWAY_ID: "studio" })).toBe(true);
+  });
+
+  it("metadata.tenant 必须是数字（cf-api 的 accounts.id），否则宁可不开放", () => {
+    const env = { AI: fakeBinding, CLOUDFLARE_GATEWAY_ID: "studio" };
+    expect(aiRuntime(env, "")).toBeNull();
+    expect(aiRuntime(env, "acme")).toBeNull();
+    expect(aiRuntime(env, "7")?.metadata).toEqual({
+      tenant: "7",
+      product: AI_PRODUCT,
+      task: "gateway-mapping",
     });
+    expect(AI_PRODUCT).toBe("crm");
   });
 
   it("文档被包成不可信数据块，且明确要求 JSON + 禁止账户字段", () => {
@@ -199,36 +213,75 @@ describe("模型配置与 prompt", () => {
   });
 });
 
-describe("completeAiJson：模型接线的失败面", () => {
-  const config = { baseUrl: "https://model.test/v1", model: "m1", apiKey: "sk-test" };
+describe("completeAiJson：AI Gateway binding 接线", () => {
   const prompt = { system: "s", user: "u" };
+  const model = AI_MODEL;
 
-  it("成功：正确 URL / 鉴权 / JSON 模式，取 choices[0].message.content", async () => {
-    const calls: { url: string; init: RequestInit }[] = [];
-    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
-      calls.push({ url: String(url), init: init ?? {} });
+  interface RunCall {
+    model: string;
+    inputs: Record<string, unknown>;
+    options: Record<string, unknown>;
+  }
+
+  function runtimeWith(run: (call: RunCall) => Promise<unknown>): AiRuntime {
+    return {
+      binding: {
+        run: (model: string, inputs: Record<string, unknown>, options: Record<string, unknown>) =>
+          run({ model, inputs, options }),
+      } as unknown as Ai,
+      gatewayId: "studio",
+      metadata: { tenant: "7", product: AI_PRODUCT, task: "gateway-mapping" },
+    };
+  }
+
+  it("模型固定 deepseek flash；网关/元数据/隐私头一次带全", async () => {
+    const calls: RunCall[] = [];
+    const runtime = runtimeWith(async (call) => {
+      calls.push(call);
       return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 });
-    }) as typeof fetch;
+    });
 
-    const r = await completeAiJson(config, prompt, { fetchImpl });
+    const r = await completeAiJson(runtime, prompt);
     expect(r).toEqual({ ok: true, content: '{"ok":true}' });
-    expect(calls[0]!.url).toBe("https://model.test/v1/chat/completions");
-    expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe("Bearer sk-test");
-    const body = JSON.parse(String(calls[0]!.init.body)) as {
-      model: string;
+
+    const call = calls[0]!;
+    expect(call.model).toBe("deepseek/deepseek-flash");
+    expect(call.model).toBe(model);
+
+    const body = call.inputs as {
       temperature: number;
       response_format: { type: string };
       messages: { role: string }[];
     };
-    expect(body.model).toBe("m1");
     expect(body.temperature).toBe(0);
     expect(body.response_format.type).toBe("json_object");
     expect(body.messages.map((m) => m.role)).toEqual(["system", "user"]);
+
+    const options = call.options as {
+      gateway: { id: string; metadata: Record<string, string> };
+      extraHeaders: Record<string, string>;
+      returnRawResponse: boolean;
+      signal: AbortSignal;
+    };
+    expect(options.gateway.id).toBe("studio");
+    expect(options.gateway.metadata).toEqual({
+      tenant: "7",
+      product: "crm",
+      task: "gateway-mapping",
+    });
+    expect(options.extraHeaders["cf-aig-collect-log-payload"]).toBe("false");
+    expect(options.returnRawResponse).toBe(true);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("上游 HTTP 错误 → ai_upstream_error（不泄漏上游报文）", async () => {
-    const fetchImpl = (async () => new Response("vendor says: bad key", { status: 401 })) as typeof fetch;
-    const r = await completeAiJson(config, prompt, { fetchImpl });
+  it("binding 直接回对象（非 Response）也能解析", async () => {
+    const runtime = runtimeWith(async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }));
+    expect(await completeAiJson(runtime, prompt)).toEqual({ ok: true, content: '{"ok":true}' });
+  });
+
+  it("网关 HTTP 错误 → ai_upstream_error（不泄漏上游报文）", async () => {
+    const runtime = runtimeWith(async () => new Response("vendor: bad key", { status: 401 }));
+    const r = await completeAiJson(runtime, prompt);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.code).toBe("ai_upstream_error");
@@ -237,28 +290,49 @@ describe("completeAiJson：模型接线的失败面", () => {
     }
   });
 
+  it("网关错误信封 / binding 抛错 → 稳定提示，不把原文外泄", async () => {
+    const envelope = runtimeWith(async () =>
+      new Response(JSON.stringify({ success: false, error: [{ code: 2001, message: "byok missing" }] }), {
+        status: 200,
+      }),
+    );
+    const a = await completeAiJson(envelope, prompt);
+    expect(a.ok).toBe(false);
+    if (!a.ok) {
+      expect(a.message).toContain("BYOK");
+      expect(a.message).not.toContain("byok missing");
+    }
+
+    const thrown = runtimeWith(async () => {
+      throw new Error("AiGatewayError: gateway not found");
+    });
+    const b = await completeAiJson(thrown, prompt);
+    expect(b.ok).toBe(false);
+    if (!b.ok) expect(b.message).not.toContain("gateway not found");
+  });
+
   it("超时 → ai_timeout", async () => {
-    const fetchImpl = ((_url: string, init?: RequestInit) =>
-      new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => {
-          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
-        });
-      })) as unknown as typeof fetch;
+    const runtime = runtimeWith(
+      (call) =>
+        new Promise((_resolve, reject) => {
+          (call.options.signal as AbortSignal).addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        }),
+    );
     const started = Date.now();
-    const r = await completeAiJson(config, prompt, { fetchImpl, timeoutMs: 5 });
+    const r = await completeAiJson(runtime, prompt, { timeoutMs: 5 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("ai_timeout");
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it("返回体不是 JSON / 没有 content", async () => {
-    const notJson = (async () => new Response("hello", { status: 200 })) as typeof fetch;
-    const a = await completeAiJson(config, prompt, { fetchImpl: notJson });
-    expect(a.ok).toBe(false);
+    const notJson = runtimeWith(async () => new Response("hello", { status: 200 }));
+    expect((await completeAiJson(notJson, prompt)).ok).toBe(false);
 
-    const empty = (async () =>
-      new Response(JSON.stringify({ choices: [] }), { status: 200 })) as typeof fetch;
-    const b = await completeAiJson(config, prompt, { fetchImpl: empty });
+    const empty = runtimeWith(async () => ({ choices: [] }));
+    const b = await completeAiJson(empty, prompt);
     expect(b.ok).toBe(false);
     if (!b.ok) expect(b.message).toContain("没有返回内容");
   });

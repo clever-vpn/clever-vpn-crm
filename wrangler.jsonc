@@ -16,6 +16,14 @@
   "observability": {
     "enabled": true
   },
+  // AI binding：AI 配置助手走 AI Gateway（与 site-studio 同一个模式）。
+  // binding 在账号内预认证、厂商 key 由网关 BYOK 注入 ⇒ Worker 里没有任何厂商密钥。
+  // **不写 `remote: true`**：写它会让 vitest 的 workers 池也去开远程代理（要求
+  // CLOUDFLARE_API_TOKEN），本地测试全挂；`wrangler dev` 本来就会连线上账号。
+  // 空 `CLOUDFLARE_GATEWAY_ID`（见 vars）= 不启用该功能。
+  "ai": {
+    "binding": "AI"
+  },
   // **只有一个时钟**：`*/2` 是"队列泵的心跳"，不是"所有活每 2 分钟干一遍"。
   // 具体分频在 `src/index.ts` 的 `scheduled()` 里：
   //   门 B（距上次 ≥55 分钟，自愈门）→ 补落账 / 周期结算 / 到期礼包探测，独占该 tick
@@ -70,9 +78,9 @@
     // 官网（独立静态站）地址。留空则根路径显示一句部署提示。
     // 跨域调用 /api/app/v1 不需要任何白名单：CORS 是浏览器规矩，不是信任名单。
     "SITE_URL": "",
-    // AI 配置助手（可选）：OpenAI 兼容端点与模型。与 secret AI_API_KEY 同时配置才启用；
-    // 缺任何一项时后台显示"未配置"，不会偷偷换模型（docs/protocols/ai.md §8）。
-    "AI_BASE_URL": "",
-    "AI_MODEL": ""
+    // AI 配置助手（可选）：AI Gateway 名称（我们的是 `studio`）。
+    // 空 = 不启用；不配时后台显示"未配置"，模板导入/手填不受影响。
+    // 模型固定 deepseek/deepseek-flash，厂商 key 只在网关 BYOK（docs/protocols/ai.md §8）。
+    "CLOUDFLARE_GATEWAY_ID": ""
   }
 }
