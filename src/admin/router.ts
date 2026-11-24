@@ -21,6 +21,7 @@ import {
 import { consumeCode, issueCode } from "./email-code";
 import { handleAdminPlans } from "./plans";
 import { handleAdminGateways } from "./gateways";
+import { handleAdminGatewayAi } from "./gateway-ai";
 import { handleAdminStoreChannels } from "./store-channels";
 import { handleAdminPromotions } from "./promotions";
 import { handleAdminSettings } from "./settings";
@@ -492,6 +493,10 @@ export async function handleAdminApi(
   // ── 支付网关（唯一能创建网关的地方）────────────────────────────────
   const gatewaysResponse = await handleAdminGateways(request, env, admin.email);
   if (gatewaysResponse) return gatewaysResponse;
+
+  // ── AI 配置助手：文档 → 模板 v2 草稿（只生成、不落库）──────────────
+  const gatewayAiResponse = await handleAdminGatewayAi(request, env, admin.email);
+  if (gatewayAiResponse) return gatewayAiResponse;
 
   // ── 商店渠道（Apple / Google 凭证；不是网关，见契约 §2.4.3.1）──────
   const storesResponse = await handleAdminStoreChannels(request, env, admin.email);

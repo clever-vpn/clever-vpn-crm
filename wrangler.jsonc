@@ -69,6 +69,10 @@
     "ENVIRONMENT": "development",
     // 官网（独立静态站）地址。留空则根路径显示一句部署提示。
     // 跨域调用 /api/app/v1 不需要任何白名单：CORS 是浏览器规矩，不是信任名单。
-    "SITE_URL": ""
+    "SITE_URL": "",
+    // AI 配置助手（可选）：OpenAI 兼容端点与模型。与 secret AI_API_KEY 同时配置才启用；
+    // 缺任何一项时后台显示"未配置"，不会偷偷换模型（docs/protocols/ai.md §8）。
+    "AI_BASE_URL": "",
+    "AI_MODEL": ""
   }
 }

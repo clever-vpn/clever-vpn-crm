@@ -519,6 +519,9 @@ export const api = {
   deleteGateway: (id: number) => call<{ ok: true }>("DELETE", `/gateways/${id}`),
   copyGateway: (id: number) =>
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/copy`),
+  /** AI 配置助手：文档 → 模板 v2 草稿（只生成，不保存/不发布） */
+  gatewayAiDraft: (document: string) =>
+    call<{ draft: GatewayAiDraft; model: string }>("POST", "/gateways/ai-draft", { document }),
   /** 测试支付：只验"这条网关能不能收钱"，不产生订阅（`source='test'` 的测试单） */
   testGateway: (id: number, input: { method?: string; amount_minor?: number } = {}) =>
     call<{ order_code: string; pay_url: string; amount_minor: number; currency: string; test_ready?: boolean; callback_required?: boolean }>(
@@ -792,10 +795,30 @@ export interface StoreChannelsResponse {
   secret_key_ready: boolean;
 }
 
+/** AI 配置助手生成的模板草稿（`docs/protocols/ai.md` §1） */
+export interface GatewayAiTemplate {
+  schema_version: 2;
+  id: string;
+  name: string;
+  description?: string;
+  source: "ai";
+  mapping: import("./mapping-form").GatewayMappingLike;
+}
+
+export interface GatewayAiDraft {
+  classification: "generic_mapping" | "driver" | "unsupported";
+  /** driver / unsupported 为 null */
+  template: GatewayAiTemplate | null;
+  evidence: { section: string; quote: string }[];
+  uncertainty: string[];
+}
+
 export interface GatewaysResponse {
   gateways: GatewayView[];
   mock_enabled: boolean;
   secret_key_ready: boolean;
+  /** AI 配置助手是否已配置（AI_API_KEY / AI_MODEL / AI_BASE_URL 齐全） */
+  ai_ready: boolean;
   drivers: { driver: string; methods: string[] }[];
   all_methods: string[];
 }

@@ -100,6 +100,16 @@ export interface Env {
   TURNSTILE_SECRET?: string;
 
   /**
+   * AI 配置助手（`docs/protocols/ai.md` §8）：OpenAI 兼容端点。
+   *
+   * 三项**必须同时配置**才算可用；缺一项返回 `ai_unavailable`，不会偷偷换模型。
+   * key 只在这里（`wrangler secret put AI_API_KEY`），永不进前端。
+   */
+  AI_BASE_URL?: string;
+  AI_MODEL?: string;
+  AI_API_KEY?: string;
+
+  /**
    * **测试网关（`driver = 'mock'`）的总开关**，默认关闭（`docs/payments.md` §5.3）。
    *
    * 为 `"true"` 时，mock 网关才能创建/发布并参与路由。

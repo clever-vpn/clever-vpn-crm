@@ -233,6 +233,9 @@
 - `id`：1–64 位小写字母/数字/连字符，文件内唯一；
 - `name`：1–80 字；
 - `source`：`official` / `community` / `ai` / `imported`；
+- `ai` = AI 配置助手生成的草稿（未经人工审核）；输出契约见
+  [`protocols/ai.md`](protocols/ai.md)——`schema_version` 固定 2，模板内 `source` 固定 `ai`，
+  且必须通过 `validateMapping` + JSON Schema 才会返回前端；
 - 导入时 `source` 统一标记为 `imported`；
 - 官方模板：`web/src/templates/qwgua.json`、`xarrpay.json`。
 
@@ -251,4 +254,5 @@
 - `web/src/mapping-form.ts` / `GatewayMappingEditor.tsx`（结构化表单映射到 v2）；
 - `web/src/templates/{qwgua,xarrpay}.json`；
 - `test/payments/template-schema.test.ts`、`test/web/mapping-form.test.ts`；
+- `docs/protocols/ai.md`（AI 输出契约 v2，示例由 `test/payments/ai.test.ts` 校验）；
 - 四个演示网关按 v2 重建。

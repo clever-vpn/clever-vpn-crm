@@ -43,7 +43,7 @@
 - `yihong.md`：亿宏；
 - `xarrpay-native.md`：XArrPay 原生；
 - `prague.md`：布拉格（响应验签）；
-- `ai.md`：文档 → mapping 的 schema、prompt、评测与分类规则。
+- `ai.md`：文档 → 模板 v2 的输出契约、prompt、校验流水线、服务端端点与评测。
 
 ## 5. 已知缺口
 

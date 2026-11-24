@@ -710,6 +710,7 @@ export default function GatewayEditor({ mode, id }: Props) {
                           }}
                           attempted={mappingAttempted}
                           gatewayName={nameWatch ?? editing?.name ?? ""}
+                          aiReady={Boolean(data?.ai_ready)}
                         />
                       </>
                     ),

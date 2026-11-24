@@ -51,6 +51,7 @@ Secrets（加密，不可读回）：
 | `APP_SECRET` | 随便一串 ≥32 字符的随机值，**唯一的主密钥**：① HMAC 一次性证明（退订链接 / mock 回调）② AES-GCM 加密落库（网关密钥 / 商店凭据 / cf-api token）。两个用途用派生后不同的字节。换掉 = 已发出的退订链接失效 + 已存的密钥全部要重填，**定了就别换** |
 | `SETUP_TOKEN` | 管理后台首次初始化口令（`openssl rand -hex 24`）；不配则不能初始化管理员 |
 | `RESEND_API_KEY` | 发信服务商 API key（与 `EMAIL` 绑定二选一，见下方"邮件"一节） |
+| `AI_API_KEY` | 可选：AI 配置助手的模型 key（与 `AI_BASE_URL` / `AI_MODEL` 同时配置才启用，见 §2.6） |
 
 Variables（明文）：
 
@@ -64,6 +65,8 @@ Variables（明文）：
 | `EMAIL_FROM` | – | 发信人地址（如 `noreply@your-domain.com`，域名需验证）；**与传输一起才算"邮件就绪"** |
 | `STUDIO_SITE_URL` | 站点必填 | site-studio 的地址（如 `https://site-studio.clever-vpn.org` 或你自己的）。**不配就没有站点上线路径** —— 后台「打开设计器」会报 `studio_not_configured` |
 | `SITE_URL` | 站点必填 | 站点对外地址（`site-serve` 绑的域名）。只用于给租户一个「点开看线上」的链接；不配就是不给链接，**绝不拿 CRM 的 origin 冒充** |
+| `AI_BASE_URL` | – | 可选：AI 配置助手的 OpenAI 兼容端点基址（如 `https://api.deepseek.com/v1`） |
+| `AI_MODEL` | – | 可选：模型 id（如 `deepseek-chat`） |
 
 > `CLOUDFLARE_API_TOKEN` 建议单独建一把、只给这个仓库用；它是"能改你 Cloudflare
 > 账号"的密钥，不要复用主账号 token。
@@ -102,6 +105,22 @@ Variables（明文）：
 
 > 合规提醒：Cloudflare Email Service **只用于交易类邮件**。不要拿它发促销群发
 > （"全场 8 折""限时抢购"），那会打掉发信域名信誉，**连带验证码登录一起挂**。
+
+## 2.6 AI 配置助手（可选）
+
+后台「接口配置」里的「AI 配置助手」可以把厂商接口文档生成 v2 模板草稿。**默认关闭**：
+下面三项同时配置才开放，缺任何一项服务端返回 `ai_unavailable`，面板只显示「未配置」，
+模板导入/手填不受影响。
+
+| 类型 | 名称 | 内容 |
+|---|---|---|
+| Secret | `AI_API_KEY` | 模型提供商 key（只在 Worker 里，永不下发前端） |
+| Variable | `AI_BASE_URL` | OpenAI 兼容端点基址，如 `https://api.deepseek.com/v1` |
+| Variable | `AI_MODEL` | 模型 id，如 `deepseek-chat` |
+
+- 生成时会把**你粘贴的文档正文**发给该提供商；不发送网关密钥，但**别把凭据、商户号贴进文档**；
+- 每小时最多生成 20 次；模型/上游失败只回稳定错误码，不回显厂商报文；
+- AI 只产草稿：不自动保存、不自动发布，应用后仍要完成「创建 + 查单」测试（开启回调验证时还要真实回调）。
 
 ## 3. 跑一次 deploy
 

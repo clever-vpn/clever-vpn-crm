@@ -39,6 +39,7 @@ import {
   type WhenInput,
 } from "../mapping-form";
 import { OFFICIAL_TEMPLATES, parseTemplateText, type PaymentTemplate } from "../payment-templates";
+import { api, ApiError, type GatewayAiDraft } from "../api";
 
 interface Props {
   initial: unknown;
@@ -52,6 +53,8 @@ interface Props {
   attempted?: boolean;
   /** 导出模板时用的网关名 */
   gatewayName?: string;
+  /** AI 配置助手是否已配置（服务端 `ai_ready`）；未配置时只展示说明 */
+  aiReady?: boolean;
 }
 
 const FIELD_ROWS: {
@@ -324,7 +327,7 @@ function ResponseSignEditor({
   );
 }
 
-export default function GatewayMappingEditor({ initial, methods, endpoint, onChange, onStatus, attempted = false, gatewayName }: Props) {
+export default function GatewayMappingEditor({ initial, methods, endpoint, onChange, onStatus, attempted = false, gatewayName, aiReady = false }: Props) {
   const [boot] = useState(() => {
     const result = fromMapping(initial, methods);
     return {
@@ -351,6 +354,11 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [openSections, setOpenSections] = useState<string[]>(["create"]);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const [aiDoc, setAiDoc] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiDraft, setAiDraft] = useState<GatewayAiDraft | null>(null);
+  const [aiErrors, setAiErrors] = useState<string[]>([]);
+  const [aiApplied, setAiApplied] = useState(false);
 
   useEffect(() => {
     if (attempted) setOpenSections(["create"]);
@@ -372,6 +380,13 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   }, []);
   const description = useMemo(() => describeMapping(state), [state]);
   const warnings = [...issues, ...description.warnings];
+
+  /** AI 草稿的只读预览：走与「导入模板」同一条 fromMapping，不另造格式 */
+  const aiPreview = useMemo(() => {
+    if (!aiDraft?.template) return null;
+    const parsed = fromMapping(aiDraft.template.mapping, methods);
+    return { issues: parsed.issues, description: describeMapping(parsed.state) };
+  }, [aiDraft, methods]);
   const createMissing = missing.filter((c) => c.key.startsWith("create.") || c.key.startsWith("fields.") || c.key.startsWith("response.") || c.key === "sign").length;
   const callbackMissing = missing.filter((c) => c.key.startsWith("notify.")).length;
   const queryMissing = missing.filter((c) => c.key.startsWith("query.")).length;
@@ -397,6 +412,45 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     setJsonDirty(false);
     emit(result.state, false);
     message.success(`已应用模板：${label}（未保存）`);
+  }
+
+  async function generateAiDraft(): Promise<void> {
+    const document = aiDoc.trim();
+    if (document.length < 200) {
+      message.warning("接口文档至少 200 字");
+      return;
+    }
+    setAiBusy(true);
+    setAiErrors([]);
+    setAiDraft(null);
+    setAiApplied(false);
+    try {
+      const res = await api.gatewayAiDraft(document);
+      setAiDraft(res.draft);
+      if (res.draft.classification !== "generic_mapping") {
+        message.warning("这份文档需要代码驱动或信息不足，AI 没有生成映射");
+      }
+    } catch (e) {
+      const detail = e instanceof ApiError
+        ? ((e.body?.details as { errors?: unknown } | undefined)?.errors)
+        : undefined;
+      setAiErrors(
+        Array.isArray(detail) && detail.length
+          ? detail.map((x) => String(x))
+          : [e instanceof ApiError ? e.message || e.code : "生成失败"],
+      );
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  function applyAiDraft(): void {
+    if (!aiDraft?.template) return;
+    if (!window.confirm(`应用 AI 草稿「${aiDraft.template.name}」到当前接口配置？应用后仍可修改，点保存才入库。`)) {
+      return;
+    }
+    applyTemplate(aiDraft.template.mapping, `AI 草稿：${aiDraft.template.name}`);
+    setAiApplied(true);
   }
 
   const [exportOpen, setExportOpen] = useState(false);
@@ -893,12 +947,122 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
       )}
       <div style={{ marginBottom: 12 }}>
         {aiOpen && (
-          <Alert
-            type="info"
-            showIcon
-            message="AI 配置助手（下一阶段）"
-            description="目标是从接口文档生成接口配置草稿并应用到这张表单；模型接入后开放。它不自动保存、不接触密钥。"
-          />
+          <div className="card" style={{ padding: 12 }}>
+            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Typography.Text type="secondary">
+                粘贴厂商接口文档（三端点、签名、金额单位、状态码）。只生成协议类型，不含网关地址/商户号/密钥/通道号；
+                不会自动保存或发布。
+              </Typography.Text>
+              {!aiReady && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="AI 配置助手未配置"
+                  description="服务端需要同时设置 AI_API_KEY、AI_MODEL、AI_BASE_URL 才会开放；现在仍可用模板导入。"
+                />
+              )}
+              <Input.TextArea
+                rows={8}
+                className="mono"
+                value={aiDoc}
+                disabled={!aiReady || aiBusy}
+                onChange={(e) => setAiDoc(e.target.value)}
+                placeholder="粘贴厂商接口文档正文（下单 / 回调 / 查单、签名、金额单位、状态码）"
+              />
+              <Space align="center">
+                <Button
+                  type="primary"
+                  loading={aiBusy}
+                  disabled={!aiReady || aiDoc.trim().length < 200}
+                  onClick={() => void generateAiDraft()}
+                >
+                  生成草稿
+                </Button>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {[...aiDoc.trim()].length} 字（至少 200；上限 60KB）
+                </Typography.Text>
+              </Space>
+              {aiErrors.map((err, i) => <Alert key={i} type="error" showIcon message={err} />)}
+              {aiApplied && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="已应用到表单（未保存）"
+                  description="AI 草稿不等于测试通过：保存后仍要完成「创建 + 查单」测试；开启回调验证时还要真实回调才能发布。"
+                />
+              )}
+              {aiDraft && (
+                <>
+                  <Space wrap>
+                    <Tag color={aiDraft.classification === "generic_mapping" ? "green" : "orange"}>
+                      {aiDraft.classification}
+                    </Tag>
+                    {aiDraft.template && <Typography.Text strong>{aiDraft.template.name}</Typography.Text>}
+                    {aiDraft.template && <Typography.Text type="secondary" code>{aiDraft.template.id}</Typography.Text>}
+                  </Space>
+                  {aiDraft.template ? (
+                    <>
+                      <Alert type="info" showIcon message="AI 草稿，未审核；应用后请人工核对并测试支付" />
+                      {aiPreview && (
+                        <div>
+                          <Typography.Text strong>预览</Typography.Text>
+                          <div style={{ marginTop: 4 }}>
+                            {aiPreview.description.rows.map((row) => (
+                              <div
+                                key={row.label}
+                                style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: 8, fontSize: 12, padding: "3px 0", borderBottom: "1px solid #f7f7f7" }}
+                              >
+                                <span style={{ color: "#999" }}>{row.label}</span>
+                                <span>{row.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                          {aiPreview.issues.map((x, i) => <Alert key={`i${i}`} type="warning" showIcon message={x} />)}
+                          {aiPreview.description.warnings.map((x, i) => <Alert key={`w${i}`} type="warning" showIcon message={x} />)}
+                        </div>
+                      )}
+                      <Space>
+                        <Button type="primary" onClick={applyAiDraft}>应用到表单</Button>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>应用 ≠ 保存；保存后仍需重新测试。</Typography.Text>
+                      </Space>
+                    </>
+                  ) : (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message={`classification = ${aiDraft.classification}`}
+                      description={
+                        aiDraft.classification === "driver"
+                          ? "这份协议需要代码驱动（RSA 双向签名 / OAuth / 远程验签等），不能只靠映射配置。"
+                          : "文档缺少查单或三端点不全，无法生成通用映射。"
+                      }
+                    />
+                  )}
+                  {aiDraft.evidence.length > 0 && (
+                    <div>
+                      <Typography.Text strong>依据</Typography.Text>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                        {aiDraft.evidence.map((e, i) => (
+                          <li key={i}>
+                            <Typography.Text type="secondary">{e.section}：</Typography.Text>
+                            {e.quote}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {aiDraft.uncertainty.length > 0 && (
+                    <div>
+                      <Typography.Text strong>不确定点</Typography.Text>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                        {aiDraft.uncertainty.map((u, i) => <li key={i}>{u}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              )}
+            </Space>
+          </div>
         )}
       </div>
       {formTab}
