@@ -1,4 +1,4 @@
-# 支付接口模板 / 高级 JSON 规范（v2）
+# 支付接口模板 / mapping 规范（v2）
 
 > 机器可读 schema：[`payment-templates.schema.json`](payment-templates.schema.json)
 > 运行时语义权威：`src/payments/mapping.ts` 的 `validateMapping()`。
@@ -6,9 +6,9 @@
 
 ## 1. 两个层次
 
-- **高级 JSON**：后台「接口配置 → 高级 JSON」里的对象，也就是存进
+- **mapping**：后台「接口配置」表单背后的对象，也就是存进
   `payment_gateways.mapping` 的对象；
-- **模板文件**：在高级 JSON 外面包一层元数据，用于分发/导入/AI 导出。
+- **模板文件**：在 mapping 外面包一层元数据，用于分发/导入/AI 导出。
 
 ```json
 {
@@ -17,12 +17,12 @@
   "name": "泡泡 / 青蛙",
   "description": "JSON、MD5、元、北京时间 ymdhms；响应 data.sign",
   "source": "official",
-  "mapping": { ...高级 JSON... }
+  "mapping": { ...mapping... }
 }
 ```
 
 - `schema_version` **只在模板 envelope**；mapping 本身不带版本号；
-- `mapping` 与高级 JSON 完全同构；
+- `mapping` 与表单导出/导入的对象完全同构；
 - 模板不包含 endpoint、merchant_id、secret、methods、channel_codes 等实例值。
 
 ## 2. mapping 根结构
@@ -217,7 +217,7 @@
 
 ## 9. 其它规则
 
-- `fields` 数组里的 `field` 在同一请求内必须唯一；响应里可以有多个 `role: "pay_url"`，按数组顺序取第一个非空；
+- `fields` 数组里的 `field` 在同一请求内必须唯一；响应里可以有多个 `role: "pay_url"`，按数组顺序取第一个非空；但租户表单和官方模板只暴露一个页面 URL，额外 fallback 只作为导入模板兼容，不支持租户在表单里新增；
 - 请求占位符：`{merchant}` `{secret}` `{order_no}` `{amount}` `{subject}` `{body}` `{notify_url}` `{return_url}` `{client_ip}` `{channel}` `{timestamp}` `{nonce}`；
 - `channel` 的值来自网关实例的通道号，不在 mapping 中存具体值；
 - 实例值：endpoint、merchant_id、secret、methods、channel_codes、优先级、白名单不属于 mapping；
@@ -242,7 +242,7 @@
 - 不做 v1 运行时适配；
 - 旧 mapping 需要一次性改写为 v2；
 - 当前四个演示网关在实现完成后按 v2 重建；
-- 模板/高级 JSON/schema/运行时/表单/测试同批更新。
+- 模板/mapping/schema/运行时/表单/测试同批更新。
 
 ## 12. 已同步
 
