@@ -12,6 +12,7 @@
  */
 
 import { AI_LIMITS, aiRuntime, generateAiDraft } from "../payments/ai";
+import { evaluateAiDraft } from "../payments/ai-gate";
 
 import type { Env } from "../env";
 
@@ -88,16 +89,14 @@ export async function handleAdminGatewayAi(
 
   // 调用 → 校验 → 失败把 errors 回灌重写（最多 AI_LIMITS.maxAttempts 次）
   const generation = await generateAiDraft(runtime, document);
-  await auditDraft(env, actor, {
-    ok: generation.ok,
-    model: runtime.model,
-    attempts: generation.attempts,
-    ...(generation.ok
-      ? { classification: generation.draft.classification }
-      : { code: generation.code, errors: generation.errors.slice(0, 5) }),
-  });
-
   if (!generation.ok) {
+    await auditDraft(env, actor, {
+      ok: false,
+      model: runtime.model,
+      attempts: generation.attempts,
+      code: generation.code,
+      errors: generation.errors.slice(0, 5),
+    });
     // 模型已被调用过，成本已经发生；失败也计数（限流按请求，不按 attempt）
     if (generation.code === "invalid_draft") {
       return fail(422, "invalid_draft", "AI 输出未通过校验，请重试或换一份文档", {
@@ -107,5 +106,21 @@ export async function handleAdminGatewayAi(
     }
     return fail(502, generation.code, generation.message);
   }
-  return json({ draft: generation.draft, model: runtime.model, attempts: generation.attempts });
+
+  // 规则闸门：AI 只给 evidence/uncertainty，是否「有依据」由这里裁决
+  const gate = evaluateAiDraft(document, generation.draft);
+  await auditDraft(env, actor, {
+    ok: true,
+    model: runtime.model,
+    attempts: generation.attempts,
+    classification: generation.draft.classification,
+    gate: gate.status,
+    warnings: gate.warnings.length,
+  });
+  return json({
+    draft: generation.draft,
+    model: runtime.model,
+    attempts: generation.attempts,
+    gate,
+  });
 }

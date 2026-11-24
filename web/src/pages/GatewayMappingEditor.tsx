@@ -39,7 +39,7 @@ import {
   type WhenInput,
 } from "../mapping-form";
 import { OFFICIAL_TEMPLATES, parseTemplateText, type PaymentTemplate } from "../payment-templates";
-import { api, ApiError, type GatewayAiDraft } from "../api";
+import { api, ApiError, type GatewayAiDraft, type GatewayAiGate } from "../api";
 import { readAiDocument } from "../ai-doc";
 
 interface Props {
@@ -359,6 +359,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const [aiDoc, setAiDoc] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [aiDraft, setAiDraft] = useState<GatewayAiDraft | null>(null);
+  const [aiGate, setAiGate] = useState<GatewayAiGate | null>(null);
   const [aiErrors, setAiErrors] = useState<string[]>([]);
   const [aiApplied, setAiApplied] = useState(false);
   const [aiFileName, setAiFileName] = useState("");
@@ -426,10 +427,12 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     setAiBusy(true);
     setAiErrors([]);
     setAiDraft(null);
+    setAiGate(null);
     setAiApplied(false);
     try {
       const res = await api.gatewayAiDraft(document);
       setAiDraft(res.draft);
+      setAiGate(res.gate);
       if (res.draft.classification !== "generic_mapping") {
         message.warning("这份文档需要代码驱动或信息不足，AI 没有生成映射");
       }
@@ -458,12 +461,17 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     setAiDoc(result.text);
     setAiFileName(file.name);
     setAiDraft(null);
+    setAiGate(null);
     setAiApplied(false);
     message.success(`已导入 ${file.name}（${[...result.text].length} 字）`);
   }
 
   function applyAiDraft(): void {
     if (!aiDraft?.template) return;
+    if (aiGate?.status === "insufficient") {
+      message.warning("文档不完整，不能应用；请先向厂商索取更完整的接口文档");
+      return;
+    }
     if (!window.confirm(`应用 AI 草稿「${aiDraft.template.name}」到当前接口配置？应用后仍可修改，点保存才入库。`)) {
       return;
     }
@@ -1044,7 +1052,32 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                     </Tag>
                     {aiDraft.template && <Typography.Text strong>{aiDraft.template.name}</Typography.Text>}
                     {aiDraft.template && <Typography.Text type="secondary" code>{aiDraft.template.id}</Typography.Text>}
+                    {aiGate?.status === "complete" && <Tag color="green">完整性校验通过</Tag>}
                   </Space>
+                  {aiGate?.status === "soft_gaps" && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="文档可能不完整，建议向厂商索取更完整的文档"
+                      description={
+                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          {aiGate.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                        </ul>
+                      }
+                    />
+                  )}
+                  {aiGate?.status === "insufficient" && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="文档不完整，无法应用"
+                      description={
+                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          {aiGate.missing.map((m, i) => <li key={i}>{m}</li>)}
+                        </ul>
+                      }
+                    />
+                  )}
                   {aiDraft.template ? (
                     <>
                       <Alert type="info" showIcon message="AI 草稿，未审核；应用后请人工核对并测试支付" />
@@ -1067,7 +1100,9 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                         </div>
                       )}
                       <Space>
-                        <Button type="primary" onClick={applyAiDraft}>应用到表单</Button>
+                        <Button type="primary" disabled={aiGate?.status === "insufficient"} onClick={applyAiDraft}>
+                          应用到表单
+                        </Button>
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>应用 ≠ 保存；保存后仍需重新测试。</Typography.Text>
                       </Space>
                     </>

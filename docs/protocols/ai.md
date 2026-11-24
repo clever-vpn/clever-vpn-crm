@@ -82,7 +82,7 @@
 
 ## 4. 校验（服务端流水线）
 
-模型输出是不可信数据，按顺序过四道：
+模型输出是不可信数据，按顺序过以下步骤：
 
 1. **解析**：允许被 ```json 代码块包裹（剥壳），剥完必须是一个 JSON 对象；
    代码块外有其它文字、尾逗号、注释 ⇒ 失败；
@@ -97,7 +97,17 @@
    测试里用 Ajv 对 AI 输出样例跑完整 schema，防止三者漂移。
 5. **失败重写**：任一步失败就把字段级 `errors` 回灌给模型（上一轮输出作
    `assistant` 消息），要求只输出修正后的完整 JSON；最多 2 次。网络/超时**不**重写，
-   避免不可控长尾。仍不合法才返回 `422 invalid_draft`。
+   避免不可控长尾。仍不合法才返回 `422 invalid_draft`；
+6. **completeness gate**：结构通过后，用**文档原文 + evidence**做确定性回查
+   （`src/payments/ai-gate.ts`），不调用模型。它回答的是「事实有没有依据」：
+   - `complete`：没有可疑项；
+   - `soft_gaps`：例如 `pay_url` 指向对象前缀/文档找不到叶子字段、嵌套
+     `response.sign` 缺 `data_path`、`reply` 不在文档里、evidence 引用伪造、
+     `key_append` 写成 `{secret}`、文档出现“请联系客服获取/未说明”等 → 可应用但
+     必须警告；
+   - `insufficient`：`classification` 不是通用映射或 mapping 结构不合法 → 不能应用。
+   AI 的 `uncertainty` 只是输入信号，**不是裁决**；有 warnings 但 uncertainty 为空时
+   会追加一条提示。
 
 失败必须**可解释**：返回具体字段路径和原因（如
 `create.response.fields 缺少 role=pay_url`），不要只说「AI 输出不合法」。
@@ -106,9 +116,13 @@
 ## 5. 评测
 
 - 四家作为 held-out；
-- 评分：三端点字段是否齐全、签名是否可验证、金额单位、状态码、响应验签分类；
+- 评分：三端点字段是否齐全、签名是否可验证、金额单位、状态码、响应验签分类、
+  gate 状态、evidence 是否可回查、attempts/耗时；
 - 对 `driver` / `unsupported` 也要评分，不能强行生成 mapping；
-- 评测样例的期望输出必须能通过 §4 的同一套校验。
+- 评测样例的期望输出必须能通过 §4 的同一套校验；
+- P0 手动评测脚本：`test/payments/ai-eval.test.ts`（默认跳过，`AI_EVAL=1 npm run ai:eval`），
+  需要先 `npm run dev:local` 且 `wrangler login`。它打 report 而不是做 CI 门禁；
+  fixture 差异只记录、不直接判失败（合法变体/文档歧义很常见）。
 
 ## 6. 数据边界
 
@@ -128,7 +142,9 @@
   （MHTML 取正文最长的 HTML part；均在浏览器本地转文本，不上传原文件）；
   PDF / Word / 图片不支持，提示另存为文本或粘贴；
 - Stripe/PayPal/epay_v2/epay_v1 不显示；
-- 目标是生成草稿 + 依据 + 不确定点，应用到同一张映射表单；
+- 目标是生成草稿 + 依据 + 不确定点 + **完整性闸门**，应用到同一张映射表单；
+- `soft_gaps` 黄色警告并列出未证实项；`insufficient` 红色警告并禁用「应用到表单」，
+  提示向厂商索取更完整的文档；
 - 不自动保存、不自动发布，永不接触密钥；
 - 应用后仍必须走「创建 + 查单」测试；开启 `test_require_callback` 时还要真实回调；
 - 列表页仍保留发布/测试。
@@ -140,12 +156,18 @@
 | 项 | 说明 |
 |---|---|
 | 请求 | `{ "document": "厂商接口文档正文" }`，≥200 字、≤60 KB |
-| 成功（可生成） | `{ draft: { classification:"generic_mapping", template, evidence, uncertainty }, model, attempts }` |
-| 成功（不可生成） | `{ draft: { classification:"driver"\|"unsupported", template:null, evidence, uncertainty }, model, attempts }` |
+| 成功（可生成） | `{ draft: { classification:"generic_mapping", template, evidence, uncertainty }, model, attempts, gate }` |
+| 成功（不可生成） | `{ draft: { classification:"driver"\|"unsupported", template:null, evidence, uncertainty }, model, attempts, gate }` |
 | 输出不合法 | `422 invalid_draft` + `details.errors[]`（字段路径 + 原因）+ `details.attempts` |
 | 未配置 | `503 ai_unavailable`（没配 AI binding / `CLOUDFLARE_GATEWAY_ID`，或租户 ID 不是数字） |
 | 超限 | `429 ai_rate_limited`，每小时 20 次 |
 | 模型故障 | `502 ai_upstream_error`，不把厂商原始报文回给前端 |
+
+`gate` 形如：
+
+```json
+{ "status": "complete | soft_gaps | insufficient", "missing": ["..."], "warnings": ["..."] }
+```
 
 配置与 site-studio **同一套**：AI binding → AI Gateway，Worker 里没有任何厂商 key。
 

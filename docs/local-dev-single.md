@@ -102,6 +102,18 @@ http://localhost:5181/admin/
   换 `studio-dev` 可把开发消耗/日志与生产分开。
 - 本地 D1 存 CRM 自己的数据；cf-api 调用走线上。
 
+### 3.1 AI 配置助手评测（手动，会真花钱）
+
+```bash
+npm run dev:local                 # 另开终端保持运行
+AI_EVAL=1 npm run ai:eval         # 四家样本 → 报告 + gate/差异
+```
+
+- 默认跳过（`AI_EVAL` 不为 1 时），不进 CI；
+- 需要 `wrangler login`（scope 含 `ai (write)`）和 `studio` 网关的 DeepSeek BYOK；
+- 报告默认写 `/tmp/ai-eval-report.json`，可用 `AI_EVAL_OUT` 改路径；
+- XArrPay 文档来自外链，抓取失败会跳过该样本；可用 `AI_EVAL_XARRPAY_FILE` 指定本地快照。
+
 **域名页不可用**：`MODE=single` 下 `/api/admin/domains` 返回 `supported:false`，
 页面只显示自部署说明。需要测试域名功能时用 multi 环境，不走这个入口。
 

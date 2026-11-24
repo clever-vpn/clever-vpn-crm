@@ -521,7 +521,7 @@ export const api = {
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/copy`),
   /** AI 配置助手：文档 → 模板 v2 草稿（只生成，不保存/不发布） */
   gatewayAiDraft: (document: string) =>
-    call<{ draft: GatewayAiDraft; model: string; attempts?: number }>(
+    call<{ draft: GatewayAiDraft; model: string; attempts?: number; gate: GatewayAiGate }>(
       "POST",
       "/gateways/ai-draft",
       { document },
@@ -815,6 +815,13 @@ export interface GatewayAiDraft {
   template: GatewayAiTemplate | null;
   evidence: { section: string; quote: string }[];
   uncertainty: string[];
+}
+
+/** 服务端确定性闸门：文档是否足以支撑这份草稿 */
+export interface GatewayAiGate {
+  status: "complete" | "soft_gaps" | "insufficient";
+  missing: string[];
+  warnings: string[];
 }
 
 export interface GatewaysResponse {

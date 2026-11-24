@@ -35,7 +35,7 @@ function call(path: string, init: { method?: string; body?: unknown } = {}, with
   );
 }
 
-const DOCUMENT = "厂商支付接口文档：POST /pay 下单，POST /notify 回调，POST /query 查单。".repeat(8);
+const DOCUMENT = "厂商支付接口文档：POST /pay 下单，POST /notify 回调（返回 OK），POST /query 查单。".repeat(8);
 
 const VALID_DRAFT = {
   classification: "generic_mapping",
@@ -174,11 +174,14 @@ describe("AI 配置助手端点", () => {
     const body = (await res.json()) as {
       draft: { classification: string; template: { schema_version: number; source: string; mapping: Record<string, unknown> } };
       model: string;
+      gate: { status: string; missing: string[]; warnings: string[] };
     };
     expect(body.model).toBe("deepseek/deepseek-flash");
     expect(body.draft.classification).toBe("generic_mapping");
     expect(body.draft.template.schema_version).toBe(2);
     expect(body.draft.template.source).toBe("ai");
+    expect(body.gate.status).toBe("complete");
+    expect(body.gate.warnings).toEqual([]);
     expect(run).toHaveBeenCalledTimes(1);
 
     // provider-native：entry 带 provider/endpoint/厂商模型 id；options 带计费 metadata
