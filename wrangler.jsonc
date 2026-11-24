@@ -16,14 +16,6 @@
   "observability": {
     "enabled": true
   },
-  // AI binding：AI 配置助手走 AI Gateway（与 site-studio 同一个模式）。
-  // binding 在账号内预认证、厂商 key 由网关 BYOK 注入 ⇒ Worker 里没有任何厂商密钥。
-  // **不写 `remote: true`**：写它会让 vitest 的 workers 池也去开远程代理（要求
-  // CLOUDFLARE_API_TOKEN），本地测试全挂；`wrangler dev` 本来就会连线上账号。
-  // 空 `CLOUDFLARE_GATEWAY_ID`（见 vars）= 不启用该功能。
-  "ai": {
-    "binding": "AI"
-  },
   // **只有一个时钟**：`*/2` 是"队列泵的心跳"，不是"所有活每 2 分钟干一遍"。
   // 具体分频在 `src/index.ts` 的 `scheduled()` 里：
   //   门 B（距上次 ≥55 分钟，自愈门）→ 补落账 / 周期结算 / 到期礼包探测，独占该 tick
@@ -81,6 +73,9 @@
     // AI 配置助手（可选）：AI Gateway 名称（我们的是 `studio`）。
     // 空 = 不启用；不配时后台显示"未配置"，模板导入/手填不受影响。
     // 模型固定 deepseek/deepseek-flash，厂商 key 只在网关 BYOK（docs/protocols/ai.md §8）。
+    // ⚠️ `ai` binding 不写在这里：它会让 `wrangler dev`/vitest 必须开远程代理
+    // （要求 CLOUDFLARE_API_TOKEN），破掉"本机零登录"的本地开发。
+    // 部署时由 `scripts/render-config.mjs` 按本变量注入（分片由 render-shard-config 注入）。
     "CLOUDFLARE_GATEWAY_ID": ""
   }
 }

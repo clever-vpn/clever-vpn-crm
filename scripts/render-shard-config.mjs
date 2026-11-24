@@ -108,7 +108,7 @@ const config = `// ⚠️ 自动生成，不要提交（.gitignore 已排除）�
     "html_handling": "none"
   },
   "observability": { "enabled": true },
-  "ai": { "binding": "AI" },
+  ${vars.CLOUDFLARE_GATEWAY_ID !== "" ? '"ai": { "binding": "AI" },' : ""}
   "send_email": [{ "name": "EMAIL" }],
   "kv_namespaces": [{ "binding": "HOSTS", "id": ${JSON.stringify(hostsKvId)} }],
   "r2_buckets": [{ "binding": "SITES", "bucket_name": ${JSON.stringify(sitesBucket)} }],
