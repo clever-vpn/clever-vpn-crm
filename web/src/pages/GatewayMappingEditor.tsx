@@ -394,6 +394,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [aiDoc, setAiDoc] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const aiRequestRef = useRef(0);
   const [aiDraft, setAiDraft] = useState<GatewayAiDraft | null>(null);
   const [aiGate, setAiGate] = useState<GatewayAiGate | null>(null);
   const [aiApplied, setAiApplied] = useState(false);
@@ -528,6 +529,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   }
 
   async function generateAiDraft(): Promise<void> {
+    if (aiBusy) return;
     if (aiSubmission.error) {
       setAiFailure({ kind: "input", title: "提交正文不可用", details: [aiSubmission.error] });
       return;
@@ -537,6 +539,8 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
       message.warning("提交正文至少 200 字（粘贴 + 附件合计）");
       return;
     }
+    const requestId = aiRequestRef.current + 1;
+    aiRequestRef.current = requestId;
     setAiBusy(true);
     setAiDraft(null);
     setAiGate(null);
@@ -545,6 +549,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     setAiMeta(null);
     try {
       const res = await api.gatewayAiDraft(document);
+      if (requestId !== aiRequestRef.current) return;
       setAiDraft(res.draft);
       setAiGate(res.gate);
       setAiMeta({ model: res.model, attempts: res.attempts ?? 1 });
@@ -565,6 +570,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
         return;
       }
       applyMapping(res.draft.template.mapping);
+      setTemplatePick("");
       setAiApplied(true);
       message.success("配置生成成功，已填入表单（未保存）");
     } catch (error) {
@@ -575,6 +581,8 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   }
 
   function resetAiResult(): void {
+    aiRequestRef.current += 1;
+    setAiBusy(false);
     setAiDraft(null);
     setAiGate(null);
     setAiApplied(false);
@@ -796,6 +804,28 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     applyTemplate(t.mapping, t.name);
     setTemplatePick(t.id);
     setImportOpen(false);
+    setAiOpen(false);
+    resetAiResult();
+  }
+
+  function openImportPanel(): void {
+    const next = !importOpen;
+    setImportOpen(next);
+    if (next) {
+      setAiOpen(false);
+      setTemplatePick("");
+      resetAiResult();
+    }
+  }
+
+  function toggleAiPanel(): void {
+    const next = !aiOpen;
+    setAiOpen(next);
+    if (next) {
+      setImportOpen(false);
+      setTemplatePick("");
+      resetAiResult();
+    }
   }
 
   function parseImport(): void {
@@ -813,6 +843,8 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     }
     setImportText(await file.text());
     setImportOpen(true);
+    setAiOpen(false);
+    resetAiResult();
   }
 
   function refreshJson(): void {
@@ -1150,23 +1182,34 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
 
   return (
     <div className="mapping-editor" ref={rootRef}>
-      <Space wrap style={{ marginBottom: 12 }}>
-        <Select
-          placeholder="从模板开始"
-          style={{ width: 220 }}
-          value={templatePick || undefined}
-          onChange={(id: string) => useTemplate(id)}
-          options={[
-            ...OFFICIAL_TEMPLATES.map((t) => ({ value: t.id, label: t.name })),
-            ...importTemplates.map((t) => ({ value: t.id, label: `${t.name}（导入）` })),
-          ]}
-        />
-        <Button onClick={() => setImportOpen((v) => !v)}>导入模板</Button>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 12,
+        }}
+      >
+        <Space wrap>
+          <Select
+            placeholder="从模板开始"
+            style={{ width: 220 }}
+            value={templatePick || undefined}
+            onChange={(id: string) => useTemplate(id)}
+            options={[
+              ...OFFICIAL_TEMPLATES.map((t) => ({ value: t.id, label: t.name })),
+              ...importTemplates.map((t) => ({ value: t.id, label: `${t.name}（导入）` })),
+            ]}
+          />
+          <Button onClick={openImportPanel}>导入模板</Button>
+          <Button type={aiOpen ? "primary" : "default"} aria-pressed={aiOpen} onClick={toggleAiPanel}>
+            AI 配置助手
+          </Button>
+        </Space>
         <Button onClick={openExport}>导出模板</Button>
-        <Button type={aiOpen ? "primary" : "default"} aria-pressed={aiOpen} onClick={() => setAiOpen((v) => !v)}>
-          AI 配置助手
-        </Button>
-      </Space>
+      </div>
       {importOpen && (
         <div className="card" style={{ marginBottom: 12, padding: 12 }}>
           <Space direction="vertical" size={8} style={{ width: "100%" }}>
@@ -1332,7 +1375,6 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                   loading={aiBusy}
                   disabled={
                     !aiReady ||
-                    aiBusy ||
                     Boolean(aiSubmission.error) ||
                     aiSubmission.chars < 200
                   }

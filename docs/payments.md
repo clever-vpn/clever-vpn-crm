@@ -671,6 +671,9 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
   <https://docs.xarr.cn/merchant/api/epayn.html>
 - **亿宏数码 API 文档** —— 本仓库 `clever-vpn-cf-api/docs/亿宏数码API接口文档.html`
   （回调 `status=1` / 查单 `status=3` 两套语义的出处）
+-  https://www.yimapay.com/docs/api.html?chapter=4
+-  https://www.xxpay.vip/docs/detail_176.html
+-  https://pay.mzfpay.com/doc/epay_submit
 
 > 注意：这类文档描述的是**聚合商自己的网关**，各家下游的 `submit.php` / `mapi.php`
 > 仍可能有细微差异（路径、渠道码、`&key=` 拼接）。所以 `epay_v1` 必须允许"高级覆盖"，
