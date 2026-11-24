@@ -133,8 +133,8 @@
 
 | 项 | 说明 |
 |---|---|
-| `env.AI` | 部署时注入的 `ai` binding（账号内预认证；本地 dev 刻意不绑，保持零登录） |
-| `CLOUDFLARE_GATEWAY_ID` | AI Gateway 名称；我们的是 `studio`。空 = 不启用该功能 |
+| `env.AI` | `wrangler.jsonc` 的 `ai` binding（账号内预认证；本地 dev 恒为 remote，需 `wrangler login`） |
+| `CLOUDFLARE_GATEWAY_ID` | AI Gateway 名称，默认 `studio`；本地可用 `studio-dev` 分账。空 = 不启用 |
 | 模型 | 固定 `deepseek/deepseek-flash`（`src/payments/ai.ts` 的 `AI_MODEL`） |
 | 厂商 key | 只在 AI Gateway 的 **BYOK**（DeepSeek，`default` 别名）；不进 Worker、不进 GitHub Secrets |
 

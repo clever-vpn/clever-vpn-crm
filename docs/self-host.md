@@ -116,8 +116,10 @@ Variables（明文）：
 2. 在该网关里加 **DeepSeek BYOK key**，别名用 `default`
    （binding 路径只读 `default` 别名）；
 3. 仓库 → Settings → Variables 设 `CLOUDFLARE_GATEWAY_ID` = 网关名；
-4. 重新跑一次 deploy（部署工作流会按 `CLOUDFLARE_GATEWAY_ID` 注入 `ai` binding，
-   不需要额外 secret）。
+4. 重新跑一次 deploy（`ai` binding 已在 `wrangler.jsonc`；deploy 会把
+   `CLOUDFLARE_GATEWAY_ID` 渲染成你设的 Variable，不设就是空 = 不启用）。
+   本地 `npm run dev:local` 默认连线上网关 `studio`，需要先 `wrangler login`；
+   自部署测试自己的网关时用 `CLOUDFLARE_GATEWAY_ID=<你的网关> npm run dev:local`。
 
 模型固定 `deepseek/deepseek-flash`。每条请求都带 `metadata`：
 

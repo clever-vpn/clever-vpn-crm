@@ -55,8 +55,13 @@ echo "→ 启动 Vite（5181）…"
 npm run dev:web >"$WEB_LOG" 2>&1 &
 WEB_PID=$!
 
-echo "→ 启动 CRM Worker（8788）…"
-./node_modules/.bin/wrangler dev --port 8788 >"$WORKER_LOG" 2>&1 &
+# AI 配置助手：默认连线上网关 studio（与 site-studio 一致，wrangler dev 用本机登录身份）。
+# 想分开开发期的账/日志：CLOUDFLARE_GATEWAY_ID=studio-dev npm run dev:local；
+# 设空 = 关闭 AI（面板显示未配置）。AI binding 没有本地模拟，未 `wrangler login` 时
+# wrangler dev 会直接报错，见 docs/local-dev-single.md §5。
+GATEWAY="${CLOUDFLARE_GATEWAY_ID-studio}"
+echo "→ 启动 CRM Worker（8788，AI 网关=${GATEWAY:-关闭}）…"
+./node_modules/.bin/wrangler dev --port 8788 --var "CLOUDFLARE_GATEWAY_ID:${GATEWAY}" >"$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 
 ready() {

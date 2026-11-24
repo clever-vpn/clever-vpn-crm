@@ -49,6 +49,18 @@ npm run dev:local
 - 等两个端口就绪后打印后台地址；
 - Ctrl+C 同时停两个进程。
 
+**AI 配置助手默认连线上网关 `studio`**（与 site-studio 一致；AI binding 没有本地模拟，
+`wrangler dev` 会把请求代理到 Cloudflare）。所以本机需要先：
+
+```bash
+npx wrangler login      # scope 要含 ai (write)
+# 或 export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...
+```
+
+想分开开发期的账/日志：`CLOUDFLARE_GATEWAY_ID=studio-dev npm run dev:local`
+（同账号建 `studio-dev` 网关并配 DeepSeek BYOK）；`CLOUDFLARE_GATEWAY_ID= npm run dev:local`
+关闭 AI（面板显示未配置）。线上网关的调用会真花钱、真写网关日志。
+
 日志：
 
 ```txt
@@ -80,6 +92,9 @@ http://localhost:5181/admin/
 ## 3. 这个模式能测什么
 
 - 客户、订单、套餐、支付网关、促销、设置等 **非域名** CRM 功能。
+- **AI 配置助手**：接口配置 → AI 面板 → 粘贴文档 → 生成 → 预览 → 应用。
+  默认走线上网关 `studio`（`metadata.tenant` 取 `CRM_TENANT_ID`，本地默认 `0`）；
+  换 `studio-dev` 可把开发消耗/日志与生产分开。
 - 本地 D1 存 CRM 自己的数据；cf-api 调用走线上。
 
 **域名页不可用**：`MODE=single` 下 `/api/admin/domains` 返回 `supported:false`，
@@ -103,6 +118,9 @@ http://localhost:5181/admin/
 | 设置页提示“未配置 cf-api 凭据” | 按 §0 填 base/token 并保存 |
 | 想重置本地数据 | `npm run db:reset`（会清空本地 D1） |
 | 域名页只有说明 | 预期行为；single 模式不支持托管域名 |
+| `wrangler dev` 报 `Failed to start the remote proxy session` / 要求 `CLOUDFLARE_API_TOKEN` | AI binding 没有本地模拟：`npx wrangler login`（scope 含 `ai (write)`）或导出 token；不想连 AI 也要登录，因为 binding 是 remote |
+| AI 面板显示未配置 | `CLOUDFLARE_GATEWAY_ID` 为空；用默认/`studio-dev` 启动，或检查 `wrangler.jsonc` |
+| AI 生成报 `ai_upstream_error` | 网关不存在或没配 DeepSeek BYOK（`default` 别名）；到 Cloudflare → AI Gateway 检查 |
 
 ## 6. 不做
 

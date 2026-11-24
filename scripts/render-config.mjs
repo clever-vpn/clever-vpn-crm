@@ -81,16 +81,10 @@ setString("CF_API_BASE", value("CF_API_BASE"));
 // studio 票据的跳转落点（GitHub Actions Variables；空值表示该产品还没上线）
 setString("STUDIO_SITE_URL", process.env.STUDIO_SITE_URL ?? "");
 setString("STUDIO_APP_URL", process.env.STUDIO_APP_URL ?? "");
-// AI 配置助手：渲染网关名（空 = 不开放），并按它决定是否在下面注入 AI binding
+// AI 配置助手：只渲染网关名（AI binding 已在 wrangler.jsonc）。空 = 不开放。
 setString("CLOUDFLARE_GATEWAY_ID", process.env.CLOUDFLARE_GATEWAY_ID ?? "");
 setString("CRM_CODE_VERSION", value("CRM_CODE_VERSION"));
 
-// AI binding 只在启用了 AI 配置助手时注入（本地 `wrangler.jsonc` 刻意不写：
-// `wrangler dev` 遇到 AI binding 会强制开远程代理并要求 CLOUDFLARE_API_TOKEN）。
-const gatewayId = process.env.CLOUDFLARE_GATEWAY_ID ?? "";
-if (gatewayId !== "" && !/"ai"\s*:/.test(source)) {
-  source = source.replace(/^(\s*\{\s*\r?\n)/, '$1  "ai": { "binding": "AI" },\n');
-}
 setString("CRM_CONTRACT_VERSION", value("CRM_CONTRACT_VERSION"));
 
 writeFileSync(OUT, source);
