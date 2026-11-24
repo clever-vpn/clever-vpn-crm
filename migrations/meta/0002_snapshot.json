@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "211f79e0-a42f-47fc-acfb-b30e427d3942",
-  "prevId": "6fd975c9-f4be-4577-bfdc-80d1a95ec5a7",
+  "id": "6fd975c9-f4be-4577-bfdc-80d1a95ec5a7",
+  "prevId": "312c4d86-6c4f-4c6e-a815-5067092bab45",
   "tables": {
     "adjustments": {
       "name": "adjustments",
@@ -1138,13 +1138,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'[]'"
-        },
-        "channel_codes": {
-          "name": "channel_codes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "mapping": {
           "name": "mapping",
@@ -3029,6 +3022,37 @@
           "isUnique": false
         }
       },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "domain_checks": {
+      "name": "domain_checks",
+      "columns": {
+        "hostname": {
+          "name": "hostname",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "checked_at": {
+          "name": "checked_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

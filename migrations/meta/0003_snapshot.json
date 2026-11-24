@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4dec679c-a868-4500-a557-8937fa9ed93a",
-  "prevId": "211f79e0-a42f-47fc-acfb-b30e427d3942",
+  "id": "211f79e0-a42f-47fc-acfb-b30e427d3942",
+  "prevId": "6fd975c9-f4be-4577-bfdc-80d1a95ec5a7",
   "tables": {
     "adjustments": {
       "name": "adjustments",
@@ -817,27 +817,6 @@
           "autoincrement": false,
           "default": "'CNY'"
         },
-        "provider_amount_minor": {
-          "name": "provider_amount_minor",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "provider_currency": {
-          "name": "provider_currency",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "fx_rate": {
-          "name": "fx_rate",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "source": {
           "name": "source",
           "type": "text",
@@ -1204,50 +1183,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'CNY'"
-        },
-        "fx_rate": {
-          "name": "fx_rate",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 1
-        },
-        "test_amount_minor": {
-          "name": "test_amount_minor",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 100
-        },
-        "test_create_ok_at": {
-          "name": "test_create_ok_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "test_query_ok_at": {
-          "name": "test_query_ok_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "test_callback_ok_at": {
-          "name": "test_callback_ok_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "tested_config_hash": {
-          "name": "tested_config_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "last_test_order_id": {
           "name": "last_test_order_id",
@@ -3094,6 +3029,37 @@
           "isUnique": false
         }
       },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "domain_checks": {
+      "name": "domain_checks",
+      "columns": {
+        "hostname": {
+          "name": "hostname",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "checked_at": {
+          "name": "checked_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

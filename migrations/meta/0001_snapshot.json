@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6fd975c9-f4be-4577-bfdc-80d1a95ec5a7",
+  "id": "312c4d86-6c4f-4c6e-a815-5067092bab45",
   "prevId": "251162b3-0d02-4671-9b90-a063b713f1d4",
   "tables": {
     "adjustments": {
@@ -552,6 +552,37 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "domain_checks": {
+      "name": "domain_checks",
+      "columns": {
+        "hostname": {
+          "name": "hostname",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "checked_at": {
+          "name": "checked_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "email_codes": {
       "name": "email_codes",
       "columns": {
@@ -902,13 +933,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "return_poll_at": {
-          "name": "return_poll_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "poll_attempts": {
           "name": "poll_attempts",
           "type": "integer",
@@ -1119,13 +1143,6 @@
         },
         "secret_enc": {
           "name": "secret_enc",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "webhook_enc": {
-          "name": "webhook_enc",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

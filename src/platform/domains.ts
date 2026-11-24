@@ -24,8 +24,9 @@ export interface DomainDnsRecord {
 export interface DomainDns {
   /** 租户 DNS 里的 CNAME 目标（apex 用 A 192.0.2.1 的说明在前端） */
   target: string;
+  /** 归属验证 TXT；只在 Hostname 还没 active 时作为 HTTP 失败后的备用 */
   ownership: DomainDnsRecord | null;
-  validation: DomainDnsRecord[];
+  /** 证书验证：只走 DCV CNAME（产品策略，不暴露手动 TXT） */
   dcv: DomainDnsRecord[];
 }
 
@@ -36,6 +37,10 @@ export interface DomainView {
   enabled: boolean;
   hostname_status: string | null;
   cert_status: string | null;
+  /** 当前证书到期时间；缓存列表未回源时为 null */
+  cert_expires_at: string | null;
+  /** 是否拿到了 DCV 委派记录 */
+  dcv_available: boolean;
   cf_hostname_id: string | null;
   created_at: string | null;
   verified_at: string | null;
@@ -51,12 +56,21 @@ export interface DomainsOverview {
   domains: DomainView[];
 }
 
-export async function listDomains(env: Env, refresh: boolean): Promise<DomainsOverview> {
+export async function listDomains(env: Env): Promise<DomainsOverview> {
+  const res = await platformRequest(env, "/api/v2/crms/domains");
+  return platformJson<DomainsOverview>(res);
+}
+
+export async function getDomain(
+  env: Env,
+  hostname: string,
+  refresh: boolean,
+): Promise<{ domain: DomainView }> {
   const res = await platformRequest(
     env,
-    `/api/v2/crms/domains${refresh ? "?refresh=1" : ""}`,
+    `/api/v2/crms/domains/${encodeURIComponent(hostname)}${refresh ? "?refresh=1" : ""}`,
   );
-  return platformJson<DomainsOverview>(res);
+  return platformJson<{ domain: DomainView }>(res);
 }
 
 export async function createDomain(
@@ -67,18 +81,6 @@ export async function createDomain(
     method: "POST",
     body: JSON.stringify(input),
   });
-  return platformJson<{ domain: DomainView }>(res);
-}
-
-export async function retryDomain(
-  env: Env,
-  hostname: string,
-): Promise<{ domain: DomainView }> {
-  const res = await platformRequest(
-    env,
-    `/api/v2/crms/domains/${encodeURIComponent(hostname)}/retry`,
-    { method: "POST", body: JSON.stringify({}) },
-  );
   return platformJson<{ domain: DomainView }>(res);
 }
 

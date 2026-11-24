@@ -420,6 +420,13 @@ export const settings = sqliteTable("settings", {
   updated_at: text("updated_at").notNull(),
 });
 
+/** 自定义域名的最近一次「状态检查」结果；域名/CF 状态仍在 cf-api，这里只缓存检查结论 */
+export const domainChecks = sqliteTable("domain_checks", {
+  hostname: text("hostname").primaryKey(),
+  status: text("status").notNull(),
+  checked_at: text("checked_at").notNull(),
+});
+
 /** 权益变更台账：每一笔变化都留痕，客服对账与退款回滚只查这张表 */
 export const subscriptionChanges = sqliteTable(
   "subscription_changes",

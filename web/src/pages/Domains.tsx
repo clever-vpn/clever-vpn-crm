@@ -2,12 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Button,
-  Card,
-  Checkbox,
   Form,
   Input,
   Modal,
   Popconfirm,
+  Radio,
   Space,
   Table,
   Tag,
@@ -19,28 +18,51 @@ import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import {
   api,
   ApiError,
+  type DomainCheck,
+  type DomainCheckStep,
   type DomainDnsRecord,
   type DomainKind,
+  type DomainStatus,
   type DomainView,
   type DomainsView,
+  type DnsProvider,
+  type StepStatus,
 } from "../api";
 
 /**
- * 域名：一屏两件事 —— 品牌网站域名 / 后台登录域名。
+ * 域名：提交域名 → 按「状态检查」里的步骤做一次 DNS 设置。
  *
- * 三条取舍：
- *   1. **托管模式才出现「添加」**：自部署的域名由租户在自己的 Cloudflare 配，
- *      CRM 不假装能代管。
- *   2. 状态只说 pending / active / failed；原始 CF 状态放在小字里给客服看。
- *   3. 失败不隐藏：`last_error` 直接显示，并给「重新验证」；不会只留一个红点。
+ * 检查全部在 CRM：cf-api 只提供绑定和原始 CF 状态。页面只留两个动作：
+ * 状态检查 / 删除；不再有解析记录、重新验证、刷新状态。
  */
-const STATE_META: Record<
-  DomainView["state"],
-  { color: string; text: string }
-> = {
-  pending: { color: "gold", text: "等待验证" },
-  active: { color: "green", text: "已生效" },
+const STATUS_META: Record<DomainStatus, { color: string; text: string }> = {
+  pending_check: { color: "default", text: "待检查" },
+  needs_action: { color: "gold", text: "待设置" },
+  wait: { color: "blue", text: "等待生效" },
+  ready: { color: "green", text: "已生效" },
+  manual: { color: "orange", text: "需处理" },
   failed: { color: "red", text: "验证失败" },
+  unknown: { color: "default", text: "暂时无法检查" },
+};
+
+const STEP_META: Record<StepStatus, { color: string; text: string }> = {
+  done: { color: "green", text: "已完成" },
+  todo: { color: "gold", text: "待完成" },
+  wait: { color: "blue", text: "已检测到，等待生效" },
+  unknown: { color: "default", text: "暂时无法检查" },
+  manual: { color: "orange", text: "需要平台处理" },
+};
+
+const STEP_TITLE: Record<DomainCheckStep["id"], string> = {
+  traffic: "网站访问记录",
+  dcv: "证书续期记录",
+  ownership: "域名归属验证",
+};
+
+const PROVIDER_LABEL: Record<DnsProvider, string> = {
+  cloudflare: "Cloudflare",
+  other: "其他 DNS",
+  unknown: "未识别",
 };
 
 const errText = (e: unknown, fallback: string): string =>
@@ -52,6 +74,12 @@ const fmtTime = (iso: string | null): string => {
   return Number.isNaN(d.getTime())
     ? iso
     : `${d.toLocaleDateString()} ${d.toLocaleTimeString().slice(0, 5)}`;
+};
+
+const fmtDate = (iso: string | null): string => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
 };
 
 const copy = (text: string): void => {
@@ -68,328 +96,326 @@ const copy = (text: string): void => {
 /** 只做即时提示；权威校验在 cf-api（这里放宽，避免误伤 punycode / 长域名） */
 const HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 
-function DomainSection({
-  kind,
-  title,
-  hint,
-  domains,
-  loading,
-  refreshing,
-  busyHost,
-  onAdd,
-  onDns,
-  onRetry,
-  onRemove,
-  onRefresh,
-}: {
-  kind: DomainKind;
-  title: string;
-  hint: string;
-  domains: DomainView[];
-  loading: boolean;
-  refreshing: boolean;
-  busyHost: string | null;
-  onAdd: () => void;
-  onDns: (d: DomainView) => void;
-  onRetry: (d: DomainView) => void;
-  onRemove: (d: DomainView) => void;
-  onRefresh: () => void;
-}) {
-  const columns = [
-    {
-      title: "域名",
-      dataIndex: "hostname",
-      key: "hostname",
-      render: (_: unknown, d: DomainView) => (
-        <div>
-          <Typography.Text strong>{d.hostname}</Typography.Text>
-          {d.state === "active" && (
-            <div style={{ fontSize: 12, marginTop: 2 }}>
-              <a href={`https://${d.hostname}`} target="_blank" rel="noreferrer">
-                打开{d.kind === "crm" ? "后台" : "网站"}
-              </a>
-            </div>
-          )}
-          {d.last_error && (
-            <Typography.Text
-              type="danger"
-              style={{ display: "block", fontSize: 12, marginTop: 2 }}
-              ellipsis={{ tooltip: d.last_error }}
-            >
-              {d.last_error}
-            </Typography.Text>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: "状态",
-      dataIndex: "state",
-      key: "state",
-      width: 150,
-      render: (state: DomainView["state"], d: DomainView) => {
-        const meta = STATE_META[state] ?? STATE_META.pending;
-        return (
-          <div>
-            <Tag color={meta.color}>{meta.text}</Tag>
-            <div style={{ fontSize: 11, color: "#8593a8", marginTop: 2 }}>
-              {d.hostname_status ?? "—"} / {d.cert_status ?? "—"}
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      title: "添加时间",
-      dataIndex: "created_at",
-      key: "created_at",
-      width: 150,
-      render: (v: string | null) => fmtTime(v),
-    },
-    {
-      title: "操作",
-      key: "actions",
-      width: 260,
-      render: (_: unknown, d: DomainView) => (
-        <Space wrap size={4}>
-          <Button size="small" onClick={() => onDns(d)}>
-            解析记录
-          </Button>
-          {d.state === "failed" && (
-            <Button size="small" loading={busyHost === d.hostname} onClick={() => onRetry(d)}>
-              重新验证
-            </Button>
-          )}
-          <Popconfirm
-            title="解除绑定？"
-            description="解除后这个域名将无法访问。DNS 记录可以留着，但不再生效。"
-            okText="解除"
-            cancelText="取消"
-            onConfirm={() => onRemove(d)}
-          >
-            <Button size="small" danger loading={busyHost === d.hostname}>
-              解除绑定
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
-
+function DnsTable({ records }: { records: DomainDnsRecord[] }) {
   return (
-    <Card
-      title={title}
-      extra={
-        <Space>
-          <Button icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>
-            刷新状态
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={onAdd}>
-            添加{kind === "crm" ? "后台" : "网站"}域名
-          </Button>
-        </Space>
-      }
-    >
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-        {hint}
-      </Typography.Paragraph>
-      <Table
-        rowKey="hostname"
-        size="small"
-        loading={loading}
-        dataSource={domains}
-        pagination={false}
-        columns={columns}
-        locale={{ emptyText: "还没有绑定自定义域名" }}
-      />
-    </Card>
+    <Table
+      rowKey={(r) => `${r.type}:${r.name}:${r.value}`}
+      size="small"
+      pagination={false}
+      dataSource={records}
+      columns={[
+        { title: "类型", dataIndex: "type", width: 82 },
+        {
+          title: "主机记录",
+          dataIndex: "name",
+          render: (v: string) => <code style={{ wordBreak: "break-all" }}>{v}</code>,
+        },
+        {
+          title: "记录值",
+          dataIndex: "value",
+          render: (v: string) => <code style={{ wordBreak: "break-all" }}>{v}</code>,
+        },
+        {
+          title: "",
+          key: "copy",
+          width: 70,
+          render: (_: unknown, r: DomainDnsRecord) => (
+            <Button size="small" onClick={() => copy(r.value)}>
+              复制
+            </Button>
+          ),
+        },
+      ]}
+    />
   );
 }
 
-function AddDomainModal({
-  kind,
-  open,
+function StepCard({ step }: { step: DomainCheckStep }) {
+  const meta = STEP_META[step.status];
+  const isDone = step.status === "done";
+  const proxyOnly =
+    step.id === "traffic" &&
+    step.status === "done" &&
+    step.actual.some((r) => r.type === "A" || r.type === "AAAA") &&
+    !step.actual.some((r) => r.type === "CNAME");
+  return (
+    <div
+      style={{
+        border: "1px solid #e8ebf0",
+        borderRadius: 8,
+        padding: 14,
+        background: "#fff",
+      }}
+    >
+      <Space align="center" style={{ marginBottom: 8 }}>
+        <Typography.Text strong>
+          {STEP_TITLE[step.id]}
+        </Typography.Text>
+        <Tag color={meta.color}>{meta.text}</Tag>
+      </Space>
+
+      {step.expected && (
+        <div style={{ marginBottom: 8 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            需要这条记录
+          </Typography.Text>
+          <DnsTable records={[step.expected]} />
+        </div>
+      )}
+
+      {step.actual.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          {proxyOnly ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              已通过 Cloudflare 代理访问；A/AAAA 是公开 DNS 的解析结果，不是你在 DNS 里新增的记录。
+            </Typography.Text>
+          ) : (
+            <>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                DNS 解析结果
+              </Typography.Text>
+              <DnsTable records={step.actual} />
+            </>
+          )}
+        </div>
+      )}
+
+      {!isDone && step.fix && (
+        <Alert
+          type={step.status === "manual" || step.status === "unknown" ? "warning" : "info"}
+          showIcon
+          message="怎么改"
+          description={step.fix}
+        />
+      )}
+      {isDone && (
+        <Typography.Text type="success" style={{ fontSize: 12 }}>
+          已完成，不需要再操作。
+        </Typography.Text>
+      )}
+    </div>
+  );
+}
+
+function CheckModal({
+  hostname,
   onClose,
-  onCreated,
+  onChanged,
 }: {
-  kind: DomainKind;
-  open: boolean;
+  hostname: string | null;
   onClose: () => void;
-  onCreated: (d: DomainView) => void;
+  onChanged: () => void;
 }) {
-  const [hostname, setHostname] = useState("");
-  const [includeWww, setIncludeWww] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [check, setCheck] = useState<DomainCheck | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = useCallback(async (host: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.checkDomain(host);
+      setCheck(res.check);
+      onChanged();
+    } catch (e) {
+      setCheck(null);
+      setError(errText(e, "暂时无法检查，请稍后重试"));
+    } finally {
+      setLoading(false);
+    }
+  }, [onChanged]);
 
   useEffect(() => {
-    if (open) {
-      setHostname("");
-      setIncludeWww(true);
-      setBusy(false);
-    }
-  }, [open]);
-
-  const host = hostname.trim().toLowerCase();
-  const valid = HOST_RE.test(host);
-  const apex = host.split(".").length === 2 && !host.startsWith("www.");
-  const willBindWww = kind === "site" && includeWww && apex;
-  const targets = willBindWww ? [host, `www.${host}`] : [host];
-
-  async function submit(): Promise<void> {
-    if (!valid) {
-      message.error("请填一个合法域名，例如 www.example.com");
+    if (!hostname) {
+      setCheck(null);
+      setError(null);
       return;
     }
-    setBusy(true);
-    let first: DomainView | null = null;
-    const errors: string[] = [];
-    for (const h of targets) {
-      try {
-        const r = await api.addDomain({ hostname: h, kind });
-        if (!first) first = r.domain;
-      } catch (e) {
-        errors.push(`${h}：${errText(e, "绑定失败")}`);
-      }
-    }
-    setBusy(false);
-    if (errors.length > 0) message.error(errors.join("；"));
-    if (first) {
-      onCreated(first);
-      onClose();
-    }
-  }
+    setCheck(null);
+    void run(hostname);
+  }, [hostname, run]);
 
-  return (
-    <Modal
-      open={open}
-      title={kind === "crm" ? "添加后台域名" : "添加网站域名"}
-      okText="绑定"
-      cancelText="取消"
-      confirmLoading={busy}
-      onOk={() => void submit()}
-      onCancel={onClose}
-      destroyOnClose
-    >
-      <Form layout="vertical" style={{ marginTop: 12 }}>
-        <Form.Item
-          label="域名"
-          extra="只填域名本身，不要带 http:// 或路径。绑定后按提示添加解析记录。"
-          required
-        >
-          <Input
-            value={hostname}
-            onChange={(e) => setHostname(e.target.value)}
-            placeholder={kind === "crm" ? "crm.example.com" : "www.example.com"}
-            onPressEnter={() => void submit()}
-            autoFocus
-          />
-        </Form.Item>
-        {kind === "site" && apex && (
-          <Form.Item>
-            <Checkbox
-              checked={includeWww}
-              onChange={(e) => setIncludeWww(e.target.checked)}
-            >
-              同时绑定 <code>www.{host}</code>
-            </Checkbox>
-            <div style={{ color: "#8593a8", fontSize: 12, marginTop: 4 }}>
-              会创建 {willBindWww ? 2 : 1} 个域名，占用同样数量的自定义域名名额。
-            </div>
-          </Form.Item>
-        )}
-      </Form>
-      {kind === "crm" && (
+  const todoCount = check?.steps.filter((s) => s.status === "todo").length ?? 0;
+
+  const banner = (() => {
+    if (!check) {
+      return error ? (
+        <Alert type="error" showIcon message="暂时无法检查" description={error} />
+      ) : (
+        <Alert type="info" showIcon message="正在检查…" description="正在查询 Cloudflare 状态和 DNS 记录。" />
+      );
+    }
+    if (check.status === "ready") {
+      return (
+        <Alert
+          type="success"
+          showIcon
+          message="设置已完成，域名已生效"
+          description={
+            check.cert_expires_at
+              ? `证书有效期至 ${fmtDate(check.cert_expires_at)}；到期会自动续期，不需要再操作。`
+              : "证书到期会自动续期，不需要再操作。"
+          }
+        />
+      );
+    }
+    if (check.status === "needs_action") {
+      return (
         <Alert
           type="info"
           showIcon
-          message="绑定后，后台会多一个入口，默认地址仍然可用"
-          description="支付网关的回调地址不会自动改；如果换了后台域名，请到支付网关里核对回调地址。"
+          message={`还需要完成 ${todoCount || "几"} 步`}
+          description="按下面每步的「怎么改」操作，然后点「重新检查」。"
         />
-      )}
+      );
+    }
+    if (check.status === "wait") {
+      return (
+        <Alert
+          type="info"
+          showIcon
+          message="记录已检测到，正在等待生效"
+          description="通常几分钟；稍后点「重新检查」。"
+        />
+      );
+    }
+    if (check.status === "manual") {
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          message="需要平台处理"
+          description="请联系客服，不要删除现有 DNS 记录。"
+        />
+      );
+    }
+    if (check.status === "failed") {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          message="验证失败"
+          description="请联系客服，并把下面的记录提供给客服。"
+        />
+      );
+    }
+    return (
+      <Alert
+        type="info"
+        showIcon
+        message="暂时无法检查"
+        description="请稍后点「重新检查」。"
+      />
+    );
+  })();
+
+  return (
+    <Modal
+      open={hostname !== null}
+      title={hostname ? `域名状态 · ${hostname}` : "域名状态"}
+      width={820}
+      onCancel={onClose}
+      footer={
+        <Space>
+          <Button onClick={onClose}>关闭</Button>
+          <Button
+            type="primary"
+            icon={<ReloadOutlined />}
+            loading={loading}
+            disabled={!hostname}
+            onClick={() => hostname && void run(hostname)}
+          >
+            重新检查
+          </Button>
+        </Space>
+      }
+    >
+      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        {banner}
+        {check && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            当前按 {PROVIDER_LABEL[check.provider]} 生成步骤；DNS 服务商是自动判断的。
+          </Typography.Text>
+        )}
+        {check?.steps.map((step) => <StepCard key={step.id} step={step} />)}
+        {check && check.steps.length === 0 && (
+          <Typography.Text type="secondary">
+            暂时读不到 Cloudflare 的域名详情；请稍后重新检查，或联系客服。
+          </Typography.Text>
+        )}
+      </Space>
     </Modal>
   );
 }
 
-function DnsModal({
-  domain,
+function AddDomainModal({
+  open,
   onClose,
+  onCreated,
 }: {
-  domain: DomainView | null;
+  open: boolean;
   onClose: () => void;
+  onCreated: (domain: DomainView) => void;
 }) {
-  const dns = domain?.dns;
-  const records: DomainDnsRecord[] = [];
-  if (dns) {
-    records.push({ type: "CNAME", name: domain!.hostname, value: dns.target });
-    if (dns.ownership) records.push(dns.ownership);
-    records.push(...dns.validation, ...dns.dcv);
-  }
+  const [form] = Form.useForm<{ hostname: string; kind: DomainKind }>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      form.setFieldsValue({ hostname: "", kind: "site" });
+      setError(null);
+    }
+  }, [open, form]);
+
+  const submit = async (): Promise<void> => {
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return;
+    const hostname = values.hostname.trim().toLowerCase();
+    if (!HOST_RE.test(hostname)) {
+      setError("请填写有效域名，例如 www.example.com");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.addDomain({ hostname, kind: values.kind });
+      onCreated(res.domain);
+      onClose();
+    } catch (e) {
+      setError(errText(e, "添加失败，请稍后重试"));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Modal
-      open={domain !== null}
-      title={domain ? `解析记录 · ${domain.hostname}` : "解析记录"}
-      width={720}
+      open={open}
+      title="添加域名"
+      width={520}
       onCancel={onClose}
-      footer={<Button onClick={onClose}>关闭</Button>}
+      onOk={() => void submit()}
+      okText="添加并查看步骤"
+      confirmLoading={busy}
     >
-      {!dns ? (
-        <Alert
-          type="info"
-          showIcon
-          message="平台还没返回解析记录"
-          description="Cloudflare 的 validation_records 有时会晚几秒生成；点「刷新状态」再打开。"
-        />
-      ) : (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-          <Alert
-            type="info"
-            showIcon
-            message="在你的 DNS 服务商处添加以下记录"
-            description="DNS 生效通常 5 分钟，证书最多 24 小时。改完回到列表点「刷新状态」。"
-          />
-          <Table
-            rowKey={(r) => `${r.type}:${r.name}:${r.value}`}
-            size="small"
-            pagination={false}
-            dataSource={records}
-            columns={[
-              { title: "类型", dataIndex: "type", width: 80 },
-              {
-                title: "主机记录",
-                dataIndex: "name",
-                render: (v: string) => <code style={{ wordBreak: "break-all" }}>{v}</code>,
-              },
-              {
-                title: "记录值",
-                dataIndex: "value",
-                render: (v: string) => <code style={{ wordBreak: "break-all" }}>{v}</code>,
-              },
-              {
-                title: "",
-                key: "copy",
-                width: 70,
-                render: (_: unknown, r: DomainDnsRecord) => (
-                  <Button size="small" onClick={() => copy(r.value)}>
-                    复制
-                  </Button>
-                ),
-              },
-            ]}
-          />
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            <strong>根域名（如 example.com）：</strong>首选把 DNS 托管到 Cloudflare，然后加一条
-            A 记录 <code>@ → 192.0.2.1</code>（开启代理）。如果继续用现在的 DNS 服务商，需要它支持
-            CNAME 展平 / ALIAS；注册商通常不允许根域直接 CNAME。
-          </Typography.Paragraph>
-          {dns.dcv.length > 0 && (
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              <strong>推荐用 DCV Delegation：</strong>把 <code>_acme-challenge</code> 按上表的 CNAME
-              指过去，之后证书续期自动完成；如果已经加过同名的 TXT 记录，先删掉冲突的 TXT。
-            </Typography.Paragraph>
-          )}
-        </Space>
-      )}
+      <Form form={form} layout="vertical" initialValues={{ kind: "site" }}>
+        <Form.Item
+          name="hostname"
+          label="域名"
+          rules={[{ required: true, message: "请填写域名" }]}
+          extra="添加后系统会自动判断 DNS 服务商，并生成需要你做的步骤。"
+        >
+          <Input placeholder="www.example.com" autoFocus onPressEnter={() => void submit()} />
+        </Form.Item>
+        <Form.Item name="kind" label="用途" rules={[{ required: true }]}>
+          <Radio.Group>
+            <Radio.Button value="site">品牌网站</Radio.Button>
+            <Radio.Button value="crm">后台登录</Radio.Button>
+          </Radio.Group>
+        </Form.Item>
+      </Form>
+      {error && <Alert type="error" showIcon message={error} />}
     </Modal>
   );
 }
@@ -397,94 +423,59 @@ function DnsModal({
 export default function Domains() {
   const [data, setData] = useState<DomainsView | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [addKind, setAddKind] = useState<DomainKind | null>(null);
-  const [dnsDomain, setDnsDomain] = useState<DomainView | null>(null);
-  const [busyHost, setBusyHost] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [checkHost, setCheckHost] = useState<string | null>(null);
 
-  const load = useCallback(async (refresh: boolean): Promise<void> => {
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      setData(await api.domains(refresh));
+      setData(await api.domains());
     } catch (e) {
-      message.error(errText(e, "读取域名失败"));
+      message.error(errText(e, "加载域名失败"));
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void load(true);
+    void load();
   }, [load]);
 
-  // 有 pending 时每 30 秒回源一次；页面不可见时暂停（避免后台标签页一直打 CF）
-  useEffect(() => {
-    const domains = data?.domains ?? [];
-    if (!data?.supported || !domains.some((d) => d.state !== "active")) return undefined;
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") void load(true);
-    }, 30_000);
-    return () => clearInterval(timer);
-  }, [data, load]);
+  const handleCheckChanged = useCallback(() => {
+    void load();
+  }, [load]);
 
-  const retry = async (d: DomainView): Promise<void> => {
-    setBusyHost(d.hostname);
+  const remove = async (hostname: string): Promise<void> => {
     try {
-      await api.retryDomain(d.hostname);
-      message.success("已重新触发验证");
-      await load(true);
+      await api.removeDomain(hostname);
+      message.success("已删除");
+      if (checkHost === hostname) setCheckHost(null);
+      await load();
     } catch (e) {
-      message.error(errText(e, "重新验证失败"));
-    } finally {
-      setBusyHost(null);
+      message.error(errText(e, "删除失败"));
     }
   };
-
-  const remove = async (d: DomainView): Promise<void> => {
-    setBusyHost(d.hostname);
-    try {
-      await api.removeDomain(d.hostname);
-      message.success("已解除绑定");
-      await load(true);
-    } catch (e) {
-      message.error(errText(e, "解除失败"));
-    } finally {
-      setBusyHost(null);
-    }
-  };
-
-  const refresh = async (): Promise<void> => {
-    setRefreshing(true);
-    try {
-      await load(true);
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  if (data && !data.supported) {
-    return (
-      <Card title="自定义域名">
-        <Alert
-          type="info"
-          showIcon
-          message="自部署模式：域名由你自己管理"
-          description={data.reason}
-        />
-      </Card>
-    );
-  }
 
   const domains = data?.domains ?? [];
-  const siteDomains = domains.filter((d) => d.kind === "site");
-  const crmDomains = domains.filter((d) => d.kind === "crm");
+
+  if (data && data.supported === false) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        message="当前是自部署模式"
+        description={data.reason ?? "自定义域名由你自己管理，后台不参与托管绑定。"}
+      />
+    );
+  }
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Alert
         type="info"
         showIcon
-        message="自定义域名由平台代为申请证书，DNS 仍在你的域名服务商处"
-        description="新增域名后按提示添加解析记录；通常 5 分钟生效，证书最多 24 小时。原来的默认地址一直可用。"
+        message="添加域名后，按「状态检查」里的步骤完成一次 DNS 设置"
+        description="设置完成后不需要再操作；之后随时可以点「状态检查」确认状态。原来的默认地址一直可用。"
       />
 
       {data?.defaults && (
@@ -494,47 +485,103 @@ export default function Domains() {
         </Typography.Text>
       )}
 
-      <DomainSection
-        kind="site"
-        title="品牌网站域名"
-        hint="访客打开你品牌网站的地址。绑定后，原来的默认站点地址仍然可用。"
-        domains={siteDomains}
-        loading={loading}
-        refreshing={refreshing}
-        busyHost={busyHost}
-        onAdd={() => setAddKind("site")}
-        onDns={setDnsDomain}
-        onRetry={(d) => void retry(d)}
-        onRemove={(d) => void remove(d)}
-        onRefresh={() => void refresh()}
-      />
+      <Space style={{ width: "100%", justifyContent: "space-between" }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          已绑定域名
+        </Typography.Title>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>
+          添加域名
+        </Button>
+      </Space>
 
-      <DomainSection
-        kind="crm"
-        title="后台登录域名"
-        hint="你和员工登录后台的地址。绑定后默认地址仍然可用；支付网关回调地址不会自动改，换域名后请核对。"
-        domains={crmDomains}
+      <Table<DomainView>
+        rowKey="hostname"
         loading={loading}
-        refreshing={refreshing}
-        busyHost={busyHost}
-        onAdd={() => setAddKind("crm")}
-        onDns={setDnsDomain}
-        onRetry={(d) => void retry(d)}
-        onRemove={(d) => void remove(d)}
-        onRefresh={() => void refresh()}
+        dataSource={domains}
+        pagination={false}
+        locale={{ emptyText: "还没有绑定域名" }}
+        columns={[
+          {
+            title: "域名",
+            dataIndex: "hostname",
+            render: (hostname: string, d) => (
+              <div>
+                <Typography.Text strong>{hostname}</Typography.Text>
+                {d.status === "ready" && (
+                  <div style={{ fontSize: 12, marginTop: 2 }}>
+                    <a href={`https://${hostname}`} target="_blank" rel="noreferrer">
+                      打开{d.kind === "crm" ? "后台" : "网站"}
+                    </a>
+                  </div>
+                )}
+              </div>
+            ),
+          },
+          {
+            title: "用途",
+            dataIndex: "kind",
+            width: 100,
+            render: (kind: DomainKind) => (
+              <Tag color={kind === "crm" ? "purple" : "blue"}>
+                {kind === "crm" ? "后台" : "网站"}
+              </Tag>
+            ),
+          },
+          {
+            title: "状态",
+            dataIndex: "status",
+            width: 160,
+            render: (status: DomainStatus) => {
+              const meta = STATUS_META[status] ?? STATUS_META.pending_check;
+              return <Tag color={meta.color}>{meta.text}</Tag>;
+            },
+          },
+          {
+            title: "上次检查",
+            dataIndex: "last_checked_at",
+            width: 170,
+            render: (v: string | null) => fmtTime(v),
+          },
+          {
+            title: "操作",
+            key: "actions",
+            width: 200,
+            render: (_: unknown, d) => (
+              <Space size={4}>
+                <Button size="small" onClick={() => setCheckHost(d.hostname)}>
+                  状态检查
+                </Button>
+                <Popconfirm
+                  title="删除这个域名？"
+                  description="删除后这个地址将无法访问；DNS 记录可以留着，但不再生效。"
+                  okText="删除"
+                  cancelText="取消"
+                  onConfirm={() => void remove(d.hostname)}
+                >
+                  <Button size="small" danger>
+                    删除
+                  </Button>
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
       />
 
       <AddDomainModal
-        kind={addKind ?? "site"}
-        open={addKind !== null}
-        onClose={() => setAddKind(null)}
-        onCreated={(d) => {
-          setDnsDomain(d);
-          void load(true);
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onCreated={(domain) => {
+          setCheckHost(domain.hostname);
+          void load();
         }}
       />
 
-      <DnsModal domain={dnsDomain} onClose={() => setDnsDomain(null)} />
+      <CheckModal
+        hostname={checkHost}
+        onClose={() => setCheckHost(null)}
+        onChanged={handleCheckChanged}
+      />
     </Space>
   );
 }

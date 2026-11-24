@@ -96,6 +96,7 @@ CRM 尚未正式发布，历史上有 19 个递增迁移（`0000_baseline` + 18 
 | `redemptions` | **核销台账**（谁在哪个活动上用掉了一次名额；`(promotion_id, customer_id)` 唯一 = 每人每活动 1 次） | `order_id`（有值 = 支付时核销的券；**NULL = 礼包**，本来就没有订单）、`settled_at`（**NULL = 占位中**：已占下这次核销，还没发完；超 5 分钟可被接管）、`code_id`、`granted_json`（实际生效）、`promotion_snapshot`（当时的名称/角标/配置） |
 | `notices` | **通知队列**（= 邮件队列 = 站内消息）：`(kind, customer_id, ref_id)` 唯一 = 同一次领取只通知一次 | `kind`(gift_granted=收据)、`ref_id`（核销行 id）、`title`/`body`（创建时定稿）、`action_url`、`status`(pending/sent/failed/suppressed/skipped)、`attempts`、`next_attempt_at` |
 | `settings` | 运行期配置（键值对）：`mail_daily_quota` / `mail_soft_ratio` | `key` PK、`value`、`updated_at` |
+| `domain_checks` | 自定义域名最近一次「状态检查」的结论（DNS/HEAD 检查在 CRM，cf-api 不存） | `hostname` PK、`status`、`checked_at` |
 | `subscription_changes` | 权益变更台账（**单行模型的历史全在这里**） | `action`(new/renewal/upgrade/addon/settle/hold/gift)、`paid_minor`、`residual_minor`、`payable_minor`、`kind_before`/`kind_after`、`plan_before`/`plan_after`、`expires_before`/`expires_after`、`period_extra_before`/`period_extra_after` |
 
 ### 2.3 钱
@@ -153,12 +154,14 @@ source: purchase（自助） | gift（赠送） | manual（后台补单）
 | 文件 | 内容 |
 |---|---|
 | `0000_baseline.sql` | 全部现有表（从 `src/db/schema.ts` 全量生成） |
-| `0001_true_menace.sql` | `orders.return_poll_at`（回跳页查询冷却）、`payment_gateways.webhook_enc`（Stripe signing secret / PayPal webhook id） |
-| `0002_instance_channel_codes.sql` | `payment_gateways.channel_codes`（账户通道号）；把 mapping 里的通道号搬到实例，并清理 mapping 中 `channel_codes`/`exclude_variants`/`pay_url_force_https` |
+| `0001_wonderful_sheva_callister.sql` | 新增 `domain_checks`（自定义域名状态检查缓存） |
+| `0002_true_menace.sql` | `orders.return_poll_at`（回跳页查询冷却）、`payment_gateways.webhook_enc`（Stripe signing secret / PayPal webhook id） |
+| `0003_instance_channel_codes.sql` | `payment_gateways.channel_codes`（账户通道号）；把 mapping 里的通道号搬到实例，并清理 mapping 中 `channel_codes`/`exclude_variants`/`pay_url_force_https` |
+| `0004_polite_meggan.sql` | 网关测试/费率字段（`fx_rate`、`test_amount_minor`、测试状态、`tested_config_hash`）；订单 provider 金额/币种/汇率 |
+| `0005_right_ser_duncan.sql` | `payment_gateways.test_require_callback`（测试是否必须验证回调） |
 
-**尚未发布，但已经是“基线 + 增量”的追加式。** 改表继续 `npm run db:generate` 追加，
-不要改已提交的 `0001`；一旦打了 `v*` tag，`check:migrations` 会以最近一次 release tag
-强制不可变。
+**追加式迁移。** 改表继续 `npm run db:generate` 追加，不要改已提交的历史；一旦打了 `v*` tag，
+`check:migrations` 会以最近一次 release tag 强制不可变。
 
 ## 4. 升级路径（重要）
 

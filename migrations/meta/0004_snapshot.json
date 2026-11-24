@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "cd463996-9bbd-4cbd-85aa-fae6d0bb1310",
-  "prevId": "4dec679c-a868-4500-a557-8937fa9ed93a",
+  "id": "4dec679c-a868-4500-a557-8937fa9ed93a",
+  "prevId": "211f79e0-a42f-47fc-acfb-b30e427d3942",
   "tables": {
     "adjustments": {
       "name": "adjustments",
@@ -1241,14 +1241,6 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
-        },
-        "test_require_callback": {
-          "name": "test_require_callback",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
         },
         "tested_config_hash": {
           "name": "tested_config_hash",
@@ -3102,6 +3094,37 @@
           "isUnique": false
         }
       },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "domain_checks": {
+      "name": "domain_checks",
+      "columns": {
+        "hostname": {
+          "name": "hostname",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "checked_at": {
+          "name": "checked_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

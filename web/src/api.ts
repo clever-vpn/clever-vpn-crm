@@ -256,36 +256,55 @@ export interface SiteSettingsView {
 }
 
 export type DomainKind = "site" | "crm";
-export type DomainState = "pending" | "active" | "failed";
+
+export type DomainStatus =
+  | "pending_check"
+  | "needs_action"
+  | "wait"
+  | "ready"
+  | "manual"
+  | "failed"
+  | "unknown";
+
+export type DnsProvider = "cloudflare" | "other" | "unknown";
+export type StepStatus = "done" | "todo" | "wait" | "unknown" | "manual";
+export type StepProblem =
+  | "missing"
+  | "wrong_type"
+  | "wrong_target"
+  | "proxy"
+  | "propagation"
+  | "unknown"
+  | null;
 
 export interface DomainDnsRecord {
-  type: "TXT" | "CNAME";
+  type: "CNAME" | "A" | "AAAA" | "TXT";
   name: string;
   value: string;
-  status?: string;
 }
 
-export interface DomainDns {
-  target: string;
-  ownership: DomainDnsRecord | null;
-  validation: DomainDnsRecord[];
-  dcv: DomainDnsRecord[];
+export interface DomainCheckStep {
+  id: "traffic" | "dcv" | "ownership";
+  status: StepStatus;
+  expected: DomainDnsRecord | null;
+  actual: DomainDnsRecord[];
+  problem: StepProblem;
+  fix: string | null;
 }
 
-/** 与 cf-api `/api/v2/crms/domains` 的 `DomainView` 一致 */
+export interface DomainCheck {
+  status: DomainStatus;
+  provider: DnsProvider;
+  steps: DomainCheckStep[];
+  cert_expires_at: string | null;
+  checked_at: string;
+}
+
 export interface DomainView {
   hostname: string;
-  kind: DomainKind | string;
-  state: DomainState;
-  enabled: boolean;
-  hostname_status: string | null;
-  cert_status: string | null;
-  cf_hostname_id: string | null;
-  created_at: string | null;
-  verified_at: string | null;
+  kind: DomainKind;
+  status: DomainStatus;
   last_checked_at: string | null;
-  last_error: string | null;
-  dns: DomainDns | null;
 }
 
 export interface DomainsView {
@@ -371,15 +390,15 @@ export const api = {
           unused_settings?: string[];
         }
     >("PUT", "/site/settings", input),
-  /** 自定义域名：`refresh=true` 会让 cf-api 回源 Cloudflare 刷新状态 */
-  domains: (refresh = true) =>
-    call<DomainsView>("GET", `/domains${refresh ? "?refresh=1" : ""}`),
+  /** 自定义域名：列表只读 cf-api 的绑定 + CRM 本地检查状态 */
+  domains: () => call<DomainsView>("GET", "/domains"),
   addDomain: (input: { hostname: string; kind: DomainKind }) =>
     call<{ supported: true; domain: DomainView }>("POST", "/domains", input),
-  retryDomain: (hostname: string) =>
-    call<{ supported: true; domain: DomainView }>(
+  /** 状态检查：DNS/HEAD/纠错全在 CRM，cf-api 只提供最新原始状态 */
+  checkDomain: (hostname: string) =>
+    call<{ supported: true; domain: DomainView; check: DomainCheck }>(
       "POST",
-      `/domains/${encodeURIComponent(hostname)}/retry`,
+      `/domains/${encodeURIComponent(hostname)}/check`,
       {},
     ),
   removeDomain: (hostname: string) =>

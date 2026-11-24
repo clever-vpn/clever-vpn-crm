@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "npm run build:web && wrangler dev",
     "dev:web": "vite",
+    "dev:local": "bash scripts/dev/local-single.sh",
     "dev:app-web": "node scripts/dev-app-web.mjs",
     "build:web": "node -e \"require('node:fs').rmSync('web/dist',{recursive:true,force:true})\" && vite build",
     "engine:sync": "node scripts/gen-engine.mjs",

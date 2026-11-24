@@ -13,11 +13,7 @@ import { MIGRATION_BUNDLE, EXPECTED_NAMES } from "../../src/db/migrations.genera
 import { env } from "./apply-migrations";
 
 const LEDGER = `"d1_migrations"`;
-const BASELINE = "0000_baseline.sql";
-const RETURN_WEBHOOK = "0001_true_menace.sql";
-const CHANNEL_CODES = "0002_instance_channel_codes.sql";
-const TEST_FX = "0003_polite_meggan.sql";
-const CALLBACK_FLAG = "0004_right_ser_duncan.sql";
+const ALL = MIGRATION_BUNDLE.files.map((file) => file.name);
 
 /** 台账里现在有哪些名字（升序） */
 async function ledgerNames(): Promise<string[]> {
@@ -96,29 +92,28 @@ describe("spike: D1 batch 的事务性（门禁的前提）", () => {
 
 describe("门禁判据（文件名集合）", () => {
   it("内嵌 bundle 与生产链同名（只比集合，不比 tag）", () => {
-    expect(MIGRATION_BUNDLE.files.map((file) => file.name)).toEqual([BASELINE, RETURN_WEBHOOK, CHANNEL_CODES, TEST_FX, CALLBACK_FLAG]);
-    expect(EXPECTED_NAMES.has(BASELINE)).toBe(true);
-    expect(EXPECTED_NAMES.has(RETURN_WEBHOOK)).toBe(true);
+    expect(MIGRATION_BUNDLE.files.map((file) => file.name)).toEqual(ALL);
+    expect(ALL.every((name) => EXPECTED_NAMES.has(name))).toBe(true);
   });
 
   it("相等：放行，且不写任何东西", async () => {
     __resetSchemaGuardForTests();
-    await setLedger([BASELINE, RETURN_WEBHOOK, CHANNEL_CODES, TEST_FX, CALLBACK_FLAG]);
+    await setLedger(ALL);
 
     await expect(ensureTenantSchema(env.DB, 11)).resolves.toBeUndefined();
-    expect(await ledgerNames()).toEqual([BASELINE, RETURN_WEBHOOK, CHANNEL_CODES, TEST_FX, CALLBACK_FLAG]); // 没有 no-op 写
+    expect(await ledgerNames()).toEqual(ALL); // 没有 no-op 写
   });
 
   it("领先：台账里有代码不认识的文件 → schema_ahead（不是跑下去撞表）", async () => {
     __resetSchemaGuardForTests();
-    await setLedger([BASELINE, RETURN_WEBHOOK, "0002_future.sql"]);
+    await setLedger([...ALL, "9999_future.sql"]);
 
     const failure = await ensureTenantSchema(env.DB, 12).catch((e: unknown) => e);
     expect(failure).toBeInstanceOf(SchemaGateError);
     expect((failure as SchemaGateError).code).toBe("schema_ahead");
-    expect((failure as SchemaGateError).message).toContain("0002_future.sql");
+    expect((failure as SchemaGateError).message).toContain("9999_future.sql");
 
-    await setLedger([BASELINE, RETURN_WEBHOOK, CHANNEL_CODES, TEST_FX, CALLBACK_FLAG]); // 还原，后面的用例还要用这个库
+    await setLedger(ALL); // 还原，后面的用例还要用这个库
   });
 
   it("热路径：结论缓存 5 分钟，TTL 内零 I/O", async () => {
@@ -161,7 +156,7 @@ describe("门禁判据（文件名集合）", () => {
 });
 
 describe("空库 / 整条链（清空重开与池里新建的库）", () => {
-  it("台账不存在 → 建台账、一个 batch 跑完整条链、再跑一次零动作", async () => {
+  it("台账不存在 → 建台账、一个 batch 跑完全部迁移、再跑一次零动作", async () => {
     __resetSchemaGuardForTests();
 
     // 摆成"全新库"：表全删（含台账）。这条与 setup 里 apply 过的库等价于清空重开。
@@ -175,13 +170,13 @@ describe("空库 / 整条链（清空重开与池里新建的库）", () => {
 
     await ensureTenantSchema(env.DB, 17);
 
-    // 整条链当场补齐（79 条 DDL 同一批提交），台账按文件顺序记两条
+    // 整条链当场补齐，台账登记全部文件名
     expect(await tableExists("admin_users")).toBe(true);
-    expect(await ledgerNames()).toEqual([BASELINE, RETURN_WEBHOOK, CHANNEL_CODES, TEST_FX, CALLBACK_FLAG]);
+    expect(await ledgerNames()).toEqual(ALL);
 
     // 幂等：再跑一次不新增、不报错（"发版不改迁移 = 零动作"）
     __resetSchemaGuardForTests();
     await expect(ensureTenantSchema(env.DB, 17)).resolves.toBeUndefined();
-    expect(await ledgerNames()).toEqual([BASELINE, RETURN_WEBHOOK, CHANNEL_CODES, TEST_FX, CALLBACK_FLAG]);
+    expect(await ledgerNames()).toEqual(ALL);
   });
 });
