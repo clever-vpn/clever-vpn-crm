@@ -396,6 +396,8 @@ export function rowToPlan(row: PlanRow): Plan {
 export const PAYMENT_METHOD_LABELS: Record<string, string> = {
   alipay: "支付宝",
   wechat: "微信支付",
+  stripe: "Stripe",
+  paypal: "PayPal",
   card: "银行卡",
 };
 

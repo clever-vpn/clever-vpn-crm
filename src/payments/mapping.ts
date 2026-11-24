@@ -1,29 +1,14 @@
 /**
- * 支付网关映射解释器（`driver = generic_json_v1`）
+ * 支付网关映射解释器（`driver = generic_json_v1`）—— v2。
  *
- * ## 它解决什么
- *
- * 聚合支付的协议几乎都是同一种形状：**下单 + 查单 + 回调**，只是字段名、路径、
- * 金额单位、状态码不同。为每家写一个 driver，等于把同一段逻辑抄二十遍；而写一个
- * 「配置表 + 解释器」，租户贴一份文档就能接上（AI 生成草稿也只产出这份配置）。
- *
- * ## 它**不**解决什么（有意为之）
- *
- * Stripe / PayPal 那种「OAuth 换 token」「必须二次 capture」「回调要调官方 API 验签」
- * 不属于这一类。硬加进来会让这份配置变成半门 DSL，得不偿失 —— 它们是独立薄 driver。
- * 判据：**签名能在本地一次算完 → 映射；否则 → driver**。
- *
- * ## 边界清单（`docs/payments.md` §6.1 有对外的说明）
- *
- * - 只做：取值（点号路径）、比对、拼参数、算签名、发请求。
- * - 不做：表达式、脚本、正则替换、状态机跳转。
- *
- * 因此**没有** `if`：所有「什么时候算成功 / 算失败」都是 `{path, equals|in}` 三件套。
+ * 根只有 create / notify / query；每个 API 分 request / response。
+ * 字段用统一的 FieldSpec：field = 请求 body 字段名 / 响应路径，role 说明语义，
+ * amount/timestamp/nonce 等差异放在字段属性里，不再有全局 amount_unit/sign。
  */
 
 import { SIGN_ALGOS, signParams, verifyParams, type SignAlgo, type SignSpec } from "./sign";
 
-export const DRIVERS = ["epay_v1", "generic_json_v1", "stripe", "paypal", "manual"] as const;
+export const DRIVERS = ["epay_v1", "epay_v2", "generic_json_v1", "stripe", "paypal", "manual"] as const;
 export type Driver = (typeof DRIVERS)[number];
 
 export const AMOUNT_UNITS = ["yuan", "cent"] as const;
@@ -31,112 +16,114 @@ export type AmountUnit = (typeof AMOUNT_UNITS)[number];
 
 export type BodyFormat = "form" | "json";
 export type HttpMethod = "GET" | "POST";
+export type TimestampFormat = "s" | "ms" | "ymdhms";
 
-/** 判定条件：读 `path` 拿值，然后 `equals` 相等 / `in` 命中其一 */
 export interface WhenSpec {
-  /** 点号路径，如 `data.state`；顶层字段直接写名字 */
   path: string;
   equals?: string | number;
   in?: (string | number)[];
 }
 
-/** 请求参数名映射（左边是我们的语义，右边是厂商的字段名） */
-export interface FieldMap {
-  merchant: string;
-  order_no: string;
-  amount: string;
-  subject?: string;
-  body?: string;
-  notify_url?: string;
-  return_url?: string;
-  client_ip?: string;
-  /** 支付方式字段名（值来自 `channel_codes`）；**值为空时整个参数不发** */
-  channel?: string;
-  /** 时间戳字段名（格式由 `timestamp_format` 决定） */
-  timestamp?: string;
-  /** 随机串字段名（每次请求重新生成 32 位 hex，虎皮椒的 `nonce_str`） */
-  nonce?: string;
+export type FieldRole =
+  | "merchant" | "order_no" | "amount" | "subject" | "body"
+  | "notify_url" | "return_url" | "client_ip" | "channel"
+  | "timestamp" | "nonce" | "pay_url" | "trade_no" | "expires_at" | "message";
+
+export interface FieldSpec {
+  /** 请求：body/form 实际字段名；响应：点号路径 */
+  field: string;
+  /** 语义角色；常量可省略 */
+  role?: FieldRole;
+  /** 请求：占位符或字面量；响应不写 */
+  value?: string;
+  /** amount：yuan / cent */
+  unit?: AmountUnit;
+  /** timestamp：s / ms / ymdhms */
+  format?: TimestampFormat;
+  /** timestamp：ymdhms 固定 Asia/Shanghai */
+  timezone?: string;
+  /** nonce：十六进制长度，默认 32 */
+  length?: number;
+  /** JSON 请求里按数字发送 */
+  numeric?: boolean;
 }
 
-/** 认证头：`{key}` 会被替换成密钥 */
 export interface AuthSpec {
   header: string;
   value: string;
 }
 
-/** 查单配置。**整个 `query` 都可以不写** —— 有的网关没有查单接口（虎皮椒） */
-export interface QuerySpec {
+export interface SignResponseSpec {
+  /** 响应里签名字段的路径；必填 */
+  field: string;
+  /** 被签名对象路径；不写 = 整个响应体 */
+  data_path?: string;
+  /** 验签算法；不写 = 沿用同端点 request.sign */
+  spec?: SignSpec;
+}
+
+interface RequestCommon {
   method?: HttpMethod;
   format?: BodyFormat;
+  auth?: AuthSpec;
+}
+
+export interface CreateRequest extends RequestCommon {
   path: string;
-  /** 请求参数，值支持 `{merchant}` `{secret}` `{order_no}` `{amount}` `{channel}` `{timestamp}` `{nonce}` */
-  fields: Record<string, string>;
-  /** 是否与下单用同一套签名；易支付的查单接口自带 key、不签名 ⇒ `"none"` */
-  sign?: "same" | "none";
+  fields: FieldSpec[];
+  sign: SignSpec;
+}
+
+export interface CreateResponse {
+  ok: WhenSpec;
+  fields: FieldSpec[];
+  sign?: SignResponseSpec;
+}
+
+export interface NotifyRequest {
+  method?: HttpMethod;
+  format?: BodyFormat;
+  fields: FieldSpec[];
+  paid_when: WhenSpec;
+  sign: SignSpec;
+}
+
+export interface NotifyResponse {
+  reply: string;
+}
+
+export type QuerySign = SignSpec | { mode: "none" };
+
+export interface QueryRequest extends RequestCommon {
+  path: string;
+  fields: FieldSpec[];
+  sign: QuerySign;
+}
+
+export interface QueryResponse {
   ok?: WhenSpec;
   paid_when: WhenSpec;
-  /** 明确失败/过期/撤销：命中即收尾，不再重试 */
   terminal_when?: WhenSpec;
-  amount?: string;
-  trade_no?: string;
-  message?: string;
+  fields: FieldSpec[];
+  sign?: SignResponseSpec;
 }
 
 export interface GatewayMapping {
-  create: { method?: HttpMethod; path: string; format?: BodyFormat };
-  fields: FieldMap;
-  /** **下单**金额单位。必填 —— 写错就是 100 倍事故 */
-  amount_unit: AmountUnit;
-  /** 回调金额单位，缺省跟随 `amount_unit`（有网关下单按元、回调按分） */
-  notify_amount_unit?: AmountUnit;
-  /** 查单金额单位，缺省跟随 `amount_unit` */
-  query_amount_unit?: AmountUnit;
-  /**
-   * 时间戳格式：
-   *   - `s` 秒级（10 位）
-   *   - `ms` 毫秒级（13 位）
-   *   - `ymdhms` `YYYYMMDDHHmmss`，**北京时间（UTC+8）** —— 国内渠道通用写法
-   */
-  timestamp_format?: "s" | "ms" | "ymdhms";
-  constants?: Record<string, string | number>;
-  /** 我方支付方式 → 厂商渠道码，如 `{alipay:"alipay", wechat:"wxpay"}` */
-  channel_codes?: Record<string, string | number>;
-  sign?: SignSpec;
-  auth?: AuthSpec;
-  response: {
-    ok: WhenSpec;
-    message?: string;
-    /** 单个收银台地址字段；多个候选用 `pay_url_from` */
-    pay_url?: string;
-    /** 依次取第一个非空（青蛙文档：payurl / qrcode / urlscheme 三选一） */
-    pay_url_from?: string[];
-    /** 有些网关文档给的是 http，实际必须 https */
-    pay_url_force_https?: boolean;
-    /** 服务商流水号 */
-    trade_no?: string;
-    /** 收银台过期时间（原文保存，各家格式不同） */
-    expires_at?: string;
-  };
-  notify: {
-    method?: HttpMethod;
-    format?: BodyFormat;
-    /** 回调里"我方单号"的字段名（**不是**路径，是扁平字段名） */
-    order_no: string;
-    trade_no?: string;
-    amount?: string;
-    paid_when: WhenSpec;
-    /** 应答原文，必须与厂商要求**逐字**一致，否则会被无限重发 */
-    reply: string;
-  };
-  /** 可选：不写就是"没有查单接口"，cron 兜底会自动跳过这个网关并告警 */
-  query?: QuerySpec;
+  create: { request: CreateRequest; response: CreateResponse };
+  notify: { request: NotifyRequest; response: NotifyResponse };
+  /** mock/历史数据可以没有；generic 新配置由 validateMapping 要求必填 */
+  query?: { request: QueryRequest; response: QueryResponse };
+}
+
+export interface MappingValidationOptions {
+  /** 仅易支付 V1 preset：查单不签名 */
+  allowUnsignedQuery?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────
-// 读值 / 比对 / 金额
+// 读值 / 比对 / 金额 / 时间
 // ─────────────────────────────────────────────────────────────
 
-/** 点号路径取值：`data.state`、`status`；任一段不存在返回 undefined */
 export function readPath(payload: unknown, path: string): unknown {
   let cur: unknown = payload;
   for (const seg of path.split(".")) {
@@ -146,12 +133,6 @@ export function readPath(payload: unknown, path: string): unknown {
   return cur;
 }
 
-/**
- * 判定条件是否成立。
- *
- * 值统一转字符串比较 —— 各家 `code`/`status` 有时是数字有时是 `"1"`，
- * 写 `equals: 1` 必须能匹配 `"1"`（否则就是一个永远不成立的配置，最难排查）。
- */
 export function matchesWhen(spec: WhenSpec | undefined, payload: unknown): boolean {
   if (!spec) return false;
   const actual = readPath(payload, spec.path);
@@ -162,12 +143,10 @@ export function matchesWhen(spec: WhenSpec | undefined, payload: unknown): boole
   return false;
 }
 
-/** 我方最小单位 → 厂商格式。`yuan` 输出两位小数字符串（`12.34`） */
 export function formatAmount(minor: number, unit: AmountUnit): string | number {
   return unit === "cent" ? Math.round(minor) : (minor / 100).toFixed(2);
 }
 
-/** 厂商格式 → 我方最小单位；解析不出来返回 `null`（调用方必须当"金额不符"处理） */
 export function parseAmount(raw: unknown, unit: AmountUnit): number | null {
   if (raw === undefined || raw === null || raw === "") return null;
   const n = Number(String(raw).trim());
@@ -175,10 +154,9 @@ export function parseAmount(raw: unknown, unit: AmountUnit): number | null {
   return unit === "cent" ? Math.round(n) : Math.round(n * 100);
 }
 
-function formatTimestamp(now: Date, format: "s" | "ms" | "ymdhms" = "s"): string {
+function formatTimestamp(now: Date, format: TimestampFormat = "s"): string {
   if (format === "ms") return String(now.getTime());
   if (format === "s") return String(Math.floor(now.getTime() / 1000));
-  // ymdhms：北京时间。国内网关几乎都用这个，而不是时间戳
   const d = new Date(now.getTime() + 8 * 3600_000);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(
@@ -186,102 +164,275 @@ function formatTimestamp(now: Date, format: "s" | "ms" | "ymdhms" = "s"): string
   )}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
 }
 
+function randomHex(length = 32): string {
+  const chars = Math.max(2, Math.ceil(length / 2));
+  const buf = new Uint8Array(chars);
+  crypto.getRandomValues(buf);
+  return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, length);
+}
+
 // ─────────────────────────────────────────────────────────────
-// 校验（错误文案给租户看，中文、指出具体哪个键）
+// 校验
 // ─────────────────────────────────────────────────────────────
 
 export type MappingValidation = { ok: true; mapping: GatewayMapping } | { ok: false; errors: string[] };
 
 const isNonEmptyStr = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
+const isStrOrNum = (v: unknown): v is string | number => typeof v === "string" || typeof v === "number";
 
-function whenError(prefix: string, spec: unknown): string | null {
-  if (!spec || typeof spec !== "object") return `${prefix} 必填`;
-  const s = spec as WhenSpec;
-  if (!isNonEmptyStr(s.path)) return `${prefix}.path 必填`;
-  if (s.equals === undefined && (!s.in || s.in.length === 0)) {
-    return `${prefix} 需要 equals 或 in（不写判定条件等于永远不成立）`;
-  }
-  return null;
+const TOP_KEYS = ["create", "notify", "query"] as const;
+const API_KEYS = ["request", "response"] as const;
+const REQUEST_COMMON_KEYS = ["method", "format", "auth"] as const;
+const CREATE_REQUEST_KEYS = [...REQUEST_COMMON_KEYS, "path", "fields", "sign"] as const;
+const NOTIFY_REQUEST_KEYS = ["method", "format", "fields", "paid_when", "sign"] as const;
+const QUERY_REQUEST_KEYS = [...REQUEST_COMMON_KEYS, "path", "fields", "sign"] as const;
+const FIELD_KEYS = ["field", "role", "value", "unit", "format", "timezone", "length", "numeric"] as const;
+const RESPONSE_KEYS = ["ok", "fields", "sign"] as const;
+const NOTIFY_RESPONSE_KEYS = ["reply"] as const;
+const QUERY_RESPONSE_KEYS = ["ok", "paid_when", "terminal_when", "fields", "sign"] as const;
+const SIGN_KEYS = ["field", "algo", "key_append", "exclude", "upper", "encode"] as const;
+const AUTH_KEYS = ["header", "value"] as const;
+const RESPONSE_SIGN_KEYS = ["field", "data_path", "spec"] as const;
+const WHEN_KEYS = ["path", "equals", "in"] as const;
+const ROLES: readonly FieldRole[] = [
+  "merchant", "order_no", "amount", "subject", "body",
+  "notify_url", "return_url", "client_ip", "channel",
+  "timestamp", "nonce", "pay_url", "trade_no", "expires_at", "message",
+];
+
+function unknownErrors(value: unknown, allowed: readonly string[], prefix: string): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.keys(value)
+    .filter((key) => !allowed.includes(key))
+    .map((key) => `${prefix}${key} 不是合法键（未知键）`);
 }
 
-/**
- * 校验并补默认值。**不猜**：拿不准就报错，让租户改配置，
- * 而不是"看起来能跑、上线才发现金额单位错 100 倍"。
- */
-export function validateMapping(input: unknown): MappingValidation {
+function checkWhenShape(spec: unknown, label: string, errors: string[]): void {
+  if (spec === undefined) return;
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+    errors.push(`${label} 必须是对象`);
+    return;
+  }
+  errors.push(...unknownErrors(spec, WHEN_KEYS, `${label}.`));
+  const s = spec as WhenSpec;
+  if (s.equals !== undefined && s.in !== undefined) errors.push(`${label} 不能同时有 equals 和 in（二选一）`);
+  if (s.equals !== undefined && !isStrOrNum(s.equals)) errors.push(`${label}.equals 只能是字符串或数字`);
+  if (s.in !== undefined && (!Array.isArray(s.in) || s.in.some((v) => !isStrOrNum(v)))) {
+    errors.push(`${label}.in 只能是字符串/数字数组`);
+  }
+}
+
+function whenRequiredCheck(spec: WhenSpec | undefined, label: string, errors: string[]): void {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+    errors.push(`${label} 必填`);
+    return;
+  }
+  if (!isNonEmptyStr(spec.path)) errors.push(`${label}.path 必填`);
+  if (spec.equals === undefined && (!spec.in || spec.in.length === 0)) {
+    errors.push(`${label} 需要 equals 或 in`);
+  }
+}
+
+function checkSignSpec(spec: unknown, label: string, errors: string[]): void {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+    errors.push(`${label} 必须是对象`);
+    return;
+  }
+  errors.push(...unknownErrors(spec, SIGN_KEYS, `${label}.`));
+  const s = spec as SignSpec;
+  if (s.field !== undefined && !isNonEmptyStr(s.field)) errors.push(`${label}.field 必须是非空字符串`);
+  if (s.algo !== undefined && !SIGN_ALGOS.includes(s.algo as SignAlgo)) errors.push(`${label}.algo 只能是 ${SIGN_ALGOS.join(" / ")}`);
+  if (s.key_append !== undefined && typeof s.key_append !== "string") errors.push(`${label}.key_append 必须是字符串`);
+  if (s.exclude !== undefined && (!Array.isArray(s.exclude) || s.exclude.some((x) => typeof x !== "string"))) {
+    errors.push(`${label}.exclude 必须是字符串数组`);
+  }
+  if (s.upper !== undefined && typeof s.upper !== "boolean") errors.push(`${label}.upper 只能是布尔值`);
+  if (s.encode !== undefined && typeof s.encode !== "boolean") errors.push(`${label}.encode 只能是布尔值`);
+}
+
+function checkResponseSign(spec: unknown, label: string, errors: string[]): void {
+  if (spec === undefined) return;
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+    errors.push(`${label} 必须是对象`);
+    return;
+  }
+  errors.push(...unknownErrors(spec, RESPONSE_SIGN_KEYS, `${label}.`));
+  const s = spec as SignResponseSpec;
+  if (!isNonEmptyStr(s.field)) errors.push(`${label}.field 必填（响应签名路径）`);
+  if (s.data_path !== undefined && typeof s.data_path !== "string") errors.push(`${label}.data_path 必须是字符串`);
+  if (s.spec !== undefined) checkSignSpec(s.spec, `${label}.spec`, errors);
+}
+
+function checkAuth(value: unknown, label: string, errors: string[]): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push(`${label} 必须是对象`);
+    return;
+  }
+  errors.push(...unknownErrors(value, AUTH_KEYS, `${label}.`));
+  const a = value as AuthSpec;
+  if (!isNonEmptyStr(a.header) || !isNonEmptyStr(a.value)) {
+    errors.push(`${label}.header / value 必须同时填写`);
+  }
+}
+
+function checkField(value: unknown, label: string, errors: string[], request: boolean): FieldSpec | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push(`${label} 必须是对象`);
+    return null;
+  }
+  errors.push(...unknownErrors(value, FIELD_KEYS, `${label}.`));
+  const f = value as FieldSpec;
+  if (!isNonEmptyStr(f.field)) errors.push(`${label}.field 必填`);
+  if (f.role !== undefined && !ROLES.includes(f.role)) errors.push(`${label}.role 非法`);
+  if (f.value !== undefined && typeof f.value !== "string") errors.push(`${label}.value 必须是字符串`);
+  if (!request && f.value !== undefined) errors.push(`${label}.value 只能出现在请求字段里`);
+  if (request && f.value === undefined && f.role === undefined) {
+    // 常量：没有 role/value 不合法；常量必须至少体现“字面量”
+    errors.push(`${label} 需要 value（常量）或 role`);
+  }
+  if (f.unit !== undefined && !AMOUNT_UNITS.includes(f.unit)) errors.push(`${label}.unit 只能是 yuan / cent`);
+  if (f.format !== undefined && !["s", "ms", "ymdhms"].includes(f.format)) errors.push(`${label}.format 只能是 s / ms / ymdhms`);
+  if (f.timezone !== undefined && typeof f.timezone !== "string") errors.push(`${label}.timezone 必须是字符串`);
+  if (f.length !== undefined && (!Number.isInteger(f.length) || f.length < 2)) errors.push(`${label}.length 必须是 >=2 的整数`);
+  if (f.numeric !== undefined && typeof f.numeric !== "boolean") errors.push(`${label}.numeric 只能是布尔值`);
+  if (f.role === "amount" && f.unit === undefined) errors.push(`${label}.unit 必填（amount 字段必须有单位）`);
+  return f;
+}
+
+function checkFields(value: unknown, label: string, errors: string[], request: boolean): FieldSpec[] {
+  if (!Array.isArray(value)) {
+    errors.push(`${label} 必须是数组`);
+    return [];
+  }
+  const out: FieldSpec[] = [];
+  const seen = new Set<string>();
+  for (const [i, item] of value.entries()) {
+    const f = checkField(item, `${label}[${i}]`, errors, request);
+    if (f) {
+      if (seen.has(f.field)) errors.push(`${label}[${i}].field 重复：${f.field}`);
+      seen.add(f.field);
+      out.push(f);
+    }
+  }
+  return out;
+}
+
+function hasRole(fields: FieldSpec[], role: FieldRole): boolean {
+  return fields.some((f) => f.role === role);
+}
+
+export function validateMapping(input: unknown, opts: MappingValidationOptions = {}): MappingValidation {
   const errors: string[] = [];
-  const m = (input && typeof input === "object" ? input : {}) as Partial<GatewayMapping>;
+  const m = (input && typeof input === "object" && !Array.isArray(input) ? input : {}) as Partial<GatewayMapping>;
+  errors.push(...unknownErrors(input, TOP_KEYS, ""));
 
-  if (!isNonEmptyStr(m.create?.path)) errors.push("create.path 必填（下单接口路径）");
-  if (m.create?.format && !["form", "json"].includes(m.create.format)) {
-    errors.push("create.format 只能是 form / json");
-  }
-  if (m.create?.method && !["GET", "POST"].includes(m.create.method)) {
-    errors.push("create.method 只能是 GET / POST");
-  }
-
-  const f = (m.fields ?? {}) as Partial<FieldMap>;
-  for (const [k, label] of [
-    ["merchant", "商户号"],
-    ["order_no", "订单号"],
-    ["amount", "金额"],
-  ] as const) {
-    if (!isNonEmptyStr(f[k])) errors.push(`fields.${k} 必填（${label}字段名）`);
-  }
-
-  if (!m.amount_unit || !AMOUNT_UNITS.includes(m.amount_unit)) {
-    errors.push("amount_unit 必填，且只能是 yuan（元）/ cent（分）");
-  }
-  for (const [key, label] of [
-    ["notify_amount_unit", "notify_amount_unit"],
-    ["query_amount_unit", "query_amount_unit"],
-  ] as const) {
-    const v = m[key];
-    if (v !== undefined && !AMOUNT_UNITS.includes(v)) {
-      errors.push(`${label} 只能是 yuan / cent（不写则跟随 amount_unit）`);
+  const create = m.create;
+  if (!create || typeof create !== "object" || Array.isArray(create)) {
+    errors.push("create 必须是对象");
+  } else {
+    errors.push(...unknownErrors(create, API_KEYS, "create."));
+    const req = create.request;
+    if (!req || typeof req !== "object" || Array.isArray(req)) {
+      errors.push("create.request 必须是对象");
+    } else {
+      errors.push(...unknownErrors(req, CREATE_REQUEST_KEYS, "create.request."));
+      if (!isNonEmptyStr(req.path)) errors.push("create.request.path 必填");
+      if (req.method !== undefined && !["GET", "POST"].includes(String(req.method))) errors.push("create.request.method 只能是 GET / POST");
+      if (req.format !== undefined && !["form", "json"].includes(String(req.format))) errors.push("create.request.format 只能是 form / json");
+      checkAuth(req.auth, "create.request.auth", errors);
+      const fields = checkFields(req.fields, "create.request.fields", errors, true);
+      for (const role of ["merchant", "order_no", "amount"] as const) {
+        if (!hasRole(fields, role)) errors.push(`create.request.fields 缺少 role=${role}`);
+      }
+      if (!req.sign || typeof req.sign !== "object" || Array.isArray(req.sign)) {
+        errors.push("create.request.sign 必填");
+      } else {
+        checkSignSpec(req.sign, "create.request.sign", errors);
+      }
     }
-  }
-  if (m.timestamp_format && !["s", "ms", "ymdhms"].includes(m.timestamp_format)) {
-    errors.push("timestamp_format 只能是 s / ms / ymdhms");
-  }
-
-  const sign = m.sign;
-  if (sign) {
-    if (sign.algo && !SIGN_ALGOS.includes(sign.algo as SignAlgo)) {
-      errors.push(`sign.algo 只能是 ${SIGN_ALGOS.join(" / ")}`);
-    }
-    if (sign.exclude_variants && sign.exclude_variants.length > 3) {
-      errors.push("sign.exclude_variants 最多 3 组");
+    const resp = create.response;
+    if (!resp || typeof resp !== "object" || Array.isArray(resp)) {
+      errors.push("create.response 必须是对象");
+    } else {
+      errors.push(...unknownErrors(resp, RESPONSE_KEYS, "create.response."));
+      checkWhenShape(resp.ok, "create.response.ok", errors);
+      whenRequiredCheck(resp.ok, "create.response.ok", errors);
+      const fields = checkFields(resp.fields, "create.response.fields", errors, false);
+      if (!hasRole(fields, "pay_url")) errors.push("create.response.fields 缺少 role=pay_url");
+      checkResponseSign(resp.sign, "create.response.sign", errors);
     }
   }
 
-  if (m.auth && (!isNonEmptyStr(m.auth.header) || !isNonEmptyStr(m.auth.value))) {
-    errors.push("auth.header / auth.value 必须同时填写");
+  const notify = m.notify;
+  if (!notify || typeof notify !== "object" || Array.isArray(notify)) {
+    errors.push("notify 必须是对象");
+  } else {
+    errors.push(...unknownErrors(notify, API_KEYS, "notify."));
+    const req = notify.request;
+    if (!req || typeof req !== "object" || Array.isArray(req)) {
+      errors.push("notify.request 必须是对象");
+    } else {
+      errors.push(...unknownErrors(req, NOTIFY_REQUEST_KEYS, "notify.request."));
+      if (req.method !== undefined && !["GET", "POST"].includes(String(req.method))) errors.push("notify.request.method 只能是 GET / POST");
+      if (req.format !== undefined && !["form", "json"].includes(String(req.format))) errors.push("notify.request.format 只能是 form / json");
+      const fields = checkFields(req.fields, "notify.request.fields", errors, true);
+      if (!hasRole(fields, "order_no")) errors.push("notify.request.fields 缺少 role=order_no");
+      checkWhenShape(req.paid_when, "notify.request.paid_when", errors);
+      whenRequiredCheck(req.paid_when, "notify.request.paid_when", errors);
+      if (!req.sign || typeof req.sign !== "object" || Array.isArray(req.sign)) {
+        errors.push("notify.request.sign 必填");
+      } else {
+        checkSignSpec(req.sign, "notify.request.sign", errors);
+      }
+    }
+    const resp = notify.response;
+    if (!resp || typeof resp !== "object" || Array.isArray(resp)) {
+      errors.push("notify.response 必须是对象");
+    } else {
+      errors.push(...unknownErrors(resp, NOTIFY_RESPONSE_KEYS, "notify.response."));
+      if (!isNonEmptyStr(resp.reply)) errors.push("notify.response.reply 必填（应答原文）");
+    }
   }
 
-  const r = m.response;
-  const okErr = whenError("response.ok", r?.ok);
-  if (okErr) errors.push(`${okErr}（怎么判断下单成功）`);
-  if (!isNonEmptyStr(r?.pay_url) && !(r?.pay_url_from && r.pay_url_from.length > 0)) {
-    errors.push("response 需要 pay_url 或 pay_url_from（收银台地址在哪）");
-  }
-
-  const n = m.notify;
-  if (!isNonEmptyStr(n?.order_no)) errors.push("notify.order_no 必填（回调里哪个字段是我方单号）");
-  const paidErr = whenError("notify.paid_when", n?.paid_when);
-  if (paidErr) errors.push(`${paidErr}（怎么判断回调说已付款）`);
-  if (!isNonEmptyStr(n?.reply)) errors.push("notify.reply 必填（应答原文，写错会被无限重发）");
-  if (n?.format && !["form", "json"].includes(n.format)) errors.push("notify.format 只能是 form / json");
-
-  // `query` 整体可选：网关没有查单接口时（官方"开发中"）就不写
-  const q = m.query;
-  if (q) {
-    if (!isNonEmptyStr(q.path)) errors.push("query.path 必填（查单接口路径）");
-    const qPaid = whenError("query.paid_when", q.paid_when);
-    if (qPaid) errors.push(`${qPaid}（怎么判断查单结果已付款）`);
-    const qTerm = q.terminal_when ? whenError("query.terminal_when", q.terminal_when) : null;
-    if (qTerm) errors.push(qTerm);
-    if (q.sign && !["same", "none"].includes(q.sign)) errors.push('query.sign 只能是 "same" / "none"');
+  const query = m.query;
+  if (!query || typeof query !== "object" || Array.isArray(query)) {
+    errors.push("query 必须是对象");
+  } else {
+    errors.push(...unknownErrors(query, API_KEYS, "query."));
+    const req = query.request;
+    if (!req || typeof req !== "object" || Array.isArray(req)) {
+      errors.push("query.request 必须是对象");
+    } else {
+      errors.push(...unknownErrors(req, QUERY_REQUEST_KEYS, "query.request."));
+      if (!isNonEmptyStr(req.path)) errors.push("query.request.path 必填");
+      if (req.method !== undefined && !["GET", "POST"].includes(String(req.method))) errors.push("query.request.method 只能是 GET / POST");
+      if (req.format !== undefined && !["form", "json"].includes(String(req.format))) errors.push("query.request.format 只能是 form / json");
+      checkAuth(req.auth, "query.request.auth", errors);
+      const fields = checkFields(req.fields, "query.request.fields", errors, true);
+      const amount = fields.filter((f) => f.role === "amount");
+      if (amount.length > 1) errors.push("query.request.fields 只能有一个 role=amount");
+      const sign = req.sign as unknown;
+      if (sign && typeof sign === "object" && !Array.isArray(sign) && "mode" in sign) {
+        if ((sign as { mode: string }).mode !== "none") errors.push('query.request.sign.mode 只能是 "none"');
+        else if (!opts.allowUnsignedQuery) errors.push('query.request.sign={mode:"none"} 只允许易支付 V1 preset');
+      } else {
+        checkSignSpec(sign, "query.request.sign", errors);
+      }
+    }
+    const resp = query.response;
+    if (!resp || typeof resp !== "object" || Array.isArray(resp)) {
+      errors.push("query.response 必须是对象");
+    } else {
+      errors.push(...unknownErrors(resp, QUERY_RESPONSE_KEYS, "query.response."));
+      checkWhenShape(resp.ok, "query.response.ok", errors);
+      checkWhenShape(resp.paid_when, "query.response.paid_when", errors);
+      checkWhenShape(resp.terminal_when, "query.response.terminal_when", errors);
+      whenRequiredCheck(resp.paid_when, "query.response.paid_when", errors);
+      if (resp.terminal_when !== undefined) whenRequiredCheck(resp.terminal_when, "query.response.terminal_when", errors);
+      checkFields(resp.fields, "query.response.fields", errors, false);
+      checkResponseSign(resp.sign, "query.response.sign", errors);
+    }
   }
 
   if (errors.length) return { ok: false, errors };
@@ -293,22 +444,18 @@ export function validateMapping(input: unknown): MappingValidation {
 // ─────────────────────────────────────────────────────────────
 
 export interface ChargeContext {
-  /** 商户号 / app_id */
   merchant: string;
-  /** 密钥明文（只在内存中；不落日志、不进响应） */
   secret: string;
-  /** 我方订单号（下发后不可改） */
   orderNo: string;
   amountMinor: number;
   currency: string;
   subject: string;
-  /** 我方支付方式：alipay / wechat / … */
   method: string;
   notifyUrl: string;
   returnUrl?: string;
   clientIp?: string;
-  /** 网关根地址，如 `https://pay.example.com` */
   endpoint: string;
+  channelCodes?: Record<string, string | number>;
   now: Date;
 }
 
@@ -323,101 +470,138 @@ function joinUrl(endpoint: string, path: string): string {
   return `${endpoint.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
 }
 
-function baseHeaders(mapping: GatewayMapping, secret: string): Record<string, string> {
+function baseHeaders(auth: AuthSpec | undefined, secret: string): Record<string, string> {
   const headers: Record<string, string> = {};
-  if (mapping.auth) {
-    headers[mapping.auth.header] = mapping.auth.value.replace(/\{key\}/g, secret);
-  }
+  if (auth) headers[auth.header] = auth.value.replace(/\{key\}/g, secret);
   return headers;
 }
 
-/** 随机串（hex）——用于 `nonce_str` 这类防重放字段 */
-function randomHex(bytes = 16): string {
-  const buf = new Uint8Array(bytes);
-  crypto.getRandomValues(buf);
-  return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
+function coerceNumeric(params: Record<string, unknown>, fields: FieldSpec[], format: BodyFormat): Record<string, unknown> {
+  if (format !== "json") return params;
+  const out = { ...params };
+  for (const f of fields) {
+    if (!f.numeric) continue;
+    const value = out[f.field];
+    if (value === undefined || value === null || value === "") continue;
+    const n = Number(value);
+    if (Number.isFinite(n)) out[f.field] = n;
+  }
+  return out;
 }
 
-/** 组装下单请求（参数 + 签名 + body） */
-export function buildCreateRequest(mapping: GatewayMapping, ctx: ChargeContext): BuiltRequest {
-  const params: Record<string, string | number> = {};
-  for (const [k, v] of Object.entries(mapping.constants ?? {})) params[k] = v;
-
-  const f = mapping.fields;
-  params[f.merchant] = ctx.merchant;
-  params[f.order_no] = ctx.orderNo;
-  params[f.amount] = formatAmount(ctx.amountMinor, mapping.amount_unit);
-  if (f.subject) params[f.subject] = ctx.subject;
-  if (f.notify_url) params[f.notify_url] = ctx.notifyUrl;
-  if (f.return_url && ctx.returnUrl) params[f.return_url] = ctx.returnUrl;
-  if (f.client_ip && ctx.clientIp) params[f.client_ip] = ctx.clientIp;
-  if (f.channel) {
-    // 渠道码为空 = "这个渠道不传该参数"（虎皮椒：支付宝不传 type）。
-    // 不能发 `type=` 空串 —— 会被算进签名、或被当成非法渠道。
-    const code = mapping.channel_codes?.[ctx.method] ?? ctx.method;
-    if (String(code) !== "") params[f.channel] = code;
+function requestValue(f: FieldSpec, ctx: ChargeContext): string | number | undefined {
+  if (f.value === "{merchant}") return ctx.merchant;
+  if (f.value === "{order_no}") return ctx.orderNo;
+  if (f.value === "{amount}") return formatAmount(ctx.amountMinor, f.unit ?? "yuan");
+  if (f.value === "{subject}") return ctx.subject;
+  if (f.value === "{body}") return ctx.subject;
+  if (f.value === "{notify_url}") return ctx.notifyUrl;
+  if (f.value === "{return_url}") return ctx.returnUrl;
+  if (f.value === "{client_ip}") return ctx.clientIp;
+  if (f.value === "{channel}") {
+    const code = ctx.channelCodes?.[ctx.method] ?? ctx.method;
+    return String(code) === "" ? undefined : code;
   }
-  if (f.timestamp) params[f.timestamp] = formatTimestamp(ctx.now, mapping.timestamp_format);
-  if (f.nonce) params[f.nonce] = randomHex();
+  if (f.value === "{timestamp}") return formatTimestamp(ctx.now, f.format ?? "s");
+  if (f.value === "{nonce}") return randomHex(f.length ?? 32);
+  return f.value;
+}
 
-  const signed: Record<string, unknown> = { ...params };
-  if (mapping.sign) {
-    signed[mapping.sign.field ?? "sign"] = signParams(signed, ctx.secret, mapping.sign);
-  }
-
-  const headers = baseHeaders(mapping, ctx.secret);
-  const method = mapping.create.method ?? "POST";
-  const format = mapping.create.format ?? "form";
-  const url = joinUrl(ctx.endpoint, mapping.create.path);
-
+function sendRequest(
+  endpoint: string,
+  path: string,
+  method: HttpMethod,
+  format: BodyFormat,
+  headers: Record<string, string>,
+  params: Record<string, unknown>,
+): BuiltRequest {
+  const url = joinUrl(endpoint, path);
   if (method === "GET") {
     const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(signed)) qs.set(k, String(v));
+    for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
     return { url: `${url}?${qs.toString()}`, method, headers, body: null };
   }
   if (format === "json") {
     headers["Content-Type"] = "application/json";
-    return { url, method, headers, body: JSON.stringify(signed) };
+    return { url, method, headers, body: JSON.stringify(params) };
   }
   headers["Content-Type"] = "application/x-www-form-urlencoded";
   const form = new URLSearchParams();
-  for (const [k, v] of Object.entries(signed)) form.set(k, String(v));
+  for (const [k, v] of Object.entries(params)) form.set(k, String(v));
   return { url, method, headers, body: form.toString() };
 }
 
+export function buildCreateRequest(mapping: GatewayMapping, ctx: ChargeContext): BuiltRequest {
+  const req = mapping.create.request;
+  const params: Record<string, unknown> = {};
+  for (const f of req.fields) {
+    const value = requestValue(f, ctx);
+    if (value !== undefined && String(value) !== "") params[f.field] = value;
+  }
+  const headers = baseHeaders(req.auth, ctx.secret);
+  params[req.sign.field ?? "sign"] = signParams(params, ctx.secret, req.sign);
+  const method = req.method ?? "POST";
+  const format = req.format ?? "form";
+  return sendRequest(ctx.endpoint, req.path, method, format, headers, coerceNumeric(params, req.fields, format));
+}
+
+// ─────────────────────────────────────────────────────────────
+// 响应
+// ─────────────────────────────────────────────────────────────
+
 export interface CreateResult {
   ok: boolean;
-  message?: string;
   payUrl?: string;
   tradeNo?: string;
   expiresAt?: string;
+  message?: string;
 }
 
-/** 解析下单响应：成功判定 + 收银台地址 + 服务商流水号 */
-export function parseCreateResponse(mapping: GatewayMapping, payload: unknown): CreateResult {
-  const r = mapping.response;
-  const ok = matchesWhen(r.ok, payload);
-  const message = r.message ? String(readPath(payload, r.message) ?? "") : undefined;
-  if (!ok) return { ok: false, message: message || "网关返回失败" };
+function verifyResponseSign(
+  spec: SignResponseSpec | undefined,
+  fallback: SignSpec | { mode: "none" } | undefined,
+  payload: unknown,
+  secret: string | undefined,
+): boolean {
+  if (!spec) return true;
+  if (!secret) return false;
+  const data = spec.data_path ? readPath(payload, spec.data_path) : payload;
+  if (!data || typeof data !== "object") return false;
+  const signRaw = readPath(payload, spec.field);
+  if (signRaw === undefined || signRaw === null) return false;
+  const use = spec.spec ?? (fallback && !("mode" in fallback) ? fallback : undefined);
+  if (!use) return false;
+  const merged: Record<string, unknown> = { ...(data as Record<string, unknown>) };
+  merged[use.field ?? "sign"] = signRaw;
+  return verifyParams(merged, secret, use);
+}
 
-  const candidates = r.pay_url_from ?? (r.pay_url ? [r.pay_url] : []);
+export function parseCreateResponse(mapping: GatewayMapping, payload: unknown, secret?: string): CreateResult {
+  const r = mapping.create.response;
+  const ok = matchesWhen(r.ok, payload);
+  if (!ok) {
+    const messageField = r.fields.find((f) => f.role === "message");
+    return { ok: false, message: messageField ? String(readPath(payload, messageField.field) ?? "") || "网关返回失败" : "网关返回失败" };
+  }
+  if (!verifyResponseSign(r.sign, mapping.create.request.sign, payload, secret)) {
+    return { ok: false, message: "网关响应签名校验失败" };
+  }
   let payUrl: string | undefined;
-  for (const p of candidates) {
-    const v = readPath(payload, p);
+  for (const f of r.fields.filter((x) => x.role === "pay_url")) {
+    const v = readPath(payload, f.field);
     if (typeof v === "string" && v.trim()) {
       payUrl = v.trim();
       break;
     }
   }
-  if (payUrl && r.pay_url_force_https) payUrl = payUrl.replace(/^http:\/\//i, "https://");
-
-  const tradeNoRaw = r.trade_no ? readPath(payload, r.trade_no) : undefined;
-  const expiresRaw = r.expires_at ? readPath(payload, r.expires_at) : undefined;
-
+  const trade = r.fields.find((f) => f.role === "trade_no");
+  const expiry = r.fields.find((f) => f.role === "expires_at");
+  const tradeRaw = trade ? readPath(payload, trade.field) : undefined;
+  const expiresRaw = expiry ? readPath(payload, expiry.field) : undefined;
   return {
     ok: true,
     payUrl,
-    tradeNo: tradeNoRaw === undefined || tradeNoRaw === null ? undefined : String(tradeNoRaw),
+    tradeNo: tradeRaw === undefined || tradeRaw === null ? undefined : String(tradeRaw),
     expiresAt: expiresRaw === undefined || expiresRaw === null ? undefined : String(expiresRaw),
   };
 }
@@ -426,16 +610,11 @@ export function parseCreateResponse(mapping: GatewayMapping, payload: unknown): 
 // 回调
 // ─────────────────────────────────────────────────────────────
 
-/** 按映射读取回调参数（GET 查询串 / POST form / POST JSON） */
-export async function readNotifyParams(
-  mapping: GatewayMapping,
-  request: Request,
-): Promise<Record<string, unknown>> {
-  const method = mapping.notify.method ?? "POST";
-  if (method === "GET") {
-    return Object.fromEntries(new URL(request.url).searchParams);
-  }
-  if ((mapping.notify.format ?? "json") === "json") {
+export async function readNotifyParams(mapping: GatewayMapping, request: Request): Promise<Record<string, unknown>> {
+  const n = mapping.notify.request;
+  const method = n.method ?? "POST";
+  if (method === "GET") return Object.fromEntries(new URL(request.url).searchParams);
+  if ((n.format ?? "json") === "json") {
     try {
       const parsed = JSON.parse(await request.text()) as unknown;
       return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
@@ -443,7 +622,6 @@ export async function readNotifyParams(
       return {};
     }
   }
-  // 表单：用 formData 解析，**不要** `text()`（workerd 会对非文本 Content-Type 告警）
   const form = await request.formData().catch(() => null);
   if (!form) return {};
   const out: Record<string, unknown> = {};
@@ -457,33 +635,23 @@ export interface NotifyResult {
   orderNo: string | null;
   tradeNo: string | null;
   amountMinor: number | null;
-  /** 原样保存进 `orders.raw_notify` */
   raw: string;
 }
 
-/**
- * 解析回调。**注意：这里只给出"通知说了什么"，不判定订单已付** ——
- * 已付必须由 `queryCharge` 复核（见 `docs/payments.md` §3.1）。
- */
-export function parseNotify(
-  mapping: GatewayMapping,
-  params: Record<string, unknown>,
-  secret: string,
-): NotifyResult {
-  const n = mapping.notify;
-  const signOk = mapping.sign ? verifyParams(params, secret, mapping.sign) : true;
-
-  const orderNoRaw = params[n.order_no];
-  const tradeRaw = n.trade_no ? params[n.trade_no] : undefined;
-
+export function parseNotify(mapping: GatewayMapping, params: Record<string, unknown>, secret: string): NotifyResult {
+  const n = mapping.notify.request;
+  const field = (role: FieldRole): FieldSpec | undefined => n.fields.find((f) => f.role === role);
+  const order = field("order_no");
+  const trade = field("trade_no");
+  const amount = field("amount");
+  const orderRaw = order ? params[order.field] : undefined;
+  const tradeRaw = trade ? params[trade.field] : undefined;
   return {
-    signOk,
+    signOk: verifyParams(params, secret, n.sign),
     paid: matchesWhen(n.paid_when, params),
-    orderNo: orderNoRaw === undefined || orderNoRaw === null ? null : String(orderNoRaw),
+    orderNo: orderRaw === undefined || orderRaw === null ? null : String(orderRaw),
     tradeNo: tradeRaw === undefined || tradeRaw === null ? null : String(tradeRaw),
-    amountMinor: n.amount
-      ? parseAmount(params[n.amount], mapping.notify_amount_unit ?? mapping.amount_unit)
-      : null,
+    amountMinor: amount ? parseAmount(params[amount.field], amount.unit ?? "yuan") : null,
     raw: JSON.stringify(params),
   };
 }
@@ -500,88 +668,80 @@ export interface QueryContext {
   subject: string;
   method: string;
   endpoint: string;
+  channelCodes?: Record<string, string | number>;
   now: Date;
 }
 
-/** 这个网关能不能查单（`query` 没配 = 只能靠回调） */
 export function hasQuery(mapping: GatewayMapping): boolean {
-  return !!mapping.query && typeof mapping.query.path === "string" && mapping.query.path !== "";
+  return isNonEmptyStr(mapping.query?.request.path);
 }
 
-/**
- * 组装查单请求（`fields` 的值支持模板占位）。
- * @throws 网关没有查单接口时 —— 调用方应先用 `hasQuery()` 判断
- */
+function queryValue(f: FieldSpec, ctx: QueryContext): string | number | undefined {
+  if (f.value === "{merchant}") return ctx.merchant;
+  if (f.value === "{secret}") return ctx.secret;
+  if (f.value === "{order_no}") return ctx.orderNo;
+  if (f.value === "{amount}") return formatAmount(ctx.amountMinor, f.unit ?? "yuan");
+  if (f.value === "{subject}") return ctx.subject;
+  if (f.value === "{channel}") {
+    const code = ctx.channelCodes?.[ctx.method] ?? ctx.method;
+    return String(code) === "" ? undefined : code;
+  }
+  if (f.value === "{timestamp}") return formatTimestamp(ctx.now, f.format ?? "s");
+  if (f.value === "{nonce}") return randomHex(f.length ?? 32);
+  return f.value;
+}
+
 export function buildQueryRequest(mapping: GatewayMapping, ctx: QueryContext): BuiltRequest {
-  const q = mapping.query;
-  if (!q) throw new Error("该网关没有配置查单接口（只能靠回调）");
-
-  const vars: Record<string, string> = {
-    merchant: ctx.merchant,
-    secret: ctx.secret,
-    order_no: ctx.orderNo,
-    amount: String(formatAmount(ctx.amountMinor, mapping.amount_unit)),
-    subject: ctx.subject,
-    channel: String(mapping.channel_codes?.[ctx.method] ?? ctx.method),
-    timestamp: formatTimestamp(ctx.now, mapping.timestamp_format),
-    nonce: randomHex(),
-  };
+  const q = mapping.query?.request;
+  if (!q) throw new Error("该网关没有配置查单接口");
   const params: Record<string, unknown> = {};
-  for (const [k, template] of Object.entries(q.fields)) {
-    const value = template.replace(/\{(\w+)\}/g, (_, name: string) => vars[name] ?? "");
-    // 模板里引用的变量为空 ⇒ 整个参数不发（同渠道码的处理）
-    if (value !== "") params[k] = value;
+  for (const f of q.fields) {
+    const value = queryValue(f, ctx);
+    if (value !== undefined && String(value) !== "") params[f.field] = value;
   }
-  if ((q.sign ?? "same") === "same" && mapping.sign) {
-    params[mapping.sign.field ?? "sign"] = signParams(params, ctx.secret, mapping.sign);
+  const headers = baseHeaders(q.auth, ctx.secret);
+  const sign = q.sign as unknown;
+  if (sign && typeof sign === "object" && !("mode" in sign)) {
+    const spec = sign as SignSpec;
+    params[spec.field ?? "sign"] = signParams(params, ctx.secret, spec);
   }
-
-  const headers = baseHeaders(mapping, ctx.secret);
   const method = q.method ?? "POST";
   const format = q.format ?? "form";
-  const url = joinUrl(ctx.endpoint, q.path);
-
-  if (method === "GET") {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
-    return { url: `${url}?${qs.toString()}`, method, headers, body: null };
-  }
-  if (format === "json") {
-    headers["Content-Type"] = "application/json";
-    return { url, method, headers, body: JSON.stringify(params) };
-  }
-  headers["Content-Type"] = "application/x-www-form-urlencoded";
-  const form = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) form.set(k, String(v));
-  return { url, method, headers, body: form.toString() };
+  return sendRequest(ctx.endpoint, q.path, method, format, headers, coerceNumeric(params, q.fields, format));
 }
 
 export interface QueryResult {
-  /** 网关层是否成功（`query.ok`） */
   ok: boolean;
   paid: boolean;
-  /** 明确终态（失败/过期/撤销）：不再重试，直接收尾 */
   terminal: boolean;
   amountMinor: number | null;
   tradeNo: string | null;
   message?: string;
 }
 
-/** 解析查单响应 —— **这是"钱到了没有"的唯一权威来源** */
-export function parseQueryResponse(mapping: GatewayMapping, payload: unknown): QueryResult {
-  const q = mapping.query;
-  if (!q) {
+export function parseQueryResponse(mapping: GatewayMapping, payload: unknown, secret?: string): QueryResult {
+  const r = mapping.query?.response;
+  const qreq = mapping.query?.request;
+  if (!r || !qreq) {
     return { ok: false, paid: false, terminal: false, amountMinor: null, tradeNo: null, message: "该网关不支持查单" };
   }
-  const unit = mapping.query_amount_unit ?? mapping.amount_unit;
-  const ok = q.ok ? matchesWhen(q.ok, payload) : true;
-  const tradeRaw = q.trade_no ? readPath(payload, q.trade_no) : undefined;
+  const ok = r.ok ? matchesWhen(r.ok, payload) : true;
+  const fallback = qreq.sign as { mode: "none" } | SignSpec;
+  if (!verifyResponseSign(r.sign, "mode" in fallback ? undefined : fallback, payload, secret)) {
+    return { ok: false, paid: false, terminal: false, amountMinor: null, tradeNo: null, message: "网关响应签名校验失败" };
+  }
+  const field = (role: FieldRole): FieldSpec | undefined => r.fields.find((f) => f.role === role);
+  const amount = field("amount");
+  const trade = field("trade_no");
+  const message = field("message");
+  const tradeRaw = trade ? readPath(payload, trade.field) : undefined;
+  const messageRaw = message ? readPath(payload, message.field) : undefined;
   return {
     ok,
-    paid: matchesWhen(q.paid_when, payload),
-    terminal: matchesWhen(q.terminal_when, payload),
-    amountMinor: q.amount ? parseAmount(readPath(payload, q.amount), unit) : null,
+    paid: matchesWhen(r.paid_when, payload),
+    terminal: matchesWhen(r.terminal_when, payload),
+    amountMinor: amount ? parseAmount(readPath(payload, amount.field), amount.unit ?? "yuan") : null,
     tradeNo: tradeRaw === undefined || tradeRaw === null ? null : String(tradeRaw),
-    message: q.message ? String(readPath(payload, q.message) ?? "") || undefined : undefined,
+    message: messageRaw === undefined || messageRaw === null ? undefined : String(messageRaw),
   };
 }

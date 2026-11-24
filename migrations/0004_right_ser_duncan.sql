@@ -1,0 +1,1 @@
+ALTER TABLE `payment_gateways` ADD `test_require_callback` integer DEFAULT 0 NOT NULL;

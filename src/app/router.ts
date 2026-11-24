@@ -69,7 +69,7 @@ const PAY_METHOD_LABEL: Record<string, string> = {
   alipay: "支付宝",
   wechat: "微信支付",
   paypal: "PayPal",
-  stripe: "银行卡",
+  stripe: "Stripe",
   transfer: "银行转账",
 };
 

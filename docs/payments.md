@@ -30,9 +30,9 @@
 | `driver` | App 里看到 | 租户要做什么 |
 |---|---|---|
 | `epay_v1` | 「支付宝」「微信支付」—— **聚合商/易支付站点的名字永远不出现** | 填 endpoint / pid / key，勾方式 |
-| `generic_json_v1` | 同上（由 `methods` 决定） | 填映射（贴文档 → AI 生成草稿） |
-| `stripe` / `paypal` | 「Stripe」「PayPal」—— 品牌即方式，**不再细分卡种** | 填密钥 |
-| `manual` | 「银行转账」+ 后台人工确认 | 填收款信息 |
+| `generic_json_v1` | 同上（由 `methods` 决定） | 用结构化表单填映射（见 §4.0；文档→草稿的 AI 助手见 §8 待做） |
+| `stripe` / `paypal` | 「Stripe」「PayPal」—— 品牌即方式，**不再细分卡种** | 填 Secret Key（PayPal 还要 Client ID） |
+| `manual` | 「银行转账」+ 后台人工确认 | **不作为网关创建项**；线下到账走「客户 → 手工开通」 |
 
 > 所以一个租户可以同时接 3 家易支付站点做兜底，用户那边仍然只有「支付宝 / 微信」两个按钮。
 
@@ -128,9 +128,14 @@ expired ──钱其实到了（cron 查单）──▶ paid
 
 ```
 draft ──测试支付真收到钱──▶ live ──▶ disabled
+  any ──删除──▶ deleted（软删；列表隐藏，订单/回调仍可查）
 ```
 
 - **只有 `status = 'live'` 参与路由**，`draft` 在 App 里完全不存在；
+- **`deleted` 是软删除，不是物理删除**：管理列表隐藏、新下单不再路由，但
+  `payment_gateways` 行保留 —— `orders.gateway_id`、在途订单的查单、服务商迟到的
+  webhook、审计都还引用它；删掉行会让“钱到了但找不到网关”；
+- 删除需要换到新网关时，Stripe/PayPal 后台的 webhook 地址要同步删除或改到新网关；
 - 发布前必须做一次**真实测试支付**：`orders` 里插一条 `plan_id IS NULL` 的单，
   走完 `createCharge → notify → queryCharge`，**不发权益**；
 - 面板展示结果：金额、`provider_trade_no`、耗时；失败则摊开 `raw_create` / `raw_notify`。
@@ -151,12 +156,28 @@ draft ──测试支付真收到钱──▶ live ──▶ disabled
 
 1. `driver` 决定它**能卖哪些方式**（`DRIVER_METHODS`）—— 不允许“Stripe 卖支付宝”这种配置，
    否则显示名与真实能力会打架；
-2. 密钥只接受明文 `secret` 字段，进来即加密入库，**任何响应都只回 `has_secret`**；
+2. 密钥只接受明文 `secret` 字段，进来即加密入库；编辑页的密码框会直接带出当前值
+   （可显隐、就地修改），列表/详情只回 `has_secret`；
+   后端保留显式查看端点 `GET /gateways/:id/secret`（审计、不缓存）；
    `PATCH` 留空 = 不改，要清空用 `clear_secret`；
 3. 没配主密钥 `APP_SECRET` 时**拒绝保存密钥**（`secret_key_missing`），不退化成存明文。
 
 映射输入分两种口径：`epay_v1` 的 `mapping` 是**覆盖项**（与内置映射深合并，租户只写差异），
 `generic_json_v1` 的 `mapping` 是**完整配置**（必须整体通过校验）。
+
+`generic_json_v1` 的映射在后台用**结构化编辑器**（`web/src/pages/GatewayMappingEditor.tsx`）填写：
+固定结构（下单 / 响应 / 回调 / 查单 / 签名）是带标签的字段，动态 map（字段名 / 渠道码 / 常量 /
+查单参数）是 KV 行；JSON 只放在「高级 JSON」，作为逃生口。编辑器产出的对象与手写 JSON 完全同构，
+保存时仍走同一个 `validateMapping` —— 没有第二套格式。
+
+编辑器里**默认/隐藏**的只是「值」：回调地址、订单号、金额、客户 IP、标题、时间戳
+由 CRM 在请求时填（商户号取网关表单里那个「商户号」），租户只需要填对方**字段名**。金额单位、下单/回调的已付判定、应答原文
+**不隐藏**：它们是协议事实，写错就是资损或无限重推。
+
+新建表单只列**能自动下单**的 driver：`epay_v1` / `generic_json_v1` / `stripe` / `paypal` /
+`mock`（环境开关打开时）。`manual`（对公转账）不在此列——它不是自动收银台，线下到账走
+「客户 → 手工开通」。支付方式选择器只在 `epay_v1` / `generic_json_v1` / `mock` 时出现；
+Stripe/PayPal 的方式就是品牌本身，由 driver 固定。
 
 ### 4.1 路由与降级
 
@@ -171,9 +192,10 @@ method = alipay
 
 ## 5. 协议形状对照（为什么映射够用）
 
-国内聚合支付的**主干完全一样**，差异只在几个开关上。下表是四份实测过的协议
+国内聚合支付的**主干完全一样**，差异只在几个开关上。下表是四份经典协议
 （易支付取自 SSPanel 实现；另外三家只作 `test/payments/fixtures.ts` 的夹具，
-**产品不内置任何一家**）：
+**产品不内置任何一家**）。XArrPay 原生 / 布拉格 / 泡泡-native 的矩阵见
+`docs/protocols/README.md`：
 
 | | 易支付（SSPanel） | 青蛙 | 亿宏 | 华俊 |
 |---|---|---|---|---|
@@ -220,11 +242,11 @@ method = alipay
 2. **"一个凭据一种渠道"是加密货币网关的特征**，不是虎皮椒的。
    （XArrPay 文档把 `appid` 称作"支付渠道 ID"，但同一份文档又说"支付宝不填 `type`" ——
    这两句只有在"一个 appid 可卖两种"时才自洽。原版虎皮椒确实是每渠道一个 appid。
-   两种布局我们都要能表达：前者靠 `channel_codes`，后者靠"两条网关 + `methods` 单元素"。）
+   两种布局我们都要能表达：前者靠实例的通道号，后者靠"两条网关 + `methods` 单元素"。）
 
 #### 由此新增的一个必需能力：**渠道码可以是空**
 
-虎皮椒的支付宝 = "`type` 这个参数不出现"。所以 `channel_codes: {"alipay": "", "wechat": "WAP"}`
+虎皮椒的支付宝 = "`type` 这个参数不出现"。所以网关实例的通道号是 `{"alipay": "", "wechat": "WAP"}`
 必须合法，且值为空时**整个参数不发**（不是发 `type=`）。否则签名会多算一个空字段、
 或者对方把空串当成非法渠道。
 
@@ -257,25 +279,25 @@ method = alipay
 
 1. **状态码是另一套编码。** `code=1` 成功 vs `errcode=0` 成功 —— 数值相反、都是合法
    整数，写错时单测不报错，只有真收款才发现。所以判定**必须在映射里显式写死**。
-2. **没有查单。** "回调只当触发器、以查单为真相"的兜底链路对它不可用 ⇒ 只能依赖回调
-   重试，`live` 之前必须实测 `notify_url` 真的可达。
+2. **没有查单的协议不能作为完整网关。** 通用映射要求三端点；虎皮椒这类没有查单的
+   协议不再支持（`query` 必填）。易支付 V1 的 key-in-URL 查单只保留在 V1 preset 内部。
 
 
-### 5.2 覆盖虎皮椒的 5 个开关（已实现）
+### 5.2 解释器的可选开关（虎皮椒只作低级测试）
 
 | 开关 | 解决什么 |
 |---|---|
 | `sign.field` | 签名字段名不一定是 `sign`（虎皮椒：`hash`）；默认 `"sign"` |
 | `fields.nonce` | `nonce_str` 每次请求重新生成 32 位 hex（防重放） |
-| `channel_codes` 允许空串 | 渠道码为空时**整个参数不发**（虎皮椒：支付宝不传 `type`） |
-| `query` 可选 | 没有查单接口时就不写；`hasQuery()` 为 false，cron 兜底跳过并告警 |
+| 实例通道号允许空串 | 通道号为空时**整个参数不发**（虎皮椒：支付宝不传 `type`） |
+| `query` 必填 | 通用映射必须支持订单查询；没有查单的协议不能作为完整网关 |
 | `notify_amount_unit` / `query_amount_unit` | 金额单位可以**按方向不同**（下单按元、回调按分） |
 
-这 5 个都是**可选字段 / 默认值不变**，所以已有四家的行为一个字都没改。
-`test/payments/fixtures.ts` 里现在有五份夹具（含虎皮椒），跑的是同一份解释器。
+这些开关默认值不变；`test/payments/fixtures.ts` 里现在有六份完整夹具
+（易支付/青蛙/亿宏/华俊/XArrPay 原生/布拉格），虎皮椒只保留低级测试。
 
-> 易支付 V2（`epayn`）用 **RSA-SHA256 双向签名**，属于非对称签名，是另一档能力，
-> 暂不支持（也不违反"签名本地一次算完"的判据，将来要支持时按 `sign.algo` 扩展即可）。
+> 易支付 V2（`epayn`）用 **RSA-SHA256 双向签名**，属于非对称签名，放在独立
+> `epay_v2` driver（见 §6.6），不硬塞进映射解释器。
 
 ### 5.3 测试网关（`driver = "mock"`）
 
@@ -334,10 +356,11 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 
 | driver | 用什么 | 谁配 |
 |---|---|---|
-| `epay_v1` | 内置一份映射（`src/payments/builtin/epay.ts`） | 租户填 endpoint / pid / key |
+| `epay_v1` | 内置一份映射（`src/payments/builtin/epay.ts`）；MD5，查单 key-in-URL | 租户填 endpoint / pid / key |
+| `epay_v2` | 独立薄 driver（`src/payments/drivers/epay-v2.ts`）；RSA-SHA256 双向签名 | 租户填 endpoint / pid / 密钥 JSON（商户私钥 + 平台公钥） |
 | `generic_json_v1` | 映射解释器（`src/payments/mapping.ts`） | 租户填 `mapping`（可让 AI 生成草稿） |
-| `stripe` / `paypal` | 独立薄 driver | 租户填密钥 |
-| `manual` | 无协议，人工确认 | 租户填收款信息 |
+| `stripe` / `paypal` | 独立薄 driver：create + query + webhook/回跳页（见 §6.4/§6.5） | 租户填 Secret Key + Webhook Secret；PayPal 还要 Client ID + Webhook ID |
+| `manual` | 无协议，人工确认 | **不作为网关创建项**；走后台「手工开通」 |
 | `mock` | **自带的测试网关**（见 §5.3） | 只需配白名单 + 打开环境开关 |
 
 **`epay_v1` 就是 `generic_json_v1` + 一份常量**，不是第二套实现 —— 只有一条代码
@@ -348,7 +371,7 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 
 > **签名能在本地一次算完 → 映射；需要换 token、二次 capture、或回调官方 API 验签 → driver。**
 
-按这条，Stripe / PayPal **不进映射**：
+按这条，Stripe / PayPal **不进映射**，而是各写一条薄 driver（已实现，见 §6.4）：
 
 | | 卡在哪 |
 |---|---|
@@ -364,69 +387,17 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 
 ### 6.2 映射规范（`generic_json_v1`）
 
-存进 `payment_gateways.mapping`（JSON）。字段名全部小写下划线，未知键直接报错。
+**完整规范见 [`payment-templates.md`](payment-templates.md)**，机器可读 JSON Schema 见
+[`payment-templates.schema.json`](payment-templates.schema.json)。
 
-| 键 | 说明 |
-|---|---|
-| `create.method` / `create.path` / `create.format` | 下单请求：`POST`/`GET`、路径、`form`/`json` |
-| `fields.*` | 参数名映射：`merchant` `order_no` `amount` `subject` `body` `notify_url` `return_url` `client_ip` `channel` `timestamp` `nonce` |
-| `amount_unit` | **必填**：`yuan`（元，两位小数字符串）/ `cent`（整数分） |
-| `notify_amount_unit` / `query_amount_unit` | 回调/查单的金额单位，缺省跟随 `amount_unit` |
-| `timestamp_format` | `s` / `ms` / `ymdhms`（`YYYYMMDDHHmmss`，**北京时间**） |
-| `constants` | 固定参数，如 `{"sign_type":"MD5"}` |
-| `channel_codes` | 方式 → 渠道码：`{"alipay":"alipay","wechat":"wxpay"}`；**值为空串时不发该参数** |
-| `sign.field` | 签名字段名，默认 `"sign"`（虎皮椒用 `"hash"`） |
-| `sign.algo` | `md5` / `sha256` |
-| `sign.key_append` | 密钥前的拼接串：`""`（直接拼）或 `"&key="` |
-| `sign.exclude` | 不参与签名的字段，默认 `["sign"]` |
-| `sign.exclude_variants` | **仅验签**用的替代排除集合（最多 3 组），用于"文档没写清回调带不带 `attach`" |
-| `sign.upper` / `sign.encode` | 大写输出 / 对值做 URL 编码，默认 `false` |
-| `auth.header` / `auth.value` | 认证头，值里 `{key}` 会替换成密钥（如 `{"header":"Authorization","value":"Token {key}"}`） |
-| `response.ok` | 下单成功判定：`{path, equals}` 或 `{path, in:[…]}` |
-| `response.pay_url` / `pay_url_from` | 收银台地址（单个字段 / 依次取第一个非空） |
-| `response.pay_url_force_https` | 文档给 http 但实际必须 https 时置 `true` |
-| `response.message` / `trade_no` / `expires_at` | 错误信息、服务商流水号、收银台过期时间（原文存） |
-| `notify.method` / `notify.format` | 回调是 `GET` 还是 `POST`，body 是 `form` 还是 `json` |
-| `notify.order_no` / `trade_no` / `amount` | 回调里这些值的字段名 |
-| `notify.paid_when` | 回调"已付款"判定（**与查单分开配**，亿宏就是两套码） |
-| `notify.reply` | 应答原文，**必须逐字一致**（写错会被无限重发） |
-| `query.method` / `path` / `format` | 查单请求形状（**整个 `query` 可以不写** = 没有查单接口） |
-| `query.fields` | 查单参数，值支持 `{merchant}` `{secret}` `{order_no}` `{amount}` `{channel}` `{timestamp}` |
-| `query.sign` | `"same"`（与下单同套签名）/ `"none"`（易支付查单自带 key，不签名） |
-| `query.ok` / `paid_when` | 查单成功 / 已付判定 |
-| `query.terminal_when` | 明确终态（失败/过期/撤销）：命中即收尾，不再重试 |
-| `query.amount` / `trade_no` / `message` | 查单返回的金额、流水号、错误信息 |
-
-示例（虚构网关 `acme-pay`，演示最常见的组合）：
-
-```jsonc
-{
-  "create": { "method": "POST", "path": "/pay/create", "format": "json" },
-  "fields": {
-    "merchant": "mchId", "order_no": "outTradeNo", "amount": "amount",
-    "subject": "subject", "notify_url": "notifyUrl", "return_url": "returnUrl",
-    "client_ip": "clientIp", "channel": "wayCode", "timestamp": "reqTime"
-  },
-  "amount_unit": "cent",
-  "timestamp_format": "ms",
-  "channel_codes": { "alipay": 901, "wechat": 902 },
-  "sign": { "algo": "md5", "key_append": "&key=", "exclude": ["sign"] },
-  "response": { "ok": { "path": "code", "equals": 0 },
-                "message": "message",
-                "pay_url": "data.payUrl",
-                "trade_no": "data.tradeNo" },
-  "notify": { "method": "POST", "format": "json",
-              "order_no": "outTradeNo", "trade_no": "tradeNo", "amount": "amount",
-              "paid_when": { "path": "state", "equals": 1 },
-              "reply": "SUCCESS" },
-  "query": { "method": "POST", "format": "json", "path": "/pay/query",
-             "fields": { "mchId": "{merchant}", "outTradeNo": "{order_no}", "reqTime": "{timestamp}" },
-             "ok": { "path": "code", "equals": 0 },
-             "paid_when": { "path": "data.state", "equals": 1 },
-             "terminal_when": { "path": "data.state", "in": [2, 3, 4] },
-             "amount": "data.amount" }
-}
-```
+- **高级 JSON** = `mapping`；**模板文件** = 元数据 envelope + `mapping`；
+- 根只有 `create` / `notify` / `query`，每个分 `request` / `response`；
+- `fields` 是字段描述符数组：`field` + `role` + `value` + 单位/格式/时区/长度/数字；
+- 金额、时间、随机数、渠道等属性都在字段上，不再有全局 `amount_unit` / `timestamp_format`；
+- 每个端点自己的 `sign`；易支付 V1 查单用 `{ "mode": "none" }`；
+- `schema_version` 只在模板 envelope；
+- 官方模板：`web/src/templates/qwgua.json`、`xarrpay.json`；
+- 导入/AI 只预填接口配置，不自动保存/发布。
 
 ### 6.3 映射的边界（有意不做）
 
@@ -434,18 +405,112 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 没有状态跳转。所有判定一律 `{path, equals|in}` 三件套 —— 这是"租户能看懂、AI 生成
 可靠、测试可穷举"的前提。
 
-一条已知取舍：**不校验下单/查单响应的签名**（有的网关只对 `data` 签名）。传输由 TLS
-保证，且最终以**查单**为准；**回调签名仍然必须校验**，那是安全边界。
+响应验签是可选能力：配了 `response.sign` 就必须验签成功，否则下单/查单失败；未配置
+则明确是 TLS-only，不能写成“已验签”。回调签名仍然必须校验，那是安全边界。
 
 **AI 只做草稿**：生成后必须由"测试支付"实测通过才能 `live`。生成时永远不会带上密钥
 （密钥在 `secret_enc`，不进 prompt）。
 
 
+### 6.3.1 基本信息 vs 接口配置
+
+- **基本信息（网关实例）**：网关地址、商户号/用户 ID、凭据、支付方式、**通道号**、名称、优先级、白名单；
+- 通道号 = 支付方式是否可用：填了才启用，为空 = 该方式不可用；不再额外加勾选；
+- 易支付 V2 的 `type` 就是支付方式，没有独立通道号；需要独立通道时用自定义接口；
+- **接口配置（协议类型）**：三个端点、字段名、签名、金额单位、判定条件、路径；不包含任何账户值；
+- **模板**：只描述接口类型，格式见 [`payment-templates.md`](payment-templates.md)；可来自官方
+  （qwgua/XArrPay）、文件/粘贴导入或 AI 生成；不包含 endpoint/merchant/secret/methods/channel_codes；
+- 请求方式默认 POST，主表单不显示；少数 GET 在「公共参数与认证 → 请求方式（高级）」里改。
+
+### 6.4 Stripe / PayPal 薄 driver（v1）
+
+与 cf-api 的 `createOrder + checkOrder` 同构；区别是密钥**按网关存**，不是 Worker 环境变量。
+
+| | Stripe | PayPal |
+|---|---|---|
+| API 凭据 | `secret_enc` = Secret Key | `merchant_id` = Client ID；`secret_enc` = Client Secret |
+| Webhook 凭据 | `webhook_enc` = `whsec_...`（endpoint signing secret） | `webhook_enc` = `WH-...`（webhook id） |
+| 下单 | `POST /v1/checkout/sessions`（`mode=payment`） | OAuth2 换 token → `POST /v2/checkout/orders`（`intent=CAPTURE`） |
+| 收银台 | `session.url` | `approve` 链接 |
+| 查单 | `GET /v1/checkout/sessions/{id}`；`payment_status=paid` 才认 | `GET /v2/checkout/orders/{id}`；`APPROVED` 时**主动 capture**，`COMPLETED` 才认 |
+| 权威交易号 | session id | capture id |
+| 环境 | key 决定 test/live（同一个 API 根） | `ENVIRONMENT=production` → live；否则 sandbox |
+
+几个明确取舍：
+
+- **接 webhook，但只当触发器。** 固定 URL 是 `/api/pay/notify/:gatewayId`；Stripe 在
+  后台配 endpoint 后把 signing secret 填进 `webhook_enc`，PayPal 填 webhook id。验签
+  （Stripe 本地 HMAC；PayPal 调官方 verify 接口）通过后，仍要 `pollOrderOnce` 查单，
+  不拿事件里的金额/状态直接落账（见 §6.5）。
+- 确认路径有三层：**webhook（服务端权威触发器）→ 回跳页/refresh（即时 UX）→ cron
+  （兜底）**。通常秒级；cron 最多约 2 分钟。超过 60 分钟的迟到支付不在自动查单窗口内，
+  但后台「查一次」或回跳页仍可确认。
+- **金额**：Stripe 传最小单位，PayPal 传两位小数；本轮只覆盖两位小数币种（JPY 等零小数
+  币种不做）。测试支付统一 USD $1.00（Stripe 最小扣款限制）。
+- **退款**：未做；仍走后台内部退款流程。
+
+### 6.5 Webhook 与回跳页（即时确认）
+
+**Webhook（服务端）**
+
+- 固定地址：`https://<crm>/api/pay/notify/<gatewayId>`，每个网关一个，**在 Stripe/PayPal
+  后台配置一次**（不是下单时传）。
+- 管理端在编辑页/展开行显示这个地址（复制按钮）。新建时先保存草稿拿到 id，再去 provider
+  后台建 webhook，把 signing secret / webhook id 填回网关。
+- 发布 Stripe/PayPal 前必须有 `webhook_enc`，否则 `webhook_required`。
+- Stripe：`Stripe-Signature: t=...,v1=...`，`HMAC-SHA256(whsec, "{t}.{rawBody}")`，
+  5 分钟容差；PayPal：用 OAuth2 调 `POST /v1/notify/webhooks/verify-webhook-signature`。
+- 验签通过后按 `client_reference_id` / session id / custom_id / related order id 定位订单，
+  再 `pollOrderOnce`。找不到订单或未知事件返回 200（不重试），不写库。
+
+**回跳页 / refresh（浏览器）**
+
+- 客户端传 `return_url`（Site 的 `/_crm/return.html`、App 的 https 通用链接）时，
+  provider 直接回客户端 URL，并附 `order=<code>` 与 `crm_pay_token=<签名>`；客户端页面调
+  `POST /api/pay/return/<code>/refresh?t=...`，接口做一次受控查单后返回
+  `{status, pay}`。
+- 客户端传自定义 scheme（App 深链）或没传时，provider 回 CRM 兜底页
+  `/pay/return/<code>?t=...`：服务端查单、展示结果；自定义 scheme 给「返回 App」按钮。
+- token 是 `base64url(payload).base64url(HMAC-SHA256)`，key 材料
+  `<APP_SECRET>|pay-return/v1`，claims 含订单号、最终地址、24h 过期。最终地址在 token
+  里，页面不从 query 读目标，避免开放重定向。
+- `orders.return_poll_at` 是 10 秒冷却，只给回跳页/refresh 用；cron 不读不写。
+  **`GET /orders/:code` 仍然只读库**；回跳/refresh 是唯一带 token 的“用户触发查单”入口。
+
+**Site / App**
+
+- Site：`/_crm/return.html` 读 `order` + `crm_pay_token`，调 refresh 后显示“支付成功/
+  确认中/未完成”；旧站点产物没有这段逻辑时，webhook/cron 仍会确认，重新发布后获得。
+- App：https 回跳直接进 App 页面；自定义 scheme 由 CRM 兜底页展示结果并给按钮。
+- 所有路径最终都走 `pollOrderOnce → queryOnce → settlePaidOrder`；不新增第二套判据。
+
+### 6.6 易支付 V1 / V2
+
+| | V1（`epay_v1`） | V2（`epay_v2`） |
+|---|---|---|
+| 签名 | MD5（排序参数 + key） | RSA-SHA256 双向：商户私钥签请求，平台公钥验响应/回调 |
+| 查单 | `api.php` 用 key 鉴权，**URL 带 key** | `/api/pay/query`，请求/响应都签名 |
+| 密钥 | 一个 AppSecret | 商户私钥 + 平台公钥（JSON） |
+| 时间戳 | 无 | 必填 10 位秒级 `timestamp` |
+| 网关地址 | `.../xpay/epay/`，路径 `/mapi.php` | `.../xpay/epayn/`，路径 `/api/pay/create` / `/api/pay/query` |
+
+V2 的实现：
+
+- 凭据 `secret_enc` 加密 JSON：`{merchant_private_key, platform_public_key}`；
+- 创建 `POST {base}/api/pay/create`；查单 `POST {base}/api/pay/query`；
+- 响应/回调用平台公钥验签；创建响应 `code=0`、`pay_info`、`trade_no`；
+- 查单 `status=2` 已付、`money` 元；
+- 通知 GET，`trade_status=TRADE_SUCCESS`；应答 `success`；
+- 不接 webhook；确认仍走 `pollOrderOnce` 查单（回调只当触发器）。
+- UI 驱动下拉「易支付 V1」/「易支付 V2」；V1 保留兼容，V2 推荐。
+- 文档：https://docs.xarr.cn/merchant/api/epayn.html
+
 ## 7. 安全
 
 ### 7.1 密钥怎么存
 
-商户密钥存 `payment_gateways.secret_enc`，**不留明文**：
+商户 API 密钥存 `payment_gateways.secret_enc`，webhook signing secret / id 存
+`payment_gateways.webhook_enc`，**都不留明文**：
 
 ```
 v1:<base64(iv(12B) || AES-GCM 密文+tag)>
@@ -462,6 +527,15 @@ v1:<base64(iv(12B) || AES-GCM 密文+tag)>
 为什么必须加密：D1 的常规运维动作是 `wrangler d1 export`（备份/迁移/排障），
 明文入库等于**每次备份都在泄露商户密钥**。
 
+Stripe/PayPal 也一样：Stripe 的 Secret Key、PayPal 的 Client Secret 都进 `secret_enc`；
+PayPal 的 Client ID 是公钥性质，存 `merchant_id`，不是密钥。Stripe 的 webhook signing
+secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，不回明文。
+
+网关 API 密钥（`secret_enc`）的当前值在**编辑页的密码框**直接带出（可显隐、就地改），
+保存即覆盖；列表/详情仍不自动带出。后端另有显式端点 `GET /api/admin/gateways/:id/secret`，
+返回 `{ secret }`，`Cache-Control: no-store`，并写审计 `gateway_secret_revealed`。
+查看后请自行确认，不要贴到日志/工单里。
+
 ### 7.2 其它的线
 
 - 回调必须验签；验签失败一律拒绝并记 `last_error`，**绝不发货**。
@@ -476,16 +550,28 @@ v1:<base64(iv(12B) || AES-GCM 密文+tag)>
 1. `src/payments/sign.ts` —— 排序拼接签名（md5/sha256、`key_append`、排除集合与多集合验签）
 2. `src/payments/mapping.ts` —— 映射解释器（含校验、取值、金额/时间戳换算、多字段择优）
 3. `src/payments/builtin/epay.ts` —— 内置易支付映射
-4. `test/payments/*` —— 五份协议的夹具（易支付/青蛙/亿宏/华俊/虎皮椒），同一份解释器全过（签名用 `node:crypto` 交叉验证）
-5. 覆盖虎皮椒的 5 个开关：`sign.field` / `fields.nonce` / 空渠道码 / `query` 可选 / 分方向金额单位
+4. `test/payments/*` —— 六份完整协议夹具（易支付/青蛙/亿宏/华俊/XArrPay 原生/布拉格），虎皮椒只作低级测试；同一份解释器全过（签名用 `node:crypto` 交叉验证）
+5. 解释器开关：`sign.field` / `fields.nonce` / 空渠道码 / `query` **必填** / 分方向金额单位 / `response.sign`
 6. **测试网关（mock）** 全链路：`GET /api/app/v1/payment-methods`、
    `POST /api/app/v1/orders`、`/pay/mock/:code` 演示页、`POST /api/pay/notify/:gatewayId`
    （所有网关共用的回调入口）、订单 `pending → active` + 订阅发放
 7. 闸门集中在 `src/payments/gateways.ts`（status / methods / 白名单 / 环境开关）
 8. **密钥加密**：`src/payments/secret.ts`（AES-GCM + 主密钥 `APP_SECRET`，`v1:` 前缀）
    —— 真实网关的 epay 路径已用加密密钥跑通（下单签名、回调验签、查单复核）
-9. **后台「支付」页**：`src/admin/gateways.ts` + `web/src/pages/Gateways.tsx`
-   （列表 / 新建草稿 / 编辑 / 发布 / 停用；密钥只写不读；映射可覆盖）
+9. **后台「支付」页**：`src/admin/gateways.ts` + `web/src/pages/GatewaysList.tsx` / `GatewayEditor.tsx`
+   （列表保留发布/停用/测试支付/删除；新建/编辑是独立路由
+   `/payments/gateways/new`、`/payments/gateways/:id/edit`；标题/状态/取消/保存收进粘性页签栏；
+   密钥编辑页直接带出当前值（密码框可显隐），列表/详情不回显；映射可覆盖）
+10. **`generic_json_v1` 映射编辑器**：`web/src/mapping-form.ts` + `web/src/pages/GatewayMappingEditor.tsx`
+    （路由页内「基本信息 / 接口配置」；一次保存；接口配置按
+    「金额与时间 / 签名与验签 / 下单 / 回调 / 查单 / 公共参数与认证」六组；
+    字段映射就近放在各端点内；缺项在字段内联、保存时校验；
+    AI 配置助手只在接口配置 Tab 内，默认折叠，不常驻右栏；官方模板 qwgua/XArrPay，
+    支持文件/粘贴导入（只含接口类型，不包含账户值））
+11. **Stripe / PayPal 薄 driver**：`src/payments/drivers/{stripe,paypal}.ts` + 路由/下单/查单
+    （create + query；PayPal capture；见 §6.4）
+12. **Webhook + 回跳页**：`src/payments/webhook.ts`（验签→查单）、
+    `src/payments/return.ts` + `return-token.ts`（客户端 refresh / CRM 兜底页；见 §6.5）
 
 **主动查单**（`src/payments/poll.ts`，v20）：
 
@@ -503,17 +589,18 @@ v1:<base64(iv(12B) || AES-GCM 密文+tag)>
 - **过期即停**：`expired` 之后只有两条路 —— ① 回调（`settlePaidOrder` 接受
   `pending|expired`，钱晚到照样记账）；② 后台「查一次」
   （`POST /api/admin/orders/{code}/poll`，客服手动，走同一段判据）。
-- **用户请求不打网关**：`GET /orders/:code` 只读我们自己的库。否则 100 个人同时刷新
-  就等于 100 次/5 秒的查单风暴。
+- **用户请求不打网关**：`GET /orders/:code` 只读我们自己的库。唯一例外是带签名 token 的
+  回跳页/refresh：它只触发一次 `pollOrderOnce`，并受 `return_poll_at` 10 秒冷却保护；
+  `GET /orders/:code` 本身仍然不碰网关。
 - `orders.next_poll_at` / `poll_attempts` 落库：改曲线不影响存量单，后台也能看到
   "这单我们确认过几次"。
 
 待做：
 
 1. 真实网关的 ¥1 测试支付（`draft → live` 闸门：先真收到钱再允许发布）
-2. `stripe` / `paypal` 薄 driver
-3. AI 生成映射草稿
-4. 退款走网关（`refunds.channel_refund_id`）
+2. AI 生成映射草稿
+3. 退款走网关（`refunds.channel_refund_id`）
+4. Webhook 的自动注册/轮换（目前仍需在 Stripe/PayPal 后台手工配置）
 
 ## 9. 参考
 
@@ -525,7 +612,7 @@ v1:<base64(iv(12B) || AES-GCM 密文+tag)>
   <https://docs.xarr.cn/merchant/api/epay.html>
 - **虎皮椒协议** —— `hash` 签名、`errcode=0`、`status=OD`、无查单：
   <https://docs.xarr.cn/merchant/api/xunhupay.html>
-- **易支付 V2（epayn）** —— RSA-SHA256 双向签名（暂不支持）：
+- **易支付 V2（epayn）** —— RSA-SHA256 双向签名（已支持 `epay_v2` driver）：
   <https://docs.xarr.cn/merchant/api/epayn.html>
 - **亿宏数码 API 文档** —— 本仓库 `clever-vpn-cf-api/docs/亿宏数码API接口文档.html`
   （回调 `status=1` / 查单 `status=3` 两套语义的出处）

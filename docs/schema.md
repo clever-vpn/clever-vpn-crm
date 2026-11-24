@@ -102,10 +102,10 @@ CRM 尚未正式发布，历史上有 19 个递增迁移（`0000_baseline` + 18 
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`、`source`(purchase/gift/manual)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`status`、`refunded_minor`、`voided_at`、`provision_*` |
+| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`、`source`(purchase/gift/manual)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`next_poll_at`/`poll_attempts`、`return_poll_at`（回跳页查询冷却）、`status`、`refunded_minor`、`voided_at`、`provision_*` |
 | `refunds` | 退款**明细**（可多次部分退） | `order_id`、`amount_minor`、`mode`、`operator`、`channel_refund_id`、`status` |
 | `adjustments` | 管理员**调整**（非售卖） | `field`、`before_value`、`after_value`、`reason`、`operator`、`platform_applied_at` |
-| `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`methods`、`mapping`、`priority`、`status`(draft/live/disabled)、`secret_enc`、`last_test_order_id` |
+| `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`methods`、`channel_codes`（账户通道号，实例值）、`mapping`（协议类型）、`priority`、`status`(draft/live/disabled/deleted)、`secret_enc`（API 密钥）、`webhook_enc`（Stripe signing secret / PayPal webhook id）、`last_test_order_id` |
 
 > **没有 `payment_attempts` 表**：订单本身就是那次尝试的证据。理由见 `payments.md` §2。
 
@@ -153,10 +153,12 @@ source: purchase（自助） | gift（赠送） | manual（后台补单）
 | 文件 | 内容 |
 |---|---|
 | `0000_baseline.sql` | 全部现有表（从 `src/db/schema.ts` 全量生成） |
+| `0001_true_menace.sql` | `orders.return_poll_at`（回跳页查询冷却）、`payment_gateways.webhook_enc`（Stripe signing secret / PayPal webhook id） |
+| `0002_instance_channel_codes.sql` | `payment_gateways.channel_codes`（账户通道号）；把 mapping 里的通道号搬到实例，并清理 mapping 中 `channel_codes`/`exclude_variants`/`pay_url_force_https` |
 
-**尚未发布，所以迁移链只有一条 baseline。** 改表就直接改 schema 并重生成 baseline；
-一旦打了 `v*` tag，就变成追加式：已发布的迁移不能再改（`check:migrations` 以最近一次
-release tag 为基线强制这一点），只能新增下一条。
+**尚未发布，但已经是“基线 + 增量”的追加式。** 改表继续 `npm run db:generate` 追加，
+不要改已提交的 `0001`；一旦打了 `v*` tag，`check:migrations` 会以最近一次 release tag
+强制不可变。
 
 ## 4. 升级路径（重要）
 

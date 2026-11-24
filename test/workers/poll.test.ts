@@ -28,22 +28,37 @@ const minutesAhead = (m: number) => new Date(Date.now() + m * 60_000).toISOStrin
 
 /** 一份带查单接口的最小映射（`generic_json_v1`） */
 const MAPPING = {
-  create: { path: "/pay" },
-  fields: { merchant: "mch", order_no: "out_trade_no", amount: "amount" },
-  amount_unit: "cent",
-  response: { ok: { path: "code", equals: 0 }, pay_url: "url" },
+  create: {
+    request: {
+      path: "/pay",
+      fields: [
+        { field: "mch", role: "merchant", value: "{merchant}" },
+        { field: "out_trade_no", role: "order_no", value: "{order_no}" },
+        { field: "amount", role: "amount", value: "{amount}", unit: "cent" },
+      ],
+      sign: { algo: "md5", key_append: "" },
+    },
+    response: { ok: { path: "code", equals: 0 }, fields: [{ field: "url", role: "pay_url" }] },
+  },
   notify: {
-    order_no: "out_trade_no",
-    paid_when: { path: "status", equals: "ok" },
-    reply: "ok",
+    request: {
+      fields: [{ field: "out_trade_no", role: "order_no" }],
+      paid_when: { path: "status", equals: "ok" },
+      sign: { algo: "md5" },
+    },
+    response: { reply: "ok" },
   },
   query: {
-    path: "/query",
-    fields: { out_trade_no: "{order_no}" },
-    sign: "none",
-    paid_when: { path: "status", equals: "paid" },
-    terminal_when: { path: "status", equals: "failed" },
-    amount: "amount",
+    request: {
+      path: "/query",
+      fields: [{ field: "out_trade_no", value: "{order_no}" }],
+      sign: { algo: "md5", key_append: "" },
+    },
+    response: {
+      paid_when: { path: "status", equals: "paid" },
+      terminal_when: { path: "status", equals: "failed" },
+      fields: [{ field: "amount", role: "amount", unit: "cent" }],
+    },
   },
 };
 

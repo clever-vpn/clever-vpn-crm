@@ -6,7 +6,7 @@
  * `d1_migrations` 台账里的文件名集合必须与 `files[].name` 集合相等 ——
  * 缺就 `batch` 补上，多就是"库比代码新"，拒绝服务。
  *
- * `schemaVersion`（sha256:d610ffa3913192f2）是全部 `(name, sql)` 的内容指纹，
+ * `schemaVersion`（sha256:cff04afb320eafe5）是全部 `(name, sql)` 的内容指纹，
  * 只用于日志与排障 —— **不参与门禁判断**（判据是文件名集合，理由见 ADR
  * `0007-tenant-migration-execution.md`）。
  */
@@ -23,7 +23,7 @@ export const MIGRATION_BUNDLE: {
   readonly schemaVersion: string;
   readonly files: readonly EmbeddedMigrationFile[];
 } = {
-  "schemaVersion": "sha256:d610ffa3913192f2",
+  "schemaVersion": "sha256:cff04afb320eafe5",
   "files": [
     {
       "name": "0000_baseline.sql",
@@ -103,6 +103,45 @@ export const MIGRATION_BUNDLE: {
         "CREATE UNIQUE INDEX `uq_store_channels_platform` ON `store_channels` (`platform`);",
         "CREATE TABLE `subscription_changes` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`at` text NOT NULL,\n\t`customer_id` integer NOT NULL,\n\t`subscription_id` integer NOT NULL,\n\t`action` text NOT NULL,\n\t`paid_minor` integer,\n\t`residual_minor` integer,\n\t`payable_minor` integer,\n\t`kind_before` text,\n\t`kind_after` text,\n\t`plan_before` text,\n\t`plan_after` text,\n\t`expires_before` text,\n\t`expires_after` text,\n\t`period_extra_before` real,\n\t`period_extra_after` real,\n\t`detail` text\n);",
         "CREATE INDEX `idx_changes_customer` ON `subscription_changes` (`customer_id`,`id`);"
+      ]
+    },
+    {
+      "name": "0001_true_menace.sql",
+      "sha256": "15ce3cb108fe80458040baaec6d06e11028a29a760e762da75ac40d487a6c6c6",
+      "statements": [
+        "ALTER TABLE `orders` ADD `return_poll_at` text;",
+        "ALTER TABLE `payment_gateways` ADD `webhook_enc` text;"
+      ]
+    },
+    {
+      "name": "0002_instance_channel_codes.sql",
+      "sha256": "1c9e31924428c24599ed9615eeb2b1bcf9c5f8ad681abe9e27efc5bd92a3cad9",
+      "statements": [
+        "ALTER TABLE `payment_gateways` ADD `channel_codes` text;",
+        "UPDATE `payment_gateways`\nSET `channel_codes` = json_extract(`mapping`, '$.channel_codes')\nWHERE `mapping` IS NOT NULL\n  AND json_extract(`mapping`, '$.channel_codes') IS NOT NULL;",
+        "UPDATE `payment_gateways`\nSET `mapping` = json_remove(`mapping`, '$.channel_codes', '$.sign.exclude_variants', '$.response.pay_url_force_https')\nWHERE `mapping` IS NOT NULL;"
+      ]
+    },
+    {
+      "name": "0003_polite_meggan.sql",
+      "sha256": "85fc4709186caf342a7a1828f0bbd40bd09294a49044b61fd120162963a182f6",
+      "statements": [
+        "ALTER TABLE `orders` ADD `provider_amount_minor` integer;",
+        "ALTER TABLE `orders` ADD `provider_currency` text;",
+        "ALTER TABLE `orders` ADD `fx_rate` real;",
+        "ALTER TABLE `payment_gateways` ADD `fx_rate` real DEFAULT 1 NOT NULL;",
+        "ALTER TABLE `payment_gateways` ADD `test_amount_minor` integer DEFAULT 100 NOT NULL;",
+        "ALTER TABLE `payment_gateways` ADD `test_create_ok_at` text;",
+        "ALTER TABLE `payment_gateways` ADD `test_query_ok_at` text;",
+        "ALTER TABLE `payment_gateways` ADD `test_callback_ok_at` text;",
+        "ALTER TABLE `payment_gateways` ADD `tested_config_hash` text;"
+      ]
+    },
+    {
+      "name": "0004_right_ser_duncan.sql",
+      "sha256": "b448055afd25dc99e0419df39449415109c4428acf0a5bcebe80a0966ed05e9e",
+      "statements": [
+        "ALTER TABLE `payment_gateways` ADD `test_require_callback` integer DEFAULT 0 NOT NULL;"
       ]
     }
   ]

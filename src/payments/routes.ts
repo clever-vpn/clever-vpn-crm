@@ -3,18 +3,24 @@
  *   POST /api/pay/notify/:gatewayId   网关回调（所有 driver 共用）
  *   GET  /pay/mock/:code              mock 演示页
  *   POST /pay/mock/:code/paid         模拟"第三方"回调
+ *   GET  /pay/return/:code            CRM 回跳兜底页（查单后展示/跳转）
+ *   POST /api/pay/return/:code/refresh 客户端回跳页触发的受控查单
  *
  * 这些路径**不走 App 的 CORS / 会话**（回调来自服务商，演示页由浏览器直接打开）。
  */
 
 import { GATEWAY_COLUMNS, mappingOf } from "./gateways";
 import { handlePayNotify } from "./notify";
+import { pollOrderOnce } from "./poll";
+import { handleReturnPage, handleReturnRefresh } from "./return";
 import { MOCK_DRIVER, esc, buildMockNotifyParams, mockNotifyRequest, mockSecret, renderMockPayPage } from "./mock";
 
 import type { Env } from "../env";
 import type { GatewayRow } from "./gateways";
 
 const NOTIFY_RE = /^\/api\/pay\/notify\/(\d+)$/;
+const RETURN_REFRESH_RE = /^\/api\/pay\/return\/([A-Za-z0-9_-]{4,64})\/refresh$/;
+const RETURN_PAGE_RE = /^\/pay\/return\/([A-Za-z0-9_-]{4,64})$/;
 const PAGE_RE = /^\/pay\/mock\/([A-Za-z0-9]+)$/;
 const ACTION_RE = /^\/pay\/mock\/([A-Za-z0-9]+)\/(paid|failed|cancel)$/;
 
@@ -91,7 +97,9 @@ export async function handlePayRoutes(request: Request, env: Env): Promise<Respo
   if (notify) {
     // 不限制 GET/POST：易支付族用 **GET** 回调，青蛙系用 POST JSON
     // （由 `mapping.notify.method` 决定从哪里取参数）
-    return handlePayNotify(env, request, notify[1] ?? "");
+    return handlePayNotify(env, request, notify[1] ?? "", {
+      refresh: (code) => pollOrderOnce(env, code),
+    });
   }
 
   const action = ACTION_RE.exec(path);
@@ -102,6 +110,12 @@ export async function handlePayRoutes(request: Request, env: Env): Promise<Respo
     if (verb === "cancel") return simulateCancel(env, code);
     return simulateNotify(env, request, code, verb === "failed" ? "FAILED" : "SUCCESS");
   }
+
+  const refresh = RETURN_REFRESH_RE.exec(path);
+  if (refresh) return handleReturnRefresh(request, env, refresh[1] ?? "");
+
+  const ret = RETURN_PAGE_RE.exec(path);
+  if (ret && request.method === "GET") return handleReturnPage(request, env, ret[1] ?? "");
 
   const page = PAGE_RE.exec(path);
   if (page) {

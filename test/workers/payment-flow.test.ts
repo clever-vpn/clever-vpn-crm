@@ -414,7 +414,7 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
     expect(body.get("money")).toBe("15.00");
     expect(body.get("type")).toBe("alipay");
     // 签名用解密出来的密钥（而不是密文）
-    expect(body.get("sign")).toBe(signParams(Object.fromEntries(body), EPAY_KEY, EPAY_V1_MAPPING.sign!));
+    expect(body.get("sign")).toBe(signParams(Object.fromEntries(body), EPAY_KEY, EPAY_V1_MAPPING.create.request.sign));
 
     const row = await env.DB.prepare(
       `SELECT pay_url, provider_order_no, status, gateway_id FROM orders WHERE code = ?`,
@@ -448,7 +448,7 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
       money: "15.00",
       trade_status: "TRADE_SUCCESS",
     };
-    params.sign = signParams(params, EPAY_KEY, EPAY_V1_MAPPING.sign!);
+    params.sign = signParams(params, EPAY_KEY, EPAY_V1_MAPPING.create.request.sign);
     params.sign_type = "MD5";
 
     const req = new Request(`${BASE}/api/pay/notify/${gatewayId}?${new URLSearchParams(params)}`);
@@ -486,7 +486,7 @@ describe("真实网关 epay_v1（密钥加密 + 查单复核）", () => {
       money: "15.00",
       trade_status: "TRADE_SUCCESS",
     };
-    params.sign = signParams(params, EPAY_KEY, EPAY_V1_MAPPING.sign!);
+    params.sign = signParams(params, EPAY_KEY, EPAY_V1_MAPPING.create.request.sign);
     params.sign_type = "MD5";
 
     const req = new Request(`${BASE}/api/pay/notify/${gatewayId}?${new URLSearchParams(params)}`);

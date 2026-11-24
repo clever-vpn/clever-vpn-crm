@@ -34,8 +34,11 @@
  * （见 `docs/payments.md` §10）。
  */
 import { gatewaySecret } from "./checkout";
-import { GATEWAY_COLUMNS, mappingOf } from "./gateways";
-import { buildQueryRequest, hasQuery, parseQueryResponse } from "./mapping";
+import { queryEpayV2 } from "./drivers/epay-v2";
+import { queryPaypalCharge } from "./drivers/paypal";
+import { queryStripeCharge } from "./drivers/stripe";
+import { GATEWAY_COLUMNS, mappingOf, parseChannelCodes, routeDriverOf } from "./gateways";
+import { buildQueryRequest, hasQuery, parseQueryResponse, type GatewayMapping } from "./mapping";
 import { PAYABLE_COLUMNS, markGatewayResult, settlePaidOrder } from "./notify";
 import { queryIapOnce } from "./iap-poll";
 
@@ -132,8 +135,15 @@ async function queryOnce(
   gateway: GatewayRow,
   deps: { fetch?: typeof fetch; now?: Date },
 ): Promise<QueryOutcome> {
-  const mapping = mappingOf(gateway);
-  if (!mapping || !hasQuery(mapping)) return { verdict: "no_query", tradeNo: null, raw: null };
+  const driver = routeDriverOf(gateway);
+  if (!driver) return { verdict: "no_query", tradeNo: null, raw: null };
+
+  // mock/历史映射可能没有查单接口；通用映射新配置不允许（见 validateMapping）
+  let mapping: GatewayMapping | null = null;
+  if (driver === "mapping") {
+    mapping = mappingOf(gateway);
+    if (!mapping || !hasQuery(mapping)) return { verdict: "no_query", tradeNo: null, raw: null };
+  }
 
   const secret = await gatewaySecret(env, gateway);
   if (!secret) {
@@ -142,20 +152,128 @@ async function queryOnce(
   }
 
   const now = deps.now ?? new Date();
-  const req = buildQueryRequest(mapping, {
+  const doFetch = deps.fetch ?? fetch;
+
+  // ── 薄 driver：Stripe / PayPal ──
+  if (driver === "stripe" || driver === "paypal") {
+    const providerTradeNo = (order.provider_trade_no ?? "").trim();
+    if (!providerTradeNo) {
+      await markGatewayResult(env, gateway.id, null, "查单失败：缺少服务商单号");
+      return { verdict: "error", tradeNo: null, message: "missing_provider_trade_no", raw: null };
+    }
+
+    const q = driver === "stripe"
+      ? await queryStripeCharge({
+          gateway,
+          secret,
+          merchantId: gateway.merchant_id,
+          providerTradeNo,
+          amountMinor: order.provider_amount_minor ?? order.amount_minor,
+          currency: order.provider_currency ?? order.currency,
+          env,
+          fetch: deps.fetch,
+        })
+      : await queryPaypalCharge({
+          gateway,
+          secret,
+          merchantId: gateway.merchant_id,
+          providerTradeNo,
+          amountMinor: order.provider_amount_minor ?? order.amount_minor,
+          currency: order.provider_currency ?? order.currency,
+          env,
+          fetch: deps.fetch,
+        });
+
+    if (q.status === "error") {
+      await markGatewayResult(env, gateway.id, null, `查单失败：${q.message}`);
+      return { verdict: "error", tradeNo: null, message: q.message, raw: q.raw };
+    }
+
+    const raw = q.raw.slice(0, 4000);
+    if (q.status === "paid") {
+      const expected = order.provider_amount_minor ?? order.amount_minor;
+      if (q.amountMinor !== null && q.amountMinor !== expected) {
+        const msg = `金额不符 order=${order.code} query=${q.amountMinor} expected=${expected}`;
+        await markGatewayResult(env, gateway.id, null, msg);
+        return { verdict: "error", tradeNo: q.tradeNo, message: "amount_mismatch", raw };
+      }
+      await settlePaidOrder(env, order, q.tradeNo, raw, now);
+      await markGatewayResult(env, gateway.id, now, null);
+      return { verdict: "paid", tradeNo: q.tradeNo, raw };
+    }
+    if (q.status === "terminal") {
+      await closeOrder(env, order, q.message ?? "服务商判定失败", raw);
+      return { verdict: "terminal", tradeNo: q.tradeNo, message: q.message, raw };
+    }
+
+    await env.DB.prepare(
+      `UPDATE orders SET raw_notify = ?, updated_at = ? WHERE id = ? AND status = 'pending'`,
+    )
+      .bind(raw, new Date().toISOString(), order.id)
+      .run();
+    return { verdict: "pending", tradeNo: q.tradeNo, raw };
+  }
+
+  // ── 易支付 V2（RSA 双向签名；查单也签名）──
+  if (driver === "epay_v2") {
+    const providerTradeNo = (order.provider_trade_no ?? "").trim();
+    if (!providerTradeNo) {
+      await markGatewayResult(env, gateway.id, null, "查单失败：缺少服务商单号");
+      return { verdict: "error", tradeNo: null, message: "missing_provider_trade_no", raw: null };
+    }
+    const q = await queryEpayV2({
+      gateway,
+      secret,
+      merchantId: gateway.merchant_id,
+      providerTradeNo,
+      amountMinor: order.provider_amount_minor ?? order.amount_minor,
+      currency: order.provider_currency ?? order.currency,
+      env,
+      fetch: deps.fetch,
+    });
+    if (q.status === "error") {
+      await markGatewayResult(env, gateway.id, null, `查单失败：${q.message}`);
+      return { verdict: "error", tradeNo: null, message: q.message, raw: q.raw };
+    }
+    if (q.status === "paid") {
+      const expected = order.provider_amount_minor ?? order.amount_minor;
+      if (q.amountMinor !== null && q.amountMinor !== expected) {
+        const msg = `金额不符 order=${order.code} query=${q.amountMinor} expected=${expected}`;
+        await markGatewayResult(env, gateway.id, null, msg);
+        return { verdict: "error", tradeNo: q.tradeNo, message: "amount_mismatch", raw: q.raw };
+      }
+      await settlePaidOrder(env, order, q.tradeNo, q.raw, now);
+      await markGatewayResult(env, gateway.id, now, null);
+      return { verdict: "paid", tradeNo: q.tradeNo, raw: q.raw };
+    }
+    if (q.status === "terminal") {
+      await closeOrder(env, order, q.message ?? "服务商判定失败", q.raw);
+      return { verdict: "terminal", tradeNo: q.tradeNo, message: q.message, raw: q.raw };
+    }
+    await env.DB.prepare(
+      `UPDATE orders SET raw_notify = ?, updated_at = ? WHERE id = ? AND status = 'pending'`,
+    )
+      .bind(q.raw, new Date().toISOString(), order.id)
+      .run();
+    return { verdict: "pending", tradeNo: q.tradeNo, raw: q.raw };
+  }
+
+  // ── 映射类 driver ──
+  const activeMapping = mapping as GatewayMapping;
+  const req = buildQueryRequest(activeMapping, {
     merchant: gateway.merchant_id ?? "",
     secret,
     orderNo: order.provider_order_no ?? order.code,
-    amountMinor: order.amount_minor,
+    amountMinor: order.provider_amount_minor ?? order.amount_minor,
     subject: "",
     method: order.payment_method,
     endpoint: gateway.endpoint ?? "",
+    channelCodes: parseChannelCodes(gateway.channel_codes),
     now,
   });
 
   let text: string;
   try {
-    const doFetch = deps.fetch ?? fetch;
     const res = await doFetch(req.url, {
       method: req.method,
       headers: req.headers,
@@ -178,13 +296,20 @@ async function queryOnce(
     return { verdict: "error", tradeNo: null, message: "bad json", raw: text.slice(0, 2000) };
   }
 
-  const q = parseQueryResponse(mapping, payload);
+  const q = parseQueryResponse(activeMapping, payload, secret);
   const raw = text.slice(0, 4000);
+
+  if (!q.ok) {
+    const message = q.message ?? "网关返回失败";
+    await markGatewayResult(env, gateway.id, null, `查单失败：${message}`);
+    return { verdict: "error", tradeNo: q.tradeNo, message, raw };
+  }
 
   if (q.paid) {
     // 金额核对：查单说的钱必须等于下单金额。查单没给金额 ⇒ 只能认"已付"这个事实
-    if (q.amountMinor !== null && q.amountMinor !== order.amount_minor) {
-      const msg = `金额不符 order=${order.code} query=${q.amountMinor} expected=${order.amount_minor}`;
+    const expected = order.provider_amount_minor ?? order.amount_minor;
+    if (q.amountMinor !== null && q.amountMinor !== expected) {
+      const msg = `金额不符 order=${order.code} query=${q.amountMinor} expected=${expected}`;
       await markGatewayResult(env, gateway.id, null, msg);
       return { verdict: "error", tradeNo: q.tradeNo, message: "amount_mismatch", raw };
     }

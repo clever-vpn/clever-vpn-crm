@@ -496,6 +496,11 @@ export const orders = sqliteTable(
     /** 命中的批次码（`promotion_codes.id`）；主码 / 无码时为 NULL */
     code_id: integer("code_id"),
     currency: text("currency").notNull().default("CNY"),
+    /** 实际发给网关的金额/币种；CRM 账本仍是 amount_minor/currency */
+    provider_amount_minor: integer("provider_amount_minor"),
+    provider_currency: text("provider_currency"),
+    /** 下单时冻结的 1 网关币种 = X CNY */
+    fx_rate: real("fx_rate"),
     /** purchase | gift | manual */
     source: text("source").notNull().default("purchase"),
     /**
@@ -539,6 +544,12 @@ export const orders = sqliteTable(
      * 一单约 12 次，而不是每 2 分钟死查到 TTL（30 次）。
      */
     next_poll_at: text("next_poll_at"),
+    /**
+     * 用户侧回跳页/refresh 的**查询冷却**（ISO 时间）。
+     * 与 `next_poll_at` 刻意分开：cron 的排期不能把“用户刚付完想马上看结果”挡掉；
+     * cron 也不读这个字段。
+     */
+    return_poll_at: text("return_poll_at"),
     /** 这一单我们主动问过网关几次（后台可见："确认过 8 次"） */
     poll_attempts: integer("poll_attempts").notNull().default(0),
     /** pending | paid | provisioning | active | expired | closed | refunded */
@@ -942,11 +953,23 @@ export const paymentGateways = sqliteTable(
     merchant_id: text("merchant_id"),
     /**
      * 加密后的密钥（AES-GCM，主密钥在 Worker secret `APP_SECRET`）。
-     * 明文密钥**不入库、不进日志、不进任何 API 响应**。
+     * 明文密钥**不入库、不进日志**；列表/详情不返回，管理员可显式查看当前值（审计）。
      */
     secret_enc: text("secret_enc"),
+    /**
+     * 加密后的 **webhook 凭据**（AES-GCM，同一把 `APP_SECRET`）：
+     *   - Stripe：`whsec_...`（后台 endpoint 的 signing secret）
+     *   - PayPal：`WH-...`（后台 webhook id，不是密钥，但统一加密存）
+     * 只有 Stripe/PayPal 用；映射类网关的验签密钥仍是 `secret_enc`。
+     */
+    webhook_enc: text("webhook_enc"),
     /** 这条网关支持的支付方式：`["alipay","wechat"]` */
     methods: text("methods").notNull().default("[]"),
+    /**
+     * 账户相关的通道号/渠道号：支付方式 → 厂商渠道号。
+     * 这是**网关实例值**，不属于协议模板/映射。
+     */
+    channel_codes: text("channel_codes"),
     /** 自定义协议映射 JSON —— 只有 `custom`（generic_json_v1）需要 */
     mapping: text("mapping"),
     /** 同一方式多条网关时，数字小的先试；失败自动降级到下一 条 */
@@ -962,7 +985,20 @@ export const paymentGateways = sqliteTable(
      *   2. 真实网关的**灰度发布**：新渠道先只给几个老用户体验。
      */
     allowed_emails: text("allowed_emails"),
+    /** 网关结算币种（如 CNY / USD） */
     currency: text("currency").notNull().default("CNY"),
+    /** 1 单位网关币种 = X CNY；CNY 网关固定 1 */
+    fx_rate: real("fx_rate").notNull().default(1),
+    /** 测试支付金额（网关币种，最小单位） */
+    test_amount_minor: integer("test_amount_minor").notNull().default(100),
+    /** 测试状态：创建 / 查单 / 回调（回调可选） */
+    test_create_ok_at: text("test_create_ok_at"),
+    test_query_ok_at: text("test_query_ok_at"),
+    test_callback_ok_at: text("test_callback_ok_at"),
+    /** 1 = 测试通过还要求回调正常；0 = 回调可选 */
+    test_require_callback: integer("test_require_callback").notNull().default(0),
+    /** 测试通过时绑定的配置 hash；任何集成字段变更都会失效 */
+    tested_config_hash: text("tested_config_hash"),
     /** 最近一次成功的测试支付（`orders.id`，那条订单 `plan_id IS NULL`） */
     last_test_order_id: integer("last_test_order_id"),
     last_ok_at: text("last_ok_at"),

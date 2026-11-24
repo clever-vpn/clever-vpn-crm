@@ -32,7 +32,7 @@ const KIND: Record<string, string> = { period: "周期", traffic: "流量包", a
 const METHOD: Record<string, string> = {
   alipay: "支付宝",
   wechat: "微信",
-  stripe: "银行卡",
+  stripe: "Stripe",
   paypal: "PayPal",
   transfer: "转账",
   manual: "后台",

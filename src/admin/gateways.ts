@@ -5,8 +5,8 @@
  *
  *   1. `driver` 决定它**能卖哪些方式**（`DRIVER_METHODS`）—— 不允许 "stripe + 支付宝"
  *      这种配置，否则显示名与真实能力会打架；
- *   2. 密钥只能通过 `secret`（明文，进来就加密）写入，**任何响应都不回显**，
- *      只回 `has_secret`；
+ *   2. 密钥只能通过 `secret`（明文，进来就加密）写入；列表/详情只回 `has_secret`，
+ *      租户可通过显式 `GET /gateways/:id/secret` 查看当前值（审计，不写日志）；
  *   3. `mock` 的两道闸门在发布时校验：环境开关必须打开，白名单必须非空。
  *
  * `epay_v1` 的 `mapping` 是**覆盖项**（与内置映射深合并），租户只写差异；
@@ -14,16 +14,17 @@
  */
 
 import { createCharge } from "../payments/checkout";
-import { encryptSecret, secretKeyConfigured } from "../payments/secret";
+import { decryptSecret, encryptSecret, secretKeyConfigured } from "../payments/secret";
 import { DRIVERS, validateMapping, type GatewayMapping } from "../payments/mapping";
 import { EPAY_V1_MAPPING } from "../payments/builtin/epay";
 import { isMockEnabled } from "../payments/gateways";
+import { pollOrderOnce } from "../payments/poll";
 import { MOCK_DRIVER } from "../payments/mock";
 
 import type { Env } from "../env";
 import type { GatewayRow } from "../payments/gateways";
 
-const GATEWAY_STATUSES = ["draft", "live", "disabled"] as const;
+const GATEWAY_STATUSES = ["draft", "live", "disabled", "deleted"] as const;
 
 /**
  * 后台可配置的驱动 = 真实驱动 + `mock`。
@@ -35,6 +36,7 @@ const ADMIN_DRIVERS = [...DRIVERS, MOCK_DRIVER];
 /** 每种 driver 能卖的方式 —— 这就是"品牌即方式"的落地 */
 const DRIVER_METHODS: Record<string, readonly string[]> = {
   epay_v1: ["alipay", "wechat"],
+  epay_v2: ["alipay", "wechat"],
   generic_json_v1: ["alipay", "wechat"],
   mock: ["alipay", "wechat"],
   stripe: ["stripe"],
@@ -77,7 +79,7 @@ function parseArray(raw: string | null): string[] {
   }
 }
 
-/** 对外视图：**永远不含密钥** */
+/** 对外视图：不含密钥；需要查看时走显式的 `/gateways/:id/secret` */
 function view(row: GatewayRow): Record<string, unknown> {
   let mapping: unknown = null;
   if (row.mapping) {
@@ -94,11 +96,21 @@ function view(row: GatewayRow): Record<string, unknown> {
     endpoint: row.endpoint,
     merchant_id: row.merchant_id,
     has_secret: !!row.secret_enc,
+    has_webhook: !!row.webhook_enc,
     methods: parseArray(row.methods),
+    channel_codes: row.channel_codes ? JSON.parse(row.channel_codes) : {},
     mapping,
     priority: row.priority,
     status: row.status,
     currency: row.currency,
+    fx_rate: row.fx_rate,
+    test_amount_minor: row.test_amount_minor,
+    test_create_ok_at: row.test_create_ok_at,
+    test_query_ok_at: row.test_query_ok_at,
+    test_callback_ok_at: row.test_callback_ok_at,
+    test_require_callback: Boolean(row.test_require_callback),
+    tested_config_hash: row.tested_config_hash,
+    test_ready: Boolean(row.test_create_ok_at && row.test_query_ok_at),
     allowed_emails: parseArray(row.allowed_emails),
     last_test_order_id: row.last_test_order_id,
     last_ok_at: row.last_ok_at,
@@ -126,7 +138,7 @@ function resolveMapping(
   if (driver === "epay_v1") {
     // 覆盖项：只写差异（如渠道码、路径），与内置映射深合并
     const merged = mapping ? deepMerge(EPAY_V1_MAPPING, mapping) : EPAY_V1_MAPPING;
-    const r = validateMapping(merged);
+    const r = validateMapping(merged, { allowUnsignedQuery: true });
     return r.ok ? { ok: true, value: r.mapping } : { ok: false, error: `mapping 非法：${r.errors.join("；")}` };
   }
 
@@ -136,7 +148,7 @@ function resolveMapping(
     return r.ok ? { ok: true, value: r.mapping } : { ok: false, error: `mapping 非法：${r.errors.join("；")}` };
   }
 
-  // stripe / paypal 用代码里的 driver，不需要 mapping
+  // stripe / paypal 用代码里的薄 driver，不需要 mapping
   return { ok: true, value: null };
 }
 
@@ -146,9 +158,13 @@ interface NormalizedInput {
   endpoint: string | null;
   merchant_id: string | null;
   methods: string[];
+  channel_codes: Record<string, string | number>;
   mapping: unknown;
   priority: number;
   currency: string;
+  fx_rate: number;
+  test_amount_minor: number;
+  test_require_callback: boolean;
   allowed_emails: string[];
 }
 
@@ -182,6 +198,20 @@ function normalize(body: Record<string, unknown>, current?: GatewayRow): Normali
   const currency = String(body.currency ?? current?.currency ?? "CNY").trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) return "币种必须是 3 位 ISO 4217 代码";
 
+  const fxRaw = body.fx_rate ?? current?.fx_rate ?? (currency === "CNY" ? 1 : 0);
+  const fx_rate = Number(fxRaw);
+  if (!Number.isFinite(fx_rate) || fx_rate <= 0) {
+    return "汇率必须大于 0（1 网关币种 = X CNY）";
+  }
+
+  const test_require_callback = Boolean(body.test_require_callback ?? current?.test_require_callback ?? false);
+
+  const testAmountRaw = body.test_amount_minor ?? current?.test_amount_minor ?? 100;
+  const test_amount_minor = Number(testAmountRaw);
+  if (!Number.isInteger(test_amount_minor) || test_amount_minor < 1) {
+    return "测试金额必须是正整数（网关币种最小单位）";
+  }
+
   const emailsRaw = body.allowed_emails ?? (current ? parseArray(current.allowed_emails) : []);
   if (!Array.isArray(emailsRaw)) return "allowed_emails 必须是数组";
   const allowed_emails = [...new Set(emailsRaw.map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
@@ -190,13 +220,31 @@ function normalize(body: Record<string, unknown>, current?: GatewayRow): Normali
   }
 
   const endpoint = body.endpoint === undefined ? (current?.endpoint ?? null) : String(body.endpoint ?? "").trim() || null;
+
+  const rawChannelCodes = body.channel_codes === undefined
+    ? (current?.channel_codes ? (JSON.parse(current.channel_codes) as unknown) : null)
+    : body.channel_codes;
+  const channel_codes: Record<string, string | number> = {};
+  if (rawChannelCodes !== null && rawChannelCodes !== undefined) {
+    if (!rawChannelCodes || typeof rawChannelCodes !== "object" || Array.isArray(rawChannelCodes)) {
+      return "通道号必须是对象（支付方式 → 渠道号）";
+    }
+    for (const [k, v] of Object.entries(rawChannelCodes as Record<string, unknown>)) {
+      if (typeof v !== "string" && typeof v !== "number") return `通道号 ${k} 只能是字符串或数字`;
+      if (String(v) !== "") channel_codes[k] = v;
+    }
+  } else if (driver === "epay_v1") {
+    channel_codes.alipay = "alipay";
+    channel_codes.wechat = "wxpay";
+  }
   const merchant_id =
     body.merchant_id === undefined ? (current?.merchant_id ?? null) : String(body.merchant_id ?? "").trim() || null;
 
-  if (driver === "epay_v1" || driver === "generic_json_v1") {
+  if (driver === "epay_v1" || driver === "epay_v2" || driver === "generic_json_v1") {
     if (!endpoint) return "网关地址必填（例如 https://pay.example.com）";
     if (!merchant_id) return "商户号必填";
   }
+  if (driver === "paypal" && !merchant_id) return "PayPal 需要 Client ID（填在商户号）";
 
   return {
     driver,
@@ -204,17 +252,41 @@ function normalize(body: Record<string, unknown>, current?: GatewayRow): Normali
     endpoint,
     merchant_id,
     methods,
+    channel_codes,
     mapping: body.mapping === undefined ? (current?.mapping ? JSON.parse(current.mapping) : null) : body.mapping,
     priority,
     currency,
+    fx_rate,
+    test_amount_minor,
+    test_require_callback,
     allowed_emails,
   };
 }
 
+export async function gatewayConfigHash(row: GatewayRow): Promise<string> {
+  const payload = JSON.stringify({
+    driver: row.driver,
+    endpoint: row.endpoint,
+    merchant_id: row.merchant_id,
+    secret_enc: row.secret_enc,
+    webhook_enc: row.webhook_enc,
+    methods: row.methods,
+    channel_codes: row.channel_codes,
+    mapping: row.mapping,
+    currency: row.currency,
+    fx_rate: row.fx_rate,
+    test_amount_minor: row.test_amount_minor,
+    test_require_callback: row.test_require_callback,
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function loadGateway(env: Env, id: number): Promise<GatewayRow | null> {
   return env.DB.prepare(
-    `SELECT id, driver, name, endpoint, merchant_id, secret_enc, methods, mapping, priority,
-       status, currency, allowed_emails, last_test_order_id, last_ok_at, last_error
+    `SELECT id, driver, name, endpoint, merchant_id, secret_enc, webhook_enc, methods, mapping, priority,
+       channel_codes, status, currency, fx_rate, test_amount_minor, test_create_ok_at, test_query_ok_at,
+       test_callback_ok_at, test_require_callback, tested_config_hash, allowed_emails, last_test_order_id, last_ok_at, last_error
      FROM payment_gateways WHERE id = ?`,
   )
     .bind(id)
@@ -236,9 +308,10 @@ export async function handleAdminGateways(
   // ── 列表 ──
   if (method === "GET" && path === "/gateways") {
     const rows = await env.DB.prepare(
-      `SELECT id, driver, name, endpoint, merchant_id, secret_enc, methods, mapping, priority,
-         status, currency, allowed_emails, last_test_order_id, last_ok_at, last_error
-       FROM payment_gateways ORDER BY priority, id`,
+      `SELECT id, driver, name, endpoint, merchant_id, secret_enc, webhook_enc, methods, channel_codes, mapping, priority,
+         status, currency, fx_rate, test_amount_minor, test_create_ok_at, test_query_ok_at,
+         test_callback_ok_at, test_require_callback, tested_config_hash, allowed_emails, last_test_order_id, last_ok_at, last_error
+       FROM payment_gateways WHERE status <> 'deleted' ORDER BY priority, id`,
     ).all<GatewayRow>();
     return json({
       gateways: (rows.results ?? []).map(view),
@@ -271,11 +344,20 @@ export async function handleAdminGateways(
       secretEnc = enc;
     }
 
+    // webhook 凭据：Stripe signing secret / PayPal webhook id
+    let webhookEnc: string | null = null;
+    const webhookPlain = typeof body.webhook_secret === "string" ? body.webhook_secret.trim() : "";
+    if (webhookPlain) {
+      const enc = await encryptSecret(env, webhookPlain);
+      if (!enc) return fail(400, "secret_key_missing", "未配置主密钥 APP_SECRET，无法保存 webhook 凭据");
+      webhookEnc = enc;
+    }
+
     const now = new Date().toISOString();
     const res = await env.DB.prepare(
-      `INSERT INTO payment_gateways (driver, name, endpoint, merchant_id, secret_enc, methods, mapping,
-         priority, status, currency, allowed_emails, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+      `INSERT INTO payment_gateways (driver, name, endpoint, merchant_id, secret_enc, webhook_enc,
+         methods, channel_codes, mapping, priority, status, currency, fx_rate, test_amount_minor, test_require_callback, allowed_emails, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         normalized.driver,
@@ -283,10 +365,15 @@ export async function handleAdminGateways(
         normalized.endpoint,
         normalized.merchant_id,
         secretEnc,
+        webhookEnc,
         JSON.stringify(normalized.methods),
+        Object.keys(normalized.channel_codes).length ? JSON.stringify(normalized.channel_codes) : null,
         resolved.value ? JSON.stringify(resolved.value) : null,
         normalized.priority,
         normalized.currency,
+        normalized.fx_rate,
+        normalized.test_amount_minor,
+        normalized.test_require_callback ? 1 : 0,
         normalized.allowed_emails.length ? JSON.stringify(normalized.allowed_emails) : null,
         now,
         now,
@@ -299,13 +386,33 @@ export async function handleAdminGateways(
     return json({ gateway: row ? view(row) : null }, 201);
   }
 
+  // ── 查看当前密钥（显式操作；审计；不写日志）──
+  const reveal = /^\/gateways\/(\d+)\/secret$/.exec(path);
+  if (method === "GET" && reveal) {
+    const id = Number(reveal[1]);
+    const current = await loadGateway(env, id);
+    if (!current || current.status === "deleted") return fail(404, "gateway_not_found");
+    if (!current.secret_enc) return fail(400, "secret_not_set", "这条网关还没有保存密钥");
+    const secret = await decryptSecret(env, current.secret_enc);
+    if (secret === null) {
+      return fail(500, "secret_unavailable", "密钥解不开（主密钥未配置或已更换）");
+    }
+    await audit(env, actor, "gateway_secret_revealed", String(id), { name: current.name });
+    return new Response(JSON.stringify({ secret }), {
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
   // ── 测试支付：只验证"这条网关能不能收钱"，不产生订阅 ──
   //    与用户下单的三点不同：允许 draft、忽略白名单、落成 `source='test'` 的 0 权益测试单。
   const testOne = /^\/gateways\/(\d+)\/test$/.exec(path);
   if (method === "POST" && testOne) {
     const id = Number(testOne[1]);
     const current = await loadGateway(env, id);
-    if (!current) return fail(404, "gateway_not_found");
+    if (!current || current.status === "deleted") return fail(404, "gateway_not_found");
 
     const body = await readBody(request);
     const methods = (JSON.parse(current.methods || "[]") as string[]) ?? [];
@@ -316,7 +423,13 @@ export async function handleAdminGateways(
       return fail(400, "method_not_supported", `这条网关不支持 ${method_}`);
     }
 
-    const amount = Math.max(1, Number(body.amount_minor ?? 1) || 1);
+    // Stripe 的最小扣款额高于 1 分；测试单统一 USD $1.00，避免 session 创建就失败
+    const brandTest = current.driver === "stripe" || current.driver === "paypal";
+    const amount = Math.max(
+      1,
+      Number(body.amount_minor ?? current.test_amount_minor ?? 100) || current.test_amount_minor || 100,
+    );
+    const testCurrency = current.currency;
     const origin = (env.SITE_URL && env.SITE_URL.trim()) || new URL(request.url).origin;
 
     const res = await createCharge(env, {
@@ -328,7 +441,7 @@ export async function handleAdminGateways(
         name: "网关测试",
         kind: "period",
         price_minor: amount,
-        currency: current.currency,
+        currency: testCurrency,
         licence_limit: 1,
         term_days: 1,
         monthly_quota_gb: null,
@@ -349,10 +462,43 @@ export async function handleAdminGateways(
       amountMinor: amount,
       entry: "admin",
       origin,
+      crmOrigin: new URL(request.url).origin,
+      clientIp: request.headers.get("CF-Connecting-IP") ?? "127.0.0.1",
       testGatewayId: id,
     });
 
     if (!res.ok) return fail(res.status, res.code, res.message);
+
+    const nowIso = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE payment_gateways SET test_create_ok_at = ?, test_query_ok_at = NULL,
+         test_callback_ok_at = NULL, tested_config_hash = NULL, last_test_order_id = ?, updated_at = ? WHERE id = ?`,
+    )
+      .bind(nowIso, null, nowIso, id)
+      .run();
+
+    const testOrder = await env.DB.prepare(`SELECT id FROM orders WHERE code = ?`).bind(res.orderCode).first<{ id: number }>();
+    const queryResult = current.driver === "mock" ? { verdict: "no_query" as const } : await pollOrderOnce(env, res.orderCode);
+    const queryOk = current.driver === "mock" || (!!queryResult && queryResult.verdict !== "no_query" && queryResult.verdict !== "error");
+    if (!queryOk) {
+      return fail(
+        502,
+        "test_query_failed",
+        !queryResult || queryResult.verdict === "no_query"
+          ? "创建成功，但该网关没有可用的查单接口；请先配置查单后再发布"
+          : "创建成功，但查单失败；请检查查单路径、参数和签名",
+      );
+    }
+
+    const tested = await loadGateway(env, id);
+    const hash = tested ? await gatewayConfigHash(tested) : null;
+    await env.DB.prepare(
+      `UPDATE payment_gateways SET test_query_ok_at = ?, tested_config_hash = ?,
+         last_test_order_id = ?, updated_at = ? WHERE id = ?`,
+    )
+      .bind(nowIso, hash, testOrder?.id ?? null, nowIso, id)
+      .run();
+
     return json({
       ok: true,
       order_code: res.orderCode,
@@ -360,6 +506,8 @@ export async function handleAdminGateways(
       amount_minor: res.amountMinor,
       currency: res.currency,
       expires_at: res.expiresAt,
+      test_ready: !current.test_require_callback,
+      callback_required: current.test_require_callback,
       actor,
     });
   }
@@ -370,7 +518,7 @@ export async function handleAdminGateways(
 
   if (id > 0 && method === "PATCH" && byId) {
     const current = await loadGateway(env, id);
-    if (!current) return fail(404, "gateway_not_found");
+    if (!current || current.status === "deleted") return fail(404, "gateway_not_found");
 
     const body = await readBody(request);
     const normalized = normalize(body, current);
@@ -397,7 +545,10 @@ export async function handleAdminGateways(
     const resolved = resolveMapping(normalized.driver, normalized.mapping);
     if (!resolved.ok) return fail(400, "invalid_mapping", resolved.error);
 
-    let secretEnc = current.secret_enc;
+    // 草稿改驱动：沿用上一条驱动的密钥/webhook 等于把 Stripe 的 whsec 发给 PayPal。
+    // 两边都清掉，强制重新填。
+    const driverChanged = normalized.driver !== current.driver;
+    let secretEnc = driverChanged ? null : current.secret_enc;
     if (body.clear_secret === true) secretEnc = null;
     if (typeof body.secret === "string" && body.secret.trim()) {
       const enc = await encryptSecret(env, body.secret.trim());
@@ -405,10 +556,18 @@ export async function handleAdminGateways(
       secretEnc = enc;
     }
 
+    let webhookEnc = driverChanged ? null : current.webhook_enc;
+    if (body.clear_webhook === true) webhookEnc = null;
+    if (typeof body.webhook_secret === "string" && body.webhook_secret.trim()) {
+      const enc = await encryptSecret(env, body.webhook_secret.trim());
+      if (!enc) return fail(400, "secret_key_missing", "未配置主密钥 APP_SECRET，无法保存 webhook 凭据");
+      webhookEnc = enc;
+    }
+
     await env.DB.prepare(
       `UPDATE payment_gateways SET driver = ?, name = ?, endpoint = ?, merchant_id = ?, secret_enc = ?,
-         methods = ?, mapping = ?, priority = ?, currency = ?, allowed_emails = ?, updated_at = ?
-       WHERE id = ?`,
+         webhook_enc = ?, methods = ?, channel_codes = ?, mapping = ?, priority = ?, currency = ?, fx_rate = ?, test_amount_minor = ?, test_require_callback = ?, allowed_emails = ?,
+         updated_at = ? WHERE id = ?`,
     )
       .bind(
         normalized.driver,
@@ -416,10 +575,15 @@ export async function handleAdminGateways(
         normalized.endpoint,
         normalized.merchant_id,
         secretEnc,
+        webhookEnc,
         JSON.stringify(normalized.methods),
+        Object.keys(normalized.channel_codes).length ? JSON.stringify(normalized.channel_codes) : null,
         resolved.value ? JSON.stringify(resolved.value) : null,
         normalized.priority,
         normalized.currency,
+        normalized.fx_rate,
+        normalized.test_amount_minor,
+        normalized.test_require_callback ? 1 : 0,
         normalized.allowed_emails.length ? JSON.stringify(normalized.allowed_emails) : null,
         new Date().toISOString(),
         id,
@@ -428,12 +592,77 @@ export async function handleAdminGateways(
 
     await audit(env, actor, "gateway_updated", String(id), { name: normalized.name });
     const row = await loadGateway(env, id);
+    if (row && current.tested_config_hash && (await gatewayConfigHash(row)) !== current.tested_config_hash) {
+      await env.DB.prepare(
+        `UPDATE payment_gateways SET test_create_ok_at = NULL, test_query_ok_at = NULL,
+           test_callback_ok_at = NULL, tested_config_hash = NULL, updated_at = ? WHERE id = ?`,
+      )
+        .bind(new Date().toISOString(), id)
+        .run();
+    }
     return json({ gateway: row ? view(row) : null });
+  }
+
+  // ── 复制为草稿：从一条现有网关复制完整集成配置（密钥/webhook 也复制）──
+  const copyOne = /^\/gateways\/(\d+)\/copy$/.exec(path);
+  if (method === "POST" && copyOne) {
+    const id = Number(copyOne[1]);
+    const current = await loadGateway(env, id);
+    if (!current || current.status === "deleted") return fail(404, "gateway_not_found");
+    const now = new Date().toISOString();
+    const name = `${current.name}（副本）`.slice(0, 60);
+    const res = await env.DB.prepare(
+      `INSERT INTO payment_gateways (driver, name, endpoint, merchant_id, secret_enc, webhook_enc,
+         methods, channel_codes, mapping, priority, status, currency, fx_rate, test_amount_minor, test_require_callback, allowed_emails, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        current.driver,
+        name,
+        current.endpoint,
+        current.merchant_id,
+        current.secret_enc,
+        current.webhook_enc,
+        current.methods,
+        current.channel_codes,
+        current.mapping,
+        current.priority,
+        current.currency,
+        current.fx_rate,
+        current.test_amount_minor,
+        current.test_require_callback,
+        current.allowed_emails,
+        now,
+        now,
+      )
+      .run();
+    const newId = Number(res.meta.last_row_id ?? 0);
+    await audit(env, actor, "gateway_copied", String(newId), { from: id, name });
+    const row = await loadGateway(env, newId);
+    return json({ gateway: row ? view(row) : null }, 201);
+  }
+
+  // ── 删除（软删除）──
+  //    不物理删：orders.gateway_id、在途 webhook/查单、审计都还引用这一行。
+  //    删除后列表隐藏、新下单不再路由；老订单仍能按 id 加载并确认。
+  if (id > 0 && method === "DELETE" && byId) {
+    const current = await loadGateway(env, id);
+    if (!current || current.status === "deleted") return fail(404, "gateway_not_found");
+    await env.DB.prepare(
+      `UPDATE payment_gateways SET status = 'deleted', updated_at = ? WHERE id = ?`,
+    )
+      .bind(new Date().toISOString(), id)
+      .run();
+    await audit(env, actor, "gateway_deleted", String(id), {
+      driver: current.driver,
+      name: current.name,
+    });
+    return json({ ok: true });
   }
 
   if (id > 0 && method === "POST" && action) {
     const current = await loadGateway(env, id);
-    if (!current) return fail(404, "gateway_not_found");
+    if (!current || current.status === "deleted") return fail(404, "gateway_not_found");
     const verb = action[2];
 
     if (verb === "disable") {
@@ -452,14 +681,32 @@ export async function handleAdminGateways(
         return fail(400, "mock_whitelist_required", "测试网关必须配置客户白名单才能发布（否则等于向所有人免费开通）");
       }
     }
-    if (current.driver === "epay_v1" || current.driver === "generic_json_v1") {
+    if (["epay_v1", "epay_v2", "generic_json_v1", "stripe", "paypal"].includes(current.driver)) {
       if (!current.secret_enc) return fail(400, "secret_required", "发布前必须设置网关密钥");
+    }
+    if (current.driver === "paypal" && !current.merchant_id) {
+      return fail(400, "paypal_client_id_required", "PayPal 发布前必须设置 Client ID");
+    }
+    if ((current.driver === "stripe" || current.driver === "paypal") && !current.webhook_enc) {
+      return fail(400, "webhook_required", "发布前必须配置 Webhook 凭据（Stripe signing secret / PayPal webhook id）");
     }
     const resolved = resolveMapping(
       current.driver,
       current.mapping ? (JSON.parse(current.mapping) as unknown) : null,
     );
     if (!resolved.ok) return fail(400, "invalid_mapping", resolved.error);
+
+    if (current.driver !== "mock") {
+      if (!current.test_create_ok_at || !current.test_query_ok_at) {
+        return fail(400, "test_required", "发布前必须先测试：创建订单 + 查询订单");
+      }
+      if (current.test_require_callback && !current.test_callback_ok_at) {
+        return fail(400, "test_callback_required", "已开启回调验证：请完成测试支付并收到回调后再发布");
+      }
+      if (!current.tested_config_hash || current.tested_config_hash !== (await gatewayConfigHash(current))) {
+        return fail(400, "test_required", "配置已变更，请重新测试后再发布");
+      }
+    }
 
     await env.DB.prepare(`UPDATE payment_gateways SET status = 'live', updated_at = ? WHERE id = ?`)
       .bind(new Date().toISOString(), id)

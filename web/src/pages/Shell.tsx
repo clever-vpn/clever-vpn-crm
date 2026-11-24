@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Avatar,
   Breadcrumb,
   Button,
   Drawer,
   Dropdown,
-  Grid,
   Layout,
   Menu,
   Tag,
@@ -27,11 +26,13 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { api, type Me } from "../api";
+import { canNavigate, GATEWAY_LIST_PATH, navigate, parseGatewayRoute } from "../nav";
 import ComingSoon from "./ComingSoon";
 import Domains from "./Domains";
 import { PANEL_BASE, stripPanelBase } from "./panelBase";
 import Customers from "./Customers";
-import Gateways from "./Gateways";
+import GatewayEditor from "./GatewayEditor";
+import GatewaysList from "./GatewaysList";
 import Marketing from "./Marketing";
 import Orders from "./Orders";
 import Plans from "./Plans";
@@ -134,19 +135,44 @@ const PLACEHOLDERS: Record<string, string> = {
  * 面板的实际挂载前缀：默认空（入口就是 `/`）；自托管把官网放在根路径时，后台
  * 挂在 `/admin` 下，前缀由**首次加载的地址**决定，前端只需拼一次。
  */
-function usePathname(): [string, (href: string) => void] {
-  const [path, setPath] = useState(stripPanelBase(window.location.pathname));
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 767.98px)").matches);
   useEffect(() => {
-    const onPop = () => setPath(stripPanelBase(window.location.pathname));
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    const mq = window.matchMedia("(max-width: 767.98px)");
+    const onChange = () => setMobile(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
   }, []);
-  const navigate = (href: string) => {
-    if (href === stripPanelBase(window.location.pathname)) return;
-    window.history.pushState(null, "", PANEL_BASE + href);
-    setPath(stripPanelBase(window.location.pathname));
-  };
-  return [path, navigate];
+  return mobile;
+}
+
+function usePathname(): [string] {
+  const [path, setPath] = useState(stripPanelBase(window.location.pathname));
+  const pathRef = useRef(path);
+  useEffect(() => {
+    pathRef.current = path;
+  }, [path]);
+
+  useEffect(() => {
+    // 浏览器后退：先过编辑器守卫；取消时把地址推回当前页
+    const onPop = () => {
+      if (!canNavigate()) {
+        window.history.pushState(null, "", PANEL_BASE + pathRef.current);
+        return;
+      }
+      setPath(stripPanelBase(window.location.pathname));
+    };
+    // 应用内 navigate：守卫已在 navigate() 里过，这里只同步状态
+    const onNav = () => setPath(stripPanelBase(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    window.addEventListener("crm:navigate", onNav);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("crm:navigate", onNav);
+    };
+  }, []);
+  return [path];
 }
 
 export default function Shell({
@@ -158,15 +184,16 @@ export default function Shell({
   onLoggedOut: () => void;
   onMeChanged: (me: Me) => void;
 }) {
-  const [rawPath, navigate] = usePathname();
+  const [rawPath] = usePathname();
   const path = LEGACY_PATHS[rawPath] ?? rawPath;
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const screens = Grid.useBreakpoint();
-  // 首帧 screens 是空对象（还不知道宽度）：用 md === false 判断"确认是小屏"，
-  // 否则会在手机上先闪一下侧栏。
-  const isMobile = screens.md === false;
+  // 不用 antd Grid.useBreakpoint：它内部的 responsive observer 在长页面/滚动条
+  // 变化时会重复 dispatch，React 报 Maximum update depth。这里只要一个布尔值。
+  const isMobile = useIsMobile();
   const { token } = antdTheme.useToken();
-  const current = LEAVES.find((item) => item.href === path) ?? LEAVES[0]!;
+  const gatewayRoute = parseGatewayRoute(path);
+  const current =
+    LEAVES.find((item) => item.href === path || path.startsWith(item.href + "/")) ?? LEAVES[0]!;
 
   async function logout() {
     await api.logout().catch(() => undefined);
@@ -186,8 +213,12 @@ export default function Shell({
       <Site />
     ) : path === "/domains" ? (
       <Domains />
-    ) : path === "/payments/gateways" ? (
-      <Gateways />
+    ) : path === GATEWAY_LIST_PATH ? (
+      <GatewaysList />
+    ) : gatewayRoute?.kind === "new" ? (
+      <GatewayEditor mode="new" />
+    ) : gatewayRoute?.kind === "edit" ? (
+      <GatewayEditor mode="edit" id={gatewayRoute.id} />
     ) : path === "/payments/stores" ? (
       <Stores />
     ) : path === "/marketing/overview" ? (
@@ -270,7 +301,27 @@ export default function Shell({
             </div>
           ) : (
             <Breadcrumb
-              items={[{ title: "控制台" }, { title: current.label }]}
+              items={[
+                { title: "控制台" },
+                ...(gatewayRoute && gatewayRoute.kind !== "list"
+                  ? [
+                      {
+                        title: (
+                          <a
+                            href={PANEL_BASE + GATEWAY_LIST_PATH}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              navigate(GATEWAY_LIST_PATH);
+                            }}
+                          >
+                            支付网关
+                          </a>
+                        ),
+                      },
+                      { title: gatewayRoute.kind === "new" ? "新增" : "编辑" },
+                    ]
+                  : [{ title: current.label }]),
+              ]}
               style={{ fontSize: 13 }}
             />
           )}
