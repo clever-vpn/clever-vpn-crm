@@ -10,6 +10,7 @@
  */
 
 export const AI_DOC_MAX_BYTES = 60 * 1024;
+export const AI_DOC_MAX_FILES = 8;
 
 export interface AiDocFile {
   text: string;
@@ -180,4 +181,61 @@ export function readAiDocument(fileName: string, raw: string): AiDocFile {
     };
   }
   return { text, kind };
+}
+
+
+export interface AiDocFilePart {
+  name: string;
+  text: string;
+}
+
+export interface MergedAiSubmission {
+  document: string;
+  chars: number;
+  /** 粘贴部分 / 文件部分分别计数，供 UI 展示 */
+  pasteChars: number;
+  fileChars: number;
+  error?: string;
+}
+
+/**
+ * 把「粘贴内容 + 多个页面附件」合并成最终提交正文。
+ *
+ * - 文本框只代表粘贴/手写内容；文件不写回 textarea；
+ * - 只有文件时才给每段加文件名分隔头；两者都有时先标「粘贴内容」；
+ * - 超过 8 个文件或 60KB 直接报错，不静默截断。
+ */
+export function mergeAiSubmission(paste: string, files: AiDocFilePart[]): MergedAiSubmission {
+  const pasteText = paste.trim();
+  const parts = files.map((f) => ({ name: f.name, text: f.text.trim() })).filter((f) => f.text);
+  const pasteChars = [...pasteText].length;
+  const fileChars = parts.reduce((n, f) => n + [...f.text].length, 0);
+
+  if (parts.length > AI_DOC_MAX_FILES) {
+    return {
+      document: "",
+      chars: 0,
+      pasteChars,
+      fileChars,
+      error: `附件最多 ${AI_DOC_MAX_FILES} 个；请合并/删减后再试`,
+    };
+  }
+
+  const sections: string[] = [];
+  if (pasteText) sections.push(parts.length ? `===== 粘贴内容 =====\n${pasteText}` : pasteText);
+  parts.forEach((f, i) => {
+    sections.push(`===== 文件 ${i + 1}/${parts.length}: ${f.name} =====\n${f.text}`);
+  });
+  const document = sections.join("\n\n").trim();
+  const chars = [...document].length;
+  if (new TextEncoder().encode(document).length > AI_DOC_MAX_BYTES) {
+    return {
+      document: "",
+      chars: 0,
+      pasteChars,
+      fileChars,
+      error: `合并后正文超过 ${AI_DOC_MAX_BYTES / 1024} KB；请移除或精简附件`,
+    };
+  }
+  return { document, chars, pasteChars, fileChars };
 }

@@ -40,7 +40,7 @@ import {
 } from "../mapping-form";
 import { OFFICIAL_TEMPLATES, parseTemplateText, type PaymentTemplate } from "../payment-templates";
 import { api, ApiError, type GatewayAiDraft, type GatewayAiGate } from "../api";
-import { readAiDocument } from "../ai-doc";
+import { AI_DOC_MAX_FILES, mergeAiSubmission, readAiDocument } from "../ai-doc";
 
 interface Props {
   initial: unknown;
@@ -57,6 +57,36 @@ interface Props {
   /** AI 配置助手是否已配置（服务端 `ai_ready`）；未配置时只展示说明 */
   aiReady?: boolean;
 }
+
+interface AiDocFileItem {
+  id: string;
+  name: string;
+  text: string;
+  chars: number;
+}
+
+type AiFailureKind =
+  | "input"
+  | "invalid_draft"
+  | "doc_incomplete"
+  | "gateway"
+  | "rate_limited"
+  | "network";
+
+interface AiFailure {
+  kind: AiFailureKind;
+  title: string;
+  details: string[];
+}
+
+const AI_DOC_CHECKLIST = [
+  "三个端点：创建订单、支付通知、查询订单（method / path / format）",
+  "请求字段：商户号、订单号、金额（单位）、商品名、回调地址、渠道、时间戳/随机串（如有）",
+  "签名：字段名、算法、排序/拼接规则、密钥位置、大小写",
+  "判定：成功码、已付状态、查单终态、回调应答原文",
+  "响应：收银台字段、平台订单号、金额、响应验签（如有）",
+  "多页文档：下单、查单、通知、签名规则分别提交为附件；尽量带字段表和示例",
+];
 
 const FIELD_ROWS: {
   key: keyof MappingFormState["fields"];
@@ -360,9 +390,9 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const [aiBusy, setAiBusy] = useState(false);
   const [aiDraft, setAiDraft] = useState<GatewayAiDraft | null>(null);
   const [aiGate, setAiGate] = useState<GatewayAiGate | null>(null);
-  const [aiErrors, setAiErrors] = useState<string[]>([]);
   const [aiApplied, setAiApplied] = useState(false);
-  const [aiFileName, setAiFileName] = useState("");
+  const [aiFiles, setAiFiles] = useState<AiDocFileItem[]>([]);
+  const [aiFailure, setAiFailure] = useState<AiFailure | null>(null);
 
   useEffect(() => {
     if (attempted) setOpenSections(["create"]);
@@ -391,6 +421,8 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     const parsed = fromMapping(aiDraft.template.mapping, methods);
     return { issues: parsed.issues, description: describeMapping(parsed.state) };
   }, [aiDraft, methods]);
+  /** 文本框=粘贴，附件=文件；提交时才合并，文件不写回 textarea */
+  const aiSubmission = useMemo(() => mergeAiSubmission(aiDoc, aiFiles), [aiDoc, aiFiles]);
   const createMissing = missing.filter((c) => c.key.startsWith("create.") || c.key.startsWith("fields.") || c.key.startsWith("response.") || c.key === "sign").length;
   const callbackMissing = missing.filter((c) => c.key.startsWith("notify.")).length;
   const queryMissing = missing.filter((c) => c.key.startsWith("query.")).length;
@@ -408,75 +440,154 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     emit(next, jsonDirty);
   }
 
-  function applyTemplate(mapping: GatewayMappingLike, label: string): void {
+  function applyMapping(mapping: GatewayMappingLike): void {
     const result = fromMapping(mapping, methods);
     setState(result.state);
     setIssues(result.issues);
     setJsonText(JSON.stringify(toMapping(result.state), null, 2));
     setJsonDirty(false);
     emit(result.state, false);
+  }
+
+  function applyTemplate(mapping: GatewayMappingLike, label: string): void {
+    applyMapping(mapping);
     message.success(`已应用模板：${label}（未保存）`);
   }
 
+  function failureFromError(error: unknown): AiFailure {
+    if (error instanceof ApiError) {
+      const raw = (error.body?.details as { errors?: unknown } | undefined)?.errors;
+      const details = Array.isArray(raw) ? raw.map((x) => String(x)) : [];
+      const message = error.message || error.code;
+      if (error.code === "invalid_draft") {
+        return { kind: "invalid_draft", title: "AI 输出不合法，未生成配置", details: details.length ? details : [message] };
+      }
+      if (error.code === "document_too_short" || error.code === "document_too_large") {
+        return { kind: "input", title: "提交文档不可用", details: details.length ? details : [message] };
+      }
+      if (error.code === "ai_rate_limited") {
+        return { kind: "rate_limited", title: "生成次数超限", details: [message] };
+      }
+      if (error.code === "ai_unavailable" || error.code === "ai_upstream_error" || error.code === "ai_timeout") {
+        return { kind: "gateway", title: "模型/网关暂时不可用", details: details.length ? details : [message] };
+      }
+      return { kind: "network", title: "生成失败", details: details.length ? details : [message] };
+    }
+    return {
+      kind: "network",
+      title: "生成失败",
+      details: [error instanceof Error ? error.message : "网络或未知错误"],
+    };
+  }
+
   async function generateAiDraft(): Promise<void> {
-    const document = aiDoc.trim();
-    if (document.length < 200) {
-      message.warning("接口文档至少 200 字");
+    if (aiSubmission.error) {
+      setAiFailure({ kind: "input", title: "提交正文不可用", details: [aiSubmission.error] });
+      return;
+    }
+    const document = aiSubmission.document;
+    if ([...document].length < 200) {
+      message.warning("提交正文至少 200 字（粘贴 + 附件合计）");
       return;
     }
     setAiBusy(true);
-    setAiErrors([]);
     setAiDraft(null);
     setAiGate(null);
     setAiApplied(false);
+    setAiFailure(null);
     try {
       const res = await api.gatewayAiDraft(document);
       setAiDraft(res.draft);
       setAiGate(res.gate);
-      if (res.draft.classification !== "generic_mapping") {
-        message.warning("这份文档需要代码驱动或信息不足，AI 没有生成映射");
+      if (
+        !res.draft.template ||
+        res.draft.classification !== "generic_mapping" ||
+        res.gate.status === "insufficient"
+      ) {
+        const details = res.gate.missing.length
+          ? res.gate.missing
+          : [
+              res.draft.classification === "driver"
+                ? "这份协议需要代码驱动（RSA 双向签名 / OAuth / 远程验签等），不能只靠映射配置。"
+                : "文档缺少查单或三端点不全，无法生成通用映射。",
+              ...res.draft.uncertainty.slice(0, 5),
+            ];
+        setAiFailure({ kind: "doc_incomplete", title: "文档不足，未生成配置", details });
+        return;
       }
-    } catch (e) {
-      const detail = e instanceof ApiError
-        ? ((e.body?.details as { errors?: unknown } | undefined)?.errors)
-        : undefined;
-      setAiErrors(
-        Array.isArray(detail) && detail.length
-          ? detail.map((x) => String(x))
-          : [e instanceof ApiError ? e.message || e.code : "生成失败"],
-      );
+      applyMapping(res.draft.template.mapping);
+      setAiApplied(true);
+      message.success("配置生成成功，已填入表单（未保存）");
+    } catch (error) {
+      setAiFailure(failureFromError(error));
     } finally {
       setAiBusy(false);
     }
   }
 
-  async function readAiFile(file: File): Promise<void> {
-    setAiErrors([]);
-    const raw = await file.text();
-    const result = readAiDocument(file.name, raw);
-    if (result.error) {
-      setAiErrors([result.error]);
+  async function readAiFiles(files: File[]): Promise<void> {
+    if (files.length === 0) return;
+    const existing = new Set(aiFiles.map((f) => f.id));
+    const batch: File[] = [];
+    const batchIds = new Set<string>();
+    for (const file of files) {
+      const id = `${file.name}:${file.size}:${file.lastModified}`;
+      if (existing.has(id) || batchIds.has(id)) continue;
+      batchIds.add(id);
+      batch.push(file);
+    }
+    if (batch.length === 0) {
+      message.info("这些文件已经导入过了");
       return;
     }
-    setAiDoc(result.text);
-    setAiFileName(file.name);
+    if (aiFiles.length + batch.length > AI_DOC_MAX_FILES) {
+      setAiFailure({
+        kind: "input",
+        title: "附件太多",
+        details: [`最多 ${AI_DOC_MAX_FILES} 个页面附件；请先移除一些文件`],
+      });
+      return;
+    }
+
+    const items: AiDocFileItem[] = [];
+    const errors: string[] = [];
+    for (const file of batch) {
+      const raw = await file.text();
+      const result = readAiDocument(file.name, raw);
+      if (result.error) errors.push(`${file.name}：${result.error}`);
+      else {
+        items.push({
+          id: `${file.name}:${file.size}:${file.lastModified}`,
+          name: file.name,
+          text: result.text,
+          chars: [...result.text].length,
+        });
+      }
+    }
+    if (errors.length > 0) {
+      setAiFailure({ kind: "input", title: "文件导入失败", details: errors });
+      return;
+    }
+    const next = [...aiFiles, ...items];
+    const merged = mergeAiSubmission(aiDoc, next);
+    if (merged.error) {
+      setAiFailure({ kind: "input", title: "附件合并失败", details: [merged.error] });
+      return;
+    }
+    setAiFiles(next);
     setAiDraft(null);
     setAiGate(null);
     setAiApplied(false);
-    message.success(`已导入 ${file.name}（${[...result.text].length} 字）`);
+    setAiFailure(null);
+    message.success(`已导入 ${items.length} 个附件（${merged.fileChars} 字）`);
   }
 
-  function applyAiDraft(): void {
-    if (!aiDraft?.template) return;
-    if (aiGate?.status === "insufficient") {
-      message.warning("文档不完整，不能应用；请先向厂商索取更完整的接口文档");
-      return;
-    }
-    if (!window.confirm(`应用 AI 草稿「${aiDraft.template.name}」到当前接口配置？应用后仍可修改，点保存才入库。`)) {
-      return;
-    }
-    applyTemplate(aiDraft.template.mapping, `AI 草稿：${aiDraft.template.name}`);
-    setAiApplied(true);
+  function removeAiFile(id: string): void {
+    setAiFiles((prev) => prev.filter((f) => f.id !== id));
+    setAiDraft(null);
+    setAiGate(null);
+    setAiApplied(false);
+    setAiFailure(null);
   }
 
   const [exportOpen, setExportOpen] = useState(false);
@@ -990,27 +1101,43 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
               <input
                 ref={aiFileRef}
                 type="file"
+                multiple
                 accept=".txt,.md,.markdown,.json,.html,.htm,.mhtml,.mht,text/plain,text/markdown,application/json,text/html"
                 style={{ display: "none" }}
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void readAiFile(file);
+                  void readAiFiles(Array.from(e.target.files ?? []));
                   e.target.value = "";
                 }}
               />
               <Space wrap align="center">
                 <Button size="small" disabled={!aiReady || aiBusy} onClick={() => aiFileRef.current?.click()}>
-                  导入文档文件
+                  导入页面文件
                 </Button>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  支持 .txt / .md / .json / .html / .mhtml；文件只在本地转成文本，不上传原文件
+                  支持 .txt / .md / .json / .html / .mhtml；可一次选多个页面，文件只在本地转文本
                 </Typography.Text>
-                {aiFileName && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    已导入：{aiFileName}
-                  </Typography.Text>
-                )}
               </Space>
+              {aiFiles.length > 0 && (
+                <div style={{ border: "1px solid #f0f0f0", borderRadius: 6, padding: 8 }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    附件 {aiFiles.length} 个，共 {aiSubmission.fileChars} 字
+                  </Typography.Text>
+                  {aiFiles.map((f) => (
+                    <div
+                      key={f.id}
+                      style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "2px 0" }}
+                    >
+                      <Typography.Text style={{ flex: "1 1 auto", minWidth: 0, wordBreak: "break-all" }}>
+                        {f.name}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">{f.chars} 字</Typography.Text>
+                      <Button type="link" size="small" style={{ paddingInline: 0 }} onClick={() => removeAiFile(f.id)}>
+                        移除
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <Input.TextArea
                 rows={8}
                 className="mono"
@@ -1018,29 +1145,69 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                 disabled={!aiReady || aiBusy}
                 onChange={(e) => {
                   setAiDoc(e.target.value);
-                  setAiFileName("");
+                  setAiDraft(null);
+                  setAiGate(null);
+                  setAiApplied(false);
+                  setAiFailure(null);
                 }}
-                placeholder="粘贴厂商接口文档正文，或点「导入文档文件」（下单 / 回调 / 查单、签名、金额单位、状态码）"
+                placeholder="粘贴文本（可选）；页面文件请用上方「导入页面文件」"
               />
-              <Space align="center">
+              <Space align="center" wrap>
                 <Button
                   type="primary"
                   loading={aiBusy}
-                  disabled={!aiReady || aiDoc.trim().length < 200}
+                  disabled={
+                    !aiReady ||
+                    aiBusy ||
+                    Boolean(aiSubmission.error) ||
+                    aiSubmission.chars < 200
+                  }
                   onClick={() => void generateAiDraft()}
                 >
-                  生成草稿
+                  生成配置
                 </Button>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {[...aiDoc.trim()].length} 字（至少 200；上限 60KB）
+                  将提交：粘贴 {aiSubmission.pasteChars} 字 + 附件 {aiSubmission.fileChars} 字 ={" "}
+                  {aiSubmission.chars} 字（至少 200；上限 60KB）
                 </Typography.Text>
               </Space>
-              {aiErrors.map((err, i) => <Alert key={i} type="error" showIcon message={err} />)}
+              {aiSubmission.error && <Alert type="error" showIcon message={aiSubmission.error} />}
+              {aiFailure && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message={aiFailure.title}
+                  description={
+                    <>
+                      <ul style={{ margin: 0, paddingLeft: 18 }}>
+                        {aiFailure.details.map((d, i) => <li key={i}>{d}</li>)}
+                      </ul>
+                      {["input", "invalid_draft", "doc_incomplete"].includes(aiFailure.kind) && (
+                        <Collapse
+                          size="small"
+                          style={{ marginTop: 8 }}
+                          items={[
+                            {
+                              key: "doc-checklist",
+                              label: "如何整理 API 文档",
+                              children: (
+                                <ol style={{ margin: 0, paddingLeft: 18 }}>
+                                  {AI_DOC_CHECKLIST.map((item) => <li key={item}>{item}</li>)}
+                                </ol>
+                              ),
+                            },
+                          ]}
+                        />
+                      )}
+                    </>
+                  }
+                />
+              )}
               {aiApplied && (
                 <Alert
-                  type="warning"
+                  type="success"
                   showIcon
-                  message="已应用到表单（未保存）"
+                  message="配置生成成功，已填入表单（未保存）"
                   description="AI 草稿不等于测试通过：保存后仍要完成「创建 + 查单」测试；开启回调验证时还要真实回调才能发布。"
                 />
               )}
@@ -1066,21 +1233,9 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                       }
                     />
                   )}
-                  {aiGate?.status === "insufficient" && (
-                    <Alert
-                      type="error"
-                      showIcon
-                      message="文档不完整，无法应用"
-                      description={
-                        <ul style={{ margin: 0, paddingLeft: 18 }}>
-                          {aiGate.missing.map((m, i) => <li key={i}>{m}</li>)}
-                        </ul>
-                      }
-                    />
-                  )}
                   {aiDraft.template ? (
                     <>
-                      <Alert type="info" showIcon message="AI 草稿，未审核；应用后请人工核对并测试支付" />
+                      <Alert type="info" showIcon message="AI 草稿，未审核；请人工核对并测试支付" />
                       {aiPreview && (
                         <div>
                           <Typography.Text strong>预览</Typography.Text>
@@ -1099,12 +1254,9 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                           {aiPreview.description.warnings.map((x, i) => <Alert key={`w${i}`} type="warning" showIcon message={x} />)}
                         </div>
                       )}
-                      <Space>
-                        <Button type="primary" disabled={aiGate?.status === "insufficient"} onClick={applyAiDraft}>
-                          应用到表单
-                        </Button>
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>应用 ≠ 保存；保存后仍需重新测试。</Typography.Text>
-                      </Space>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {aiApplied ? "已自动填入表单；未保存，保存后仍需重新测试。" : "未应用；请先处理上方问题。"}
+                      </Typography.Text>
                     </>
                   ) : (
                     <Alert

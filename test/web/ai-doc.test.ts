@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { AI_DOC_MAX_BYTES, readAiDocument } from "../../web/src/ai-doc";
+import {
+  AI_DOC_MAX_BYTES,
+  AI_DOC_MAX_FILES,
+  mergeAiSubmission,
+  readAiDocument,
+} from "../../web/src/ai-doc";
 
 const BOUNDARY = "----=_NextPart_TEST";
 
@@ -94,5 +99,53 @@ describe("readAiDocument", () => {
     expect(readAiDocument("api.txt", "   ").error).toContain("没有可读文本");
     const huge = "x".repeat(AI_DOC_MAX_BYTES + 1);
     expect(readAiDocument("api.txt", huge).error).toContain("超过");
+  });
+});
+
+
+describe("mergeAiSubmission", () => {
+  it("只有粘贴 → 原文；只有附件 → 文件名分隔头", () => {
+    const paste = mergeAiSubmission("  POST /pay  ", []);
+    expect(paste.document).toBe("POST /pay");
+    expect(paste.pasteChars).toBe(9);
+    expect(paste.fileChars).toBe(0);
+
+    const files = mergeAiSubmission("", [
+      { name: "create.html", text: "创建订单" },
+      { name: "notify.html", text: "回调" },
+    ]);
+    expect(files.document).toContain("===== 文件 1/2: create.html =====");
+    expect(files.document).toContain("===== 文件 2/2: notify.html =====");
+    expect(files.document.indexOf("create.html")).toBeLessThan(files.document.indexOf("notify.html"));
+    expect(files.pasteChars).toBe(0);
+    expect(files.fileChars).toBe(6);
+  });
+
+  it("粘贴 + 附件 → 先粘贴段，再文件段；字数分开统计", () => {
+    const merged = mergeAiSubmission("签名规则", [{ name: "create.html", text: "创建订单" }]);
+    expect(merged.document).toContain("===== 粘贴内容 =====");
+    expect(merged.document).toContain("===== 文件 1/1: create.html =====");
+    expect(merged.pasteChars).toBe(4);
+    expect(merged.fileChars).toBe(4);
+    expect(merged.chars).toBeGreaterThan(8);
+  });
+
+  it("超过文件数 / 合并超 60KB → 明确 error，不返回正文", () => {
+    const tooMany = Array.from({ length: AI_DOC_MAX_FILES + 1 }, (_, i) => ({
+      name: `${i}.html`,
+      text: "x",
+    }));
+    const many = mergeAiSubmission("", tooMany);
+    expect(many.error).toContain("最多");
+    expect(many.document).toBe("");
+
+    const huge = mergeAiSubmission("", [{ name: "huge.html", text: "x".repeat(AI_DOC_MAX_BYTES + 1) }]);
+    expect(huge.error).toContain("超过");
+    expect(huge.document).toBe("");
+  });
+
+  it("空输入 → 空正文", () => {
+    const empty = mergeAiSubmission("   ", [{ name: "empty.html", text: "   " }]);
+    expect(empty).toEqual({ document: "", chars: 0, pasteChars: 0, fileChars: 0 });
   });
 });
