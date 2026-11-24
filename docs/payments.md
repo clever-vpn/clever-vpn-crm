@@ -621,7 +621,8 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
     （`POST /api/admin/gateways/ai-draft`，会话 + 每小时 20 次限流）+ 映射编辑器内的
     「粘贴 + 导入文件/从 URL 导入 → 生成配置」面板（支持 .txt/.md/.json/.html/.mhtml，
     本地转文本；URL 抓取公开同源页；文件和 URL 页面进入同一个附件集合，
-    统一勾选/移除，不写入 textarea，合并后提交；入口是二态按钮）。服务端还有 completeness gate（规则+evidence 回查）：
+    统一勾选/移除，不写入 textarea，合并后提交；入口是二态按钮；详情/失败可复制
+    诊断信息给技术支持，不含文档全文/表单密钥）。服务端还有 completeness gate（规则+evidence 回查）：
     `soft_gaps` 警告未证实项，`insufficient` 禁用应用。只产 v2 草稿，不落库、不保存、不发布；
     模型默认 `deepseek/deepseek-flash`（`CLOUDFLARE_AI_MODEL` 可覆盖），厂商 key 在网关 BYOK；每条请求带
     `metadata.tenant`（cf-api 计费键）与 `product=crm`。未配 AI binding /

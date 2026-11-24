@@ -41,6 +41,7 @@ import {
 import { OFFICIAL_TEMPLATES, parseTemplateText, type PaymentTemplate } from "../payment-templates";
 import { api, ApiError, type GatewayAiDraft, type GatewayAiGate } from "../api";
 import { AI_DOC_MAX_FILES, mergeAiSubmission, readAiDocument } from "../ai-doc";
+import { buildAiSupportReport } from "../ai-support";
 
 interface Props {
   initial: unknown;
@@ -398,6 +399,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const [aiApplied, setAiApplied] = useState(false);
   const [aiFiles, setAiFiles] = useState<AiDocFileItem[]>([]);
   const [aiFailure, setAiFailure] = useState<AiFailure | null>(null);
+  const [aiMeta, setAiMeta] = useState<{ model: string; attempts: number } | null>(null);
   const [aiUrl, setAiUrl] = useState("");
   const [aiUrlOpen, setAiUrlOpen] = useState(false);
   const [aiUrlBusy, setAiUrlBusy] = useState(false);
@@ -540,10 +542,12 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     setAiGate(null);
     setAiApplied(false);
     setAiFailure(null);
+    setAiMeta(null);
     try {
       const res = await api.gatewayAiDraft(document);
       setAiDraft(res.draft);
       setAiGate(res.gate);
+      setAiMeta({ model: res.model, attempts: res.attempts ?? 1 });
       if (
         !res.draft.template ||
         res.draft.classification !== "generic_mapping" ||
@@ -575,6 +579,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     setAiGate(null);
     setAiApplied(false);
     setAiFailure(null);
+    setAiMeta(null);
   }
 
   /** 文件与 URL 页面共用这一个集合；总数/60KB 在这里统一把关 */
@@ -645,6 +650,34 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   function removeAiFile(id: string): void {
     setAiFiles((prev) => prev.filter((f) => f.id !== id));
     resetAiResult();
+  }
+
+  async function copyAiSupport(): Promise<void> {
+    const report = buildAiSupportReport({
+      at: new Date().toISOString(),
+      gatewayName,
+      model: aiMeta?.model,
+      attempts: aiMeta?.attempts,
+      classification: aiDraft?.classification,
+      templateName: aiDraft?.template?.name,
+      templateId: aiDraft?.template?.id,
+      gate: aiGate,
+      summary: aiSummary,
+      evidence: aiDraft?.evidence ?? [],
+      uncertainty: aiDraft?.uncertainty ?? [],
+      input: {
+        pasteChars: aiSubmission.pasteChars,
+        fileChars: aiSubmission.fileChars,
+        files: aiFiles.map((f) => ({ name: f.name, source: f.source, url: f.url })),
+      },
+      failure: aiFailure ? { title: aiFailure.title, details: aiFailure.details } : null,
+    });
+    try {
+      await navigator.clipboard.writeText(report);
+      message.success("已复制诊断信息；发送前请确认不含商户密钥");
+    } catch {
+      message.error("复制失败，请检查浏览器剪贴板权限");
+    }
   }
 
   function scrollToForm(): void {
@@ -1340,6 +1373,9 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                           ]}
                         />
                       )}
+                      <Button size="small" style={{ marginTop: 8 }} onClick={() => void copyAiSupport()}>
+                        复制诊断信息给技术支持
+                      </Button>
                     </>
                   }
                 />
@@ -1379,6 +1415,9 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                         <Button size="small" onClick={scrollToForm}>
                           检查下方表单
                         </Button>
+                        <Button size="small" type="link" onClick={() => void copyAiSupport()}>
+                          复制给技术支持
+                        </Button>
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           下一步：保存 → 测试「创建 + 查单」；开启回调验证时还要真实回调。
                         </Typography.Text>
@@ -1413,6 +1452,9 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                         label: "查看配置摘要与 AI 依据",
                         children: (
                           <>
+                            <Button size="small" style={{ marginBottom: 8 }} onClick={() => void copyAiSupport()}>
+                              复制诊断信息给技术支持
+                            </Button>
                             <Alert type="info" showIcon message="AI 草稿，未审核；请核对后保存并测试支付。" />
                             {aiPreview && (
                               <div>

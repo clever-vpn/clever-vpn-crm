@@ -156,6 +156,9 @@
   失败不填表，显示具体原因 + 「如何整理 API 文档」清单；
 - `soft_gaps` 黄色警告并列出未证实项；`insufficient` 红色警告且不填表，
   提示向厂商索取更完整的文档；
+- 成功详情/失败卡片提供「复制诊断信息给技术支持」：含时间、网关、模型、attempts、
+  classification、模板、gate/缺失/警告、4 行摘要、evidence、uncertainty、文件名/URL；
+  不含文档全文、表单商户号/密钥；复制后提示用户发送前确认敏感信息；
 - Stripe/PayPal/epay_v2/epay_v1 不显示；
 - 不自动保存、不自动发布，永不接触密钥；
 - 应用后仍必须走「创建 + 查单」测试；开启 `test_require_callback` 时还要真实回调；
