@@ -127,28 +127,73 @@ expired ──钱其实到了（cron 查单）──▶ paid
 ## 4. 网关配置与发布闸门
 
 ```
-draft ──测试支付真收到钱──▶ live ──▶ disabled
-  any ──删除──▶ deleted（软删；列表隐藏，订单/回调仍可查）
+draft ──创建+查单测试──▶ live ──停用──▶ disabled
+  disabled ──创建+查单测试──▶ live
+  draft / live / disabled ──删除──▶ deleted（软删；列表隐藏，订单/回调仍可查）
 ```
 
-- **只有 `status = 'live'` 参与路由**，`draft` 在 App 里完全不存在；
-- **`deleted` 是软删除，不是物理删除**：管理列表隐藏、新下单不再路由，但
-  `payment_gateways` 行保留 —— `orders.gateway_id`、在途订单的查单、服务商迟到的
-  webhook、审计都还引用它；删掉行会让“钱到了但找不到网关”；
-- 删除需要换到新网关时，Stripe/PayPal 后台的 webhook 地址要同步删除或改到新网关；
-- 发布前必须做一次**真实测试支付**：`orders` 里插一条 `plan_id IS NULL` 的单，
-  走完 `createCharge → notify → queryCharge`，**不发权益**；
-- 面板展示结果：金额、`provider_trade_no`、耗时；失败则摊开 `raw_create` / `raw_notify`。
+- **只有 `status = 'live'` 参与路由**，`draft` / `disabled` 在 App 里完全不存在；
+- **`deleted` 是软删除**：管理列表隐藏、新下单不再路由，但网关行保留 ——
+  `orders.gateway_id`、在途订单的查单、服务端迟到的 webhook、审计都还引用它；
+- 删除后如换新网关，Stripe/PayPal 后台的 webhook 地址要同步删除或改到新网关；
+- `live` 可以测试、停用、删除；**驱动在 `live` / `disabled` 后锁定**，其他集成字段仍可改；
+  改驱动应新建网关；
+- 新建 / 停用后的网关可以「复制」为新的草稿：复制完整配置和密钥，但**不继承测试状态**。
 
-这条闸门挡掉三类最常见事故：**签名算错、金额单位错（元/分）、`notify_url` 不可达**。
+### 4.1 发布前测试门禁
 
-> 现状：`draft → live` 目前由后台「发布」按钮触发，**发布时只校验配置自洽**
-> （驱动能力、映射能通过 `validateMapping`、易支付类必须有密钥、测试网关必须有白名单 + 环境开关）；
-> “必须真收到一次钱才能发布”这道闸门还没做，见 §8 待做第 2 条。
+发布前必须完成：
 
-### 4.0 在哪配：后台「支付」页
+```text
+create_ok：创建订单成功，厂商返回可打开的页面支付 URL
+query_ok：用同一笔测试单调厂商查单，返回合法响应、订单对得上、状态 pending/paid
+```
 
-侧栏 `支付`（`web/src/pages/Gateways.tsx`）是**唯一能创建网关的地方**，接口是
+- 测试单：`source = 'test'`，`plan_id = '__gateway_test__'`，`customer_id = 0`；
+- **不发权益、不产生订阅**；用户侧订单列表不可见；
+- 测试金额按网关配置 `test_amount_minor`（网关币种最小单位）；默认 1.00；
+- 测试必须走与正式下单相同的 `createCharge → 厂商` 代码路径；
+- `test_create_ok_at` / `test_query_ok_at` / `tested_config_hash` 落库；
+- **任何集成字段变更都会让测试 hash 失效**，必须重新测试；
+- 测试通过后，发布按钮才可用；发布接口还会再校验一次状态与 hash。
+
+**查单测试成功不要求已支付**：新测试单状态为 `pending` 是正常的。
+终态（失败/关闭/撤销）、订单不存在、金额/币种不符、验签失败、网络失败都算失败。
+
+### 4.2 回调验证开关
+
+`payment_gateways.test_require_callback`：
+
+- `0`（默认）：创建 + 查单通过即可发布；回调到账只记录 `test_callback_ok_at`；
+- `1`：创建 + 查单通过后仍显示「等待回调」，必须真实支付回调到账、
+  写入 `test_callback_ok_at` 后才允许发布；
+- 开关本身也参与测试 hash；改开关后旧测试失效。
+
+### 4.3 币种与汇率
+
+- CRM 账本（`orders.amount_minor` / `currency`）保持 CNY；
+- 网关配置 `currency`（实际扣款币种）与 `fx_rate`（1 网关币种 = X CNY）；
+- 下单时按网关汇率换算成 `provider_amount_minor` / `provider_currency`，
+  **同时冻结 `fx_rate`**；
+- Stripe / PayPal / EpayV2 / 映射类网关都使用 provider 金额；
+- 回调 / 查单的金额校验使用 `provider_amount_minor`，不是 CRM 金额；
+- 汇率变更只影响新订单。
+
+### 4.4 编辑与测试入口
+
+侧栏 `支付` → `web/src/pages/GatewaysList.tsx` / `GatewayEditor.tsx` / `GatewayMappingEditor.tsx`，
+接口 `/api/admin/gateways*`（`src/admin/gateways.ts`）。
+
+- 编辑页：基本信息、接口配置（① 下单 / ② 回调 / ③ 查单）、测试状态、测试金额、币种、汇率；
+- 测试入口在编辑页和列表都有；
+- 接口配置按 API 文档组织成「请求 / 响应」；金额单位、时间格式、数字字段都是字段属性；
+- 模板来源：官方模板 / 导入 / 导出 / AI；**租户只编辑结构化表单，不直接编辑原始 JSON**；
+- 导出模板：名称 / ID / 文件名 / 说明，默认 `<id>.json`，不包含地址、商户号、密钥、通道号；
+- AI 仅生成草稿；必须测试通过后才允许发布。
+
+### 4.5 后台配置规则
+
+侧栏 `支付`（`web/src/pages/GatewaysList.tsx` / `GatewayEditor.tsx`）是**唯一能创建网关的地方**，接口是
 `/api/admin/gateways*`（`src/admin/gateways.ts`）。列表列的是**网关**而不是支付方式：
 名称、驱动、支持的方式、状态、优先级、有没有密钥、最近成功时间、`last_error`。
 
@@ -166,9 +211,8 @@ draft ──测试支付真收到钱──▶ live ──▶ disabled
 `generic_json_v1` 的 `mapping` 是**完整配置**（必须整体通过校验）。
 
 `generic_json_v1` 的映射在后台用**结构化编辑器**（`web/src/pages/GatewayMappingEditor.tsx`）填写：
-固定结构（下单 / 响应 / 回调 / 查单 / 签名）是带标签的字段，动态 map（字段名 / 渠道码 / 常量 /
-查单参数）是 KV 行；JSON 只放在「高级 JSON」，作为逃生口。编辑器产出的对象与手写 JSON 完全同构，
-保存时仍走同一个 `validateMapping` —— 没有第二套格式。
+三个 API 页签（① 下单 / ② 回调 / ③ 查单），每个页签按「请求 / 响应」组织；金额、时间、数字字段都是字段属性。
+JSON 只作为**只读预览 / 模板导出**，租户不直接编辑；导入模板和 AI 也最终落到同一个 `validateMapping` —— 没有第二套格式。
 
 编辑器里**默认/隐藏**的只是「值」：回调地址、订单号、金额、客户 IP、标题、时间戳
 由 CRM 在请求时填（商户号取网关表单里那个「商户号」），租户只需要填对方**字段名**。金额单位、下单/回调的已付判定、应答原文
@@ -179,7 +223,7 @@ draft ──测试支付真收到钱──▶ live ──▶ disabled
 「客户 → 手工开通」。支付方式选择器只在 `epay_v1` / `generic_json_v1` / `mock` 时出现；
 Stripe/PayPal 的方式就是品牌本身，由 driver 固定。
 
-### 4.1 路由与降级
+### 4.6 路由与降级
 
 ```
 method = alipay
@@ -390,7 +434,7 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 **完整规范见 [`payment-templates.md`](payment-templates.md)**，机器可读 JSON Schema 见
 [`payment-templates.schema.json`](payment-templates.schema.json)。
 
-- **高级 JSON** = `mapping`；**模板文件** = 元数据 envelope + `mapping`；
+- **接口配置 mapping** = 表单背后的结构化配置；**模板文件** = 元数据 envelope + `mapping`；
 - 根只有 `create` / `notify` / `query`，每个分 `request` / `response`；
 - `fields` 是字段描述符数组：`field` + `role` + `value` + 单位/格式/时区/长度/数字；
 - 金额、时间、随机数、渠道等属性都在字段上，不再有全局 `amount_unit` / `timestamp_format`；
@@ -408,7 +452,7 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 响应验签是可选能力：配了 `response.sign` 就必须验签成功，否则下单/查单失败；未配置
 则明确是 TLS-only，不能写成“已验签”。回调签名仍然必须校验，那是安全边界。
 
-**AI 只做草稿**：生成后必须由"测试支付"实测通过才能 `live`。生成时永远不会带上密钥
+**AI 只做草稿**：生成后必须完成创建 + 查单测试（必要时再完成回调验证）才能 `live`。生成时永远不会带上密钥
 （密钥在 `secret_enc`，不进 prompt）。
 
 
@@ -446,7 +490,7 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
   （兜底）**。通常秒级；cron 最多约 2 分钟。超过 60 分钟的迟到支付不在自动查单窗口内，
   但后台「查一次」或回跳页仍可确认。
 - **金额**：Stripe 传最小单位，PayPal 传两位小数；本轮只覆盖两位小数币种（JPY 等零小数
-  币种不做）。测试支付统一 USD $1.00（Stripe 最小扣款限制）。
+  币种不做）。测试金额按网关 `test_amount_minor` 配置，默认 1.00（网关币种）；低于厂商最低限额时测试失败。
 - **退款**：未做；仍走后台内部退款流程。
 
 ### 6.5 Webhook 与回跳页（即时确认）
@@ -597,7 +641,7 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
 
 待做：
 
-1. 真实网关的 ¥1 测试支付（`draft → live` 闸门：先真收到钱再允许发布）
+1. 真实网关的测试支付（`draft → live` 闸门：创建 + 查单通过；开启回调验证时还需真实回调到账）
 2. AI 生成映射草稿
 3. 退款走网关（`refunds.channel_refund_id`）
 4. Webhook 的自动注册/轮换（目前仍需在 Stripe/PayPal 后台手工配置）

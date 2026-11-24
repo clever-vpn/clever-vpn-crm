@@ -103,10 +103,10 @@ CRM 尚未正式发布，历史上有 19 个递增迁移（`0000_baseline` + 18 
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`、`source`(purchase/gift/manual)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`next_poll_at`/`poll_attempts`、`return_poll_at`（回跳页查询冷却）、`status`、`refunded_minor`、`voided_at`、`provision_*` |
+| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`/`currency`（CRM 账本）、`provider_amount_minor`/`provider_currency`/`fx_rate`（实际扣款与汇率快照）、`source`(purchase/gift/manual/test)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`next_poll_at`/`poll_attempts`、`return_poll_at`（回跳页查询冷却）、`status`、`refunded_minor`、`voided_at`、`provision_*` |
 | `refunds` | 退款**明细**（可多次部分退） | `order_id`、`amount_minor`、`mode`、`operator`、`channel_refund_id`、`status` |
 | `adjustments` | 管理员**调整**（非售卖） | `field`、`before_value`、`after_value`、`reason`、`operator`、`platform_applied_at` |
-| `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`methods`、`channel_codes`（账户通道号，实例值）、`mapping`（协议类型）、`priority`、`status`(draft/live/disabled/deleted)、`secret_enc`（API 密钥）、`webhook_enc`（Stripe signing secret / PayPal webhook id）、`last_test_order_id` |
+| `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`methods`、`channel_codes`（账户通道号，实例值）、`mapping`（协议类型）、`priority`、`status`(draft/live/disabled/deleted)、`currency`（网关币种）、`fx_rate`（1 网关币种 = X CNY）、`secret_enc`（API 密钥）、`webhook_enc`（Stripe signing secret / PayPal webhook id）、`test_amount_minor`、`test_create_ok_at`/`test_query_ok_at`/`test_callback_ok_at`、`test_require_callback`、`tested_config_hash`、`last_test_order_id` |
 
 > **没有 `payment_attempts` 表**：订单本身就是那次尝试的证据。理由见 `payments.md` §2。
 
@@ -117,7 +117,7 @@ status: pending → paid → provisioning → active
                      ↘ expired（超时/明确失败；钱晚到仍可转 paid）
         paid → refunded（可能同时 voided）
         周期到期 → closed
-source: purchase（自助） | gift（赠送） | manual（后台补单）
+source: purchase（自助） | gift（赠送） | manual（后台补单） | test（网关测试，不发权益）
 ```
 
 ### 2.5 容易混的字段（`platform_subscriptions`）
@@ -137,7 +137,7 @@ source: purchase（自助） | gift（赠送） | manual（后台补单）
 | `paid_minor` | — | 这份权益的**成交价**（残值 = `paid_minor × 剩余比例`） | ⚠️ 不是累计付款：加量包/赠送**不得覆盖它** |
 | `order_id` | — | **最初**让权益生效的那笔订单（I1） | 只在 `action='new'` 写；续费/升级/加量不覆盖（去 `subscription_changes` 查） |
 | `hold` / `hold_reason` | — | **人的意图**（冻结 / 作废） | 不是状态：状态由 `expires_at` + 余量算出来，不落库 |
-| `currency` | — | 成交币种 | 仅快照，不参与任何计算（我们单币种） |
+| `currency` | — | 套餐成交币种（CRM 账本） | 不是网关扣款币种；网关币种/汇率在 `payment_gateways` 与 `orders.provider_*` |
 | `activation_code` | — | cf-api 激活码 | 设备数变了会被置空等重新落账（旧码立即失效） |
 
 **"还剩多少"的统一口径**（对外 API 的 `remaining_gb`）：
