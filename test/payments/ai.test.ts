@@ -21,6 +21,7 @@ import {
   buildPrompt,
   providerRouteOf,
   completeAiJson,
+  generateAiDraft,
   parseAiDraft,
 } from "../../src/payments/ai";
 
@@ -97,6 +98,16 @@ describe("ai.md 的完整示例（契约可执行）", () => {
   it("允许被 ```json 代码块包裹（只剥一层）", () => {
     const fenced = "```json\n" + JSON.stringify(sample) + "\n```";
     expect(parseAiDraft(fenced).ok).toBe(true);
+  });
+
+  it("模型连写两个 JSON 对象时，取第一个完整对象", () => {
+    const doubled = JSON.stringify(sample) + JSON.stringify({ note: "extra" });
+    expect(parseAiDraft(doubled).ok).toBe(true);
+  });
+
+  it("代码块前后有解释文字时，抽出其中的 JSON 对象", () => {
+    const wrapped = "好的，结果如下：\n```json\n" + JSON.stringify(sample) + "\n```\n以上。";
+    expect(parseAiDraft(wrapped).ok).toBe(true);
   });
 });
 
@@ -367,9 +378,75 @@ describe("completeAiJson：AI Gateway provider-native 路径", () => {
     if (!b.ok) expect(b.message).toContain("没有返回内容");
   });
 
+  it("校验失败 → 带上 errors 重写一次；第二次成功", async () => {
+    const calls: RunCall[] = [];
+    const bad = JSON.stringify({ classification: "generic_mapping", template: null, evidence: [], uncertainty: [] });
+    const contents = [bad, JSON.stringify(sample)];
+    const runtime = runtimeWith(async (call) => {
+      calls.push(call);
+      const content = contents[calls.length - 1]!;
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+    });
+
+    const gen = await generateAiDraft(runtime, "示例接口文档");
+    expect(gen.ok, gen.ok ? "" : gen.errors.join("；")).toBe(true);
+    if (gen.ok) expect(gen.attempts).toBe(2);
+    expect(calls).toHaveLength(2);
+
+    const messages = calls[1]!.entry.query.messages as { role: string; content: string }[];
+    expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(messages[2]!.content).toBe(bad);
+    expect(messages[3]!.content).toContain("未通过服务端校验");
+    expect(messages[3]!.content).toContain("template");
+  });
+
+  it("两次都不合法 → invalid_draft + 最后一次 errors", async () => {
+    const bad = JSON.stringify({ classification: "generic_mapping", template: null, evidence: [], uncertainty: [] });
+    const runtime = runtimeWith(async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: bad } }] }), { status: 200 }),
+    );
+    const gen = await generateAiDraft(runtime, "示例接口文档");
+    expect(gen.ok).toBe(false);
+    if (!gen.ok) {
+      expect(gen.code).toBe("invalid_draft");
+      expect(gen.attempts).toBe(2);
+      expect(gen.errors.join("；")).toContain("template");
+    }
+  });
+
+  it("模型调用失败不重试（网络/超时不留长尾）", async () => {
+    let calls = 0;
+    const runtime = runtimeWith(async () => {
+      calls += 1;
+      throw new Error("AiGatewayError: gateway not found");
+    });
+    const gen = await generateAiDraft(runtime, "示例接口文档");
+    expect(gen.ok).toBe(false);
+    if (!gen.ok) {
+      expect(gen.code).toBe("ai_upstream_error");
+      expect(gen.attempts).toBe(1);
+    }
+    expect(calls).toBe(1);
+  });
+
+  it("首次就合法 → 不重写", async () => {
+    const calls: RunCall[] = [];
+    const runtime = runtimeWith(async (call) => {
+      calls.push(call);
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(sample) } }] }), {
+        status: 200,
+      });
+    });
+    const gen = await generateAiDraft(runtime, "示例接口文档");
+    expect(gen.ok).toBe(true);
+    if (gen.ok) expect(gen.attempts).toBe(1);
+    expect(calls).toHaveLength(1);
+  });
+
   it("上限常量与文档一致", () => {
     expect(AI_LIMITS.minDocChars).toBe(200);
     expect(AI_LIMITS.maxDocBytes).toBe(60 * 1024);
     expect(AI_LIMITS.perHour).toBe(20);
+    expect(AI_LIMITS.maxAttempts).toBe(2);
   });
 });

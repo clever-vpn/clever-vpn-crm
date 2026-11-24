@@ -521,7 +521,11 @@ export const api = {
     call<{ gateway: GatewayView }>("POST", `/gateways/${id}/copy`),
   /** AI 配置助手：文档 → 模板 v2 草稿（只生成，不保存/不发布） */
   gatewayAiDraft: (document: string) =>
-    call<{ draft: GatewayAiDraft; model: string }>("POST", "/gateways/ai-draft", { document }),
+    call<{ draft: GatewayAiDraft; model: string; attempts?: number }>(
+      "POST",
+      "/gateways/ai-draft",
+      { document },
+    ),
   /** 测试支付：只验"这条网关能不能收钱"，不产生订阅（`source='test'` 的测试单） */
   testGateway: (id: number, input: { method?: string; amount_minor?: number } = {}) =>
     call<{ order_code: string; pay_url: string; amount_minor: number; currency: string; test_ready?: boolean; callback_required?: boolean }>(

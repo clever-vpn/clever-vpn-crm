@@ -11,7 +11,7 @@
  * 不写库、不保存、不发布；审计不记文档正文，也不记模型原文。
  */
 
-import { AI_LIMITS, aiRuntime, buildPrompt, completeAiJson, parseAiDraft } from "../payments/ai";
+import { AI_LIMITS, aiRuntime, generateAiDraft } from "../payments/ai";
 
 import type { Env } from "../env";
 
@@ -86,24 +86,26 @@ export async function handleAdminGatewayAi(
     return fail(429, "ai_rate_limited", `每小时最多生成 ${AI_LIMITS.perHour} 次，请稍后再试`);
   }
 
-  const completion = await completeAiJson(runtime, buildPrompt(document));
-  if (!completion.ok) {
-    // 失败也计数：模型已经被调用过，成本已经发生
-    await auditDraft(env, actor, { ok: false, code: completion.code, model: runtime.model });
-    return fail(502, completion.code, completion.message);
-  }
-
-  const parsed = parseAiDraft(completion.content);
+  // 调用 → 校验 → 失败把 errors 回灌重写（最多 AI_LIMITS.maxAttempts 次）
+  const generation = await generateAiDraft(runtime, document);
   await auditDraft(env, actor, {
-    ok: parsed.ok,
+    ok: generation.ok,
     model: runtime.model,
-    ...(parsed.ok
-      ? { classification: parsed.draft.classification }
-      : { errors: parsed.errors.slice(0, 5) }),
+    attempts: generation.attempts,
+    ...(generation.ok
+      ? { classification: generation.draft.classification }
+      : { code: generation.code, errors: generation.errors.slice(0, 5) }),
   });
 
-  if (!parsed.ok) {
-    return fail(422, "invalid_draft", "AI 输出未通过校验，请重试或换一份文档", { errors: parsed.errors });
+  if (!generation.ok) {
+    // 模型已被调用过，成本已经发生；失败也计数（限流按请求，不按 attempt）
+    if (generation.code === "invalid_draft") {
+      return fail(422, "invalid_draft", "AI 输出未通过校验，请重试或换一份文档", {
+        errors: generation.errors,
+        attempts: generation.attempts,
+      });
+    }
+    return fail(502, generation.code, generation.message);
   }
-  return json({ draft: parsed.draft, model: runtime.model });
+  return json({ draft: generation.draft, model: runtime.model, attempts: generation.attempts });
 }
