@@ -432,6 +432,24 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     const parsed = fromMapping(aiDraft.template.mapping, methods);
     return { issues: parsed.issues, description: describeMapping(parsed.state) };
   }, [aiDraft, methods]);
+  /** 给用户看的 4 行摘要；完整字段/依据放到折叠区 */
+  const aiSummary = useMemo(() => {
+    const mapping = aiDraft?.template?.mapping;
+    if (!mapping) return [];
+    const amount = mapping.create.request.fields.find((f) => f.role === "amount");
+    return [
+      { label: "下单", value: `${mapping.create.request.method ?? "POST"} ${mapping.create.request.path}` },
+      {
+        label: "查单",
+        value: mapping.query ? `${mapping.query.request.method ?? "POST"} ${mapping.query.request.path}` : "未配置",
+      },
+      { label: "回调应答", value: mapping.notify.response.reply },
+      {
+        label: "金额",
+        value: amount ? `${amount.field}（${amount.unit === "cent" ? "分" : "元"}）` : "未配置",
+      },
+    ];
+  }, [aiDraft]);
   /** 文本框=粘贴，文件和 URL 页面在同一个附件集合；只提交勾选项，都不写回 textarea */
   const aiSubmission = useMemo(
     () => mergeAiSubmission(aiDoc, aiFiles.filter((f) => f.selected)),
@@ -627,6 +645,13 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   function removeAiFile(id: string): void {
     setAiFiles((prev) => prev.filter((f) => f.id !== id));
     resetAiResult();
+  }
+
+  function scrollToForm(): void {
+    setOpenSections(["create"]);
+    window.setTimeout(() => {
+      rootRef.current?.querySelector(".ant-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
   }
 
   async function readAiFiles(files: File[]): Promise<void> {
@@ -1319,94 +1344,120 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                   }
                 />
               )}
-              {aiApplied && (
+              {aiApplied && aiDraft?.template && (
                 <Alert
                   type="success"
                   showIcon
-                  message="配置生成成功，已填入表单（未保存）"
-                  description="AI 草稿不等于测试通过：保存后仍要完成「创建 + 查单」测试；开启回调验证时还要真实回调才能发布。"
+                  message="配置生成成功，已填入下方表单（未保存）"
+                  description={
+                    <>
+                      <div>
+                        已识别：<strong>{aiDraft.template.name}</strong>
+                        {aiDraft.template.id && (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {" "}（{aiDraft.template.id}）
+                          </Typography.Text>
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "72px 1fr",
+                          gap: "4px 8px",
+                          fontSize: 12,
+                          marginTop: 6,
+                        }}
+                      >
+                        {aiSummary.map((row) => (
+                          <div key={row.label} style={{ display: "contents" }}>
+                            <span style={{ color: "#999" }}>{row.label}</span>
+                            <span style={{ wordBreak: "break-all" }}>{row.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <Space wrap style={{ marginTop: 8 }}>
+                        <Button size="small" onClick={scrollToForm}>
+                          检查下方表单
+                        </Button>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          下一步：保存 → 测试「创建 + 查单」；开启回调验证时还要真实回调。
+                        </Typography.Text>
+                      </Space>
+                    </>
+                  }
                 />
               )}
-              {aiDraft && (
+              {aiDraft?.template && (
                 <>
-                  <Space wrap>
-                    <Tag color={aiDraft.classification === "generic_mapping" ? "green" : "orange"}>
-                      {aiDraft.classification}
-                    </Tag>
-                    {aiDraft.template && <Typography.Text strong>{aiDraft.template.name}</Typography.Text>}
-                    {aiDraft.template && <Typography.Text type="secondary" code>{aiDraft.template.id}</Typography.Text>}
-                    {aiGate?.status === "complete" && <Tag color="green">完整性校验通过</Tag>}
-                  </Space>
-                  {aiGate?.status === "soft_gaps" && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      message="文档可能不完整，建议向厂商索取更完整的文档"
-                      description={
-                        <ul style={{ margin: 0, paddingLeft: 18 }}>
-                          {aiGate.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                        </ul>
-                      }
+                  {aiGate?.status === "soft_gaps" && aiGate.warnings.length > 0 && (
+                    <Collapse
+                      size="small"
+                      items={[
+                        {
+                          key: "gaps",
+                          label: `有 ${aiGate.warnings.length} 项需要人工确认（展开查看）`,
+                          children: (
+                            <ul style={{ margin: 0, paddingLeft: 18 }}>
+                              {aiGate.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                            </ul>
+                          ),
+                        },
+                      ]}
                     />
                   )}
-                  {aiDraft.template ? (
-                    <>
-                      <Alert type="info" showIcon message="AI 草稿，未审核；请人工核对并测试支付" />
-                      {aiPreview && (
-                        <div>
-                          <Typography.Text strong>预览</Typography.Text>
-                          <div style={{ marginTop: 4 }}>
-                            {aiPreview.description.rows.map((row) => (
-                              <div
-                                key={row.label}
-                                style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: 8, fontSize: 12, padding: "3px 0", borderBottom: "1px solid #f7f7f7" }}
-                              >
-                                <span style={{ color: "#999" }}>{row.label}</span>
-                                <span>{row.value}</span>
+                  <Collapse
+                    size="small"
+                    items={[
+                      {
+                        key: "details",
+                        label: "查看配置摘要与 AI 依据",
+                        children: (
+                          <>
+                            <Alert type="info" showIcon message="AI 草稿，未审核；请核对后保存并测试支付。" />
+                            {aiPreview && (
+                              <div>
+                                <Typography.Text strong>配置摘要</Typography.Text>
+                                <div style={{ marginTop: 4 }}>
+                                  {aiPreview.description.rows.map((row) => (
+                                    <div
+                                      key={row.label}
+                                      style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: 8, fontSize: 12, padding: "3px 0", borderBottom: "1px solid #f7f7f7" }}
+                                    >
+                                      <span style={{ color: "#999" }}>{row.label}</span>
+                                      <span>{row.value}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                                {aiPreview.issues.map((x, i) => <Alert key={`i${i}`} type="warning" showIcon message={x} />)}
+                                {aiPreview.description.warnings.map((x, i) => <Alert key={`w${i}`} type="warning" showIcon message={x} />)}
                               </div>
-                            ))}
-                          </div>
-                          {aiPreview.issues.map((x, i) => <Alert key={`i${i}`} type="warning" showIcon message={x} />)}
-                          {aiPreview.description.warnings.map((x, i) => <Alert key={`w${i}`} type="warning" showIcon message={x} />)}
-                        </div>
-                      )}
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        {aiApplied ? "已自动填入表单；未保存，保存后仍需重新测试。" : "未应用；请先处理上方问题。"}
-                      </Typography.Text>
-                    </>
-                  ) : (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      message={`classification = ${aiDraft.classification}`}
-                      description={
-                        aiDraft.classification === "driver"
-                          ? "这份协议需要代码驱动（RSA 双向签名 / OAuth / 远程验签等），不能只靠映射配置。"
-                          : "文档缺少查单或三端点不全，无法生成通用映射。"
-                      }
-                    />
-                  )}
-                  {aiDraft.evidence.length > 0 && (
-                    <div>
-                      <Typography.Text strong>依据</Typography.Text>
-                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                        {aiDraft.evidence.map((e, i) => (
-                          <li key={i}>
-                            <Typography.Text type="secondary">{e.section}：</Typography.Text>
-                            {e.quote}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {aiDraft.uncertainty.length > 0 && (
-                    <div>
-                      <Typography.Text strong>不确定点</Typography.Text>
-                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                        {aiDraft.uncertainty.map((u, i) => <li key={i}>{u}</li>)}
-                      </ul>
-                    </div>
-                  )}
+                            )}
+                            {aiDraft.evidence.length > 0 && (
+                              <div style={{ marginTop: 8 }}>
+                                <Typography.Text strong>依据</Typography.Text>
+                                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                                  {aiDraft.evidence.map((e, i) => (
+                                    <li key={i}>
+                                      <Typography.Text type="secondary">{e.section}：</Typography.Text>
+                                      {e.quote}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {aiDraft.uncertainty.length > 0 && (
+                              <div style={{ marginTop: 8 }}>
+                                <Typography.Text strong>不确定点</Typography.Text>
+                                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                                  {aiDraft.uncertainty.map((u, i) => <li key={i}>{u}</li>)}
+                                </ul>
+                              </div>
+                            )}
+                          </>
+                        ),
+                      },
+                    ]}
+                  />
                 </>
               )}
             </Space>
