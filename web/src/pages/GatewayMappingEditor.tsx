@@ -388,6 +388,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
   const [importTemplates, setImportTemplates] = useState<PaymentTemplate[]>([]);
   const [importPick, setImportPick] = useState("");
   const [templatePick, setTemplatePick] = useState("");
+  const [pendingTemplate, setPendingTemplate] = useState<PaymentTemplate | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const aiFileRef = useRef<HTMLInputElement | null>(null);
   const [openSections, setOpenSections] = useState<string[]>(["create"]);
@@ -435,6 +436,12 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     const parsed = fromMapping(aiDraft.template.mapping, methods);
     return { issues: parsed.issues, description: describeMapping(parsed.state) };
   }, [aiDraft, methods]);
+  /** 模板确认框里展示 issues，避免用户确认后才发现模板本身有问题 */
+  const pendingTemplatePreview = useMemo(
+    () => (pendingTemplate ? fromMapping(pendingTemplate.mapping, methods) : null),
+    [pendingTemplate, methods],
+  );
+
   /** 给用户看的 4 行摘要；完整字段/依据放到折叠区 */
   const aiSummary = useMemo(() => {
     const mapping = aiDraft?.template?.mapping;
@@ -797,12 +804,18 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     return [...OFFICIAL_TEMPLATES, ...importTemplates].find((t) => t.id === id);
   }
 
-  function useTemplate(id: string): void {
+  function requestTemplate(id: string): void {
     const t = templateById(id);
     if (!t) return;
-    if (!window.confirm(`用「${t.name}」覆盖当前接口配置？应用后仍可修改，点保存才入库。`)) return;
+    setPendingTemplate(t);
+  }
+
+  function applyPendingTemplate(): void {
+    const t = pendingTemplate;
+    if (!t) return;
     applyTemplate(t.mapping, t.name);
     setTemplatePick(t.id);
+    setPendingTemplate(null);
     setImportOpen(false);
     setAiOpen(false);
     resetAiResult();
@@ -1197,7 +1210,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
             placeholder="从模板开始"
             style={{ width: 220 }}
             value={templatePick || undefined}
-            onChange={(id: string) => useTemplate(id)}
+            onChange={(id: string) => requestTemplate(id)}
             options={[
               ...OFFICIAL_TEMPLATES.map((t) => ({ value: t.id, label: t.name })),
               ...importTemplates.map((t) => ({ value: t.id, label: `${t.name}（导入）` })),
@@ -1258,7 +1271,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                     <>
                       <Alert type="warning" showIcon message="第三方/导入模板，未审核；应用后请人工核对并测试支付" />
                       {issues.map((x) => <Alert key={x} type="warning" showIcon message={x} />)}
-                      <Button type="primary" onClick={() => useTemplate(t.id)}>应用这个模板</Button>
+                      <Button type="primary" onClick={() => requestTemplate(t.id)}>应用这个模板</Button>
                     </>
                   );
                 })()}
@@ -1581,6 +1594,48 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
           />
           {aiUrlError && <Alert type="error" showIcon message={aiUrlError} />}
         </Space>
+      </Modal>
+      <Modal
+        open={Boolean(pendingTemplate)}
+        title="应用接口模板"
+        okText="应用模板"
+        cancelText="取消"
+        width={560}
+        onOk={applyPendingTemplate}
+        onCancel={() => setPendingTemplate(null)}
+      >
+        {pendingTemplate && (
+          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Typography.Text>
+              将用 <strong>{pendingTemplate.name}</strong> 覆盖当前接口配置。
+            </Typography.Text>
+            {pendingTemplate.description && (
+              <Typography.Text type="secondary">{pendingTemplate.description}</Typography.Text>
+            )}
+            <Space wrap>
+              <Tag color={pendingTemplate.source === "official" ? "green" : "orange"}>
+                {pendingTemplate.source === "official" ? "官方模板" : "导入模板（未审核）"}
+              </Tag>
+              <Typography.Text type="secondary" code>{pendingTemplate.id}</Typography.Text>
+            </Space>
+            {pendingTemplate.source !== "official" && (
+              <Alert
+                type="warning"
+                showIcon
+                message="第三方/导入模板，未审核；应用后请人工核对并测试支付。"
+              />
+            )}
+            <Alert
+              type="info"
+              showIcon
+              message="应用后仍可修改；点「保存并返回」才会入库。"
+              description="当前未保存的接口配置会被覆盖。"
+            />
+            {pendingTemplatePreview?.issues.map((issue) => (
+              <Alert key={issue} type="warning" showIcon message={issue} />
+            ))}
+          </Space>
+        )}
       </Modal>
       <Modal
         open={exportOpen}
