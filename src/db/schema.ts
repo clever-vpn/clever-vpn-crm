@@ -957,7 +957,7 @@ export const paymentGateways = sqliteTable(
     /** 收银台 / API 根地址 */
     endpoint: text("endpoint"),
     /**
-     * PayPal 专属：sandbox | live；null = 跟随部署 ENVIRONMENT。
+     * PayPal 专属：sandbox | live；新建默认 sandbox，历史 null 也按 sandbox。
      * 同一部署内可以同时存在 sandbox 与 live 两条 PayPal 网关。
      */
     paypal_env: text("paypal_env"),

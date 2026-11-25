@@ -270,7 +270,7 @@ export default function GatewaysList() {
                 {gw.driver === "paypal" && (
                   <span>
                     PayPal 环境：
-                    {gw.paypal_env === "sandbox" ? "Sandbox（测试）" : gw.paypal_env === "live" ? "Live（正式）" : "跟随部署环境"}
+                    {gw.paypal_env === "live" ? "Live（正式）" : "Sandbox（测试）"}
                   </span>
                 )}
                 {(gw.driver === "stripe" || gw.driver === "paypal") && (

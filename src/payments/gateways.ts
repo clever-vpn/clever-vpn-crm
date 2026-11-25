@@ -23,7 +23,7 @@ export interface GatewayRow {
   driver: string;
   name: string;
   endpoint: string | null;
-  /** PayPal 专属：sandbox | live；null = 跟随部署 ENVIRONMENT */
+  /** PayPal 专属：sandbox | live；null 按 sandbox（历史数据） */
   paypal_env: string | null;
   merchant_id: string | null;
   secret_enc: string | null;
@@ -109,8 +109,8 @@ export function gatewayVisibleTo(gw: GatewayRow, email: string, _env: Env): bool
     if (allowed.length === 0) return false;
     return allowed.includes(who);
   }
-  if (gw.driver === "paypal" && gw.paypal_env === "sandbox") {
-    // PayPal sandbox 不产生真实扣款；同样只允许白名单测试客户，防止免费开通。
+  if (gw.driver === "paypal" && gw.paypal_env !== "live") {
+    // PayPal sandbox（含历史 null）不产生真实扣款；同样只允许白名单测试客户，防止免费开通。
     if (allowed.length === 0) return false;
     return allowed.includes(who);
   }

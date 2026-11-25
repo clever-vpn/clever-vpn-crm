@@ -9,7 +9,7 @@
  *
  * webhook 验签在 `payments/webhook.ts`（官方 verify 接口），这里只负责
  * create + query；事件本身不直接判已付，仍由 `pollOrderOnce` 复核。
- * 环境优先取网关的 `paypal_env`（sandbox/live）；空时回退到部署 `ENVIRONMENT`。
+ * 环境取网关的 `paypal_env`：live 用正式 API；sandbox/空值用 Sandbox API。
  */
 
 import {
@@ -39,14 +39,10 @@ interface PayPalOrder {
 }
 
 export function paypalBaseFor(
-  env: { ENVIRONMENT?: string },
+  _env: { ENVIRONMENT?: string },
   paypalEnv?: string | null,
 ): string {
-  if (paypalEnv === "sandbox") return PAYPAL_SANDBOX_BASE;
-  if (paypalEnv === "live") return PAYPAL_LIVE_BASE;
-  return String(env.ENVIRONMENT ?? "").trim() === "production"
-    ? PAYPAL_LIVE_BASE
-    : PAYPAL_SANDBOX_BASE;
+  return paypalEnv === "live" ? PAYPAL_LIVE_BASE : PAYPAL_SANDBOX_BASE;
 }
 
 function apiBase(input: { env: { ENVIRONMENT?: string }; gateway?: { paypal_env?: string | null } }): string {

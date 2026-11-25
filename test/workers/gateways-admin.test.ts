@@ -220,6 +220,7 @@ describe("网关管理", () => {
         secret: "paypal-secret",
         webhook_secret: "WH-test-id",
         methods: ["paypal"],
+        paypal_env: "live",
       },
     });
     expect(created.status).toBe(201);
@@ -228,6 +229,29 @@ describe("网关管理", () => {
     await markTested(id);
     const pub = await call(`/api/admin/gateways/${id}/publish`, { method: "POST" });
     expect(pub.status).toBe(200);
+  });
+
+  it("PayPal 未选择环境时默认 sandbox，且再次编辑仍回显", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "paypal",
+        name: "PayPal-默认环境",
+        merchant_id: "default-client",
+        secret: "default-secret",
+        methods: ["paypal"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { gateway: { id: number; paypal_env: string | null } };
+    expect(body.gateway.paypal_env).toBe("sandbox");
+    const patched = await call(`/api/admin/gateways/${body.gateway.id}`, {
+      method: "PATCH",
+      body: { name: "PayPal-默认环境-改名" },
+    });
+    expect(patched.status).toBe(200);
+    const after = (await patched.json()) as { gateway: { paypal_env: string | null } };
+    expect(after.gateway.paypal_env).toBe("sandbox");
   });
 
   it("PayPal Sandbox：必须显式环境 + 客户白名单才能发布", async () => {

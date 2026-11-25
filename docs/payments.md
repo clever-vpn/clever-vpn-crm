@@ -480,7 +480,7 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 | 收银台 | `session.url` | `approve` 链接 |
 | 查单 | `GET /v1/checkout/sessions/{id}`；`payment_status=paid` 才认 | `GET /v2/checkout/orders/{id}`；`APPROVED` 时**主动 capture**，`COMPLETED` 才认 |
 | 权威交易号 | session id | capture id |
-| 环境 | key 决定 test/live（同一个 API 根） | `paypal_env=sandbox/live`；空 = 跟随部署 `ENVIRONMENT`；create/query/webhook 必须同一环境 |
+| 环境 | key 决定 test/live（同一个 API 根） | `paypal_env=sandbox/live`；新建默认 sandbox；create/query/webhook 必须同一环境 |
 | Sandbox 安全 | — | **必须配置非空客户白名单**才能发布；不会向普通访客开放 |
 
 几个明确取舍：
