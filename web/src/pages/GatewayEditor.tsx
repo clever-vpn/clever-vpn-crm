@@ -733,7 +733,25 @@ export default function GatewayEditor({ mode, id }: Props) {
                     key: "mapping",
                     label: "接口配置",
                     forceRender: true,
-                    children: (
+                    children: protocolLocked ? (
+                      <>
+                        {saveErrorAlert}
+                        <Alert
+                          type="warning"
+                          showIcon
+                          style={{ marginBottom: 12 }}
+                          message="接口配置已锁定"
+                          description="已发布网关的接口映射只读；需要修改请先停用，再重新测试并发布。"
+                        />
+                        <Input.TextArea
+                          className="mono"
+                          rows={18}
+                          readOnly
+                          value={mappingJson}
+                          placeholder="（当前没有接口映射）"
+                        />
+                      </>
+                    ) : (
                       <>
                         {saveErrorAlert}
                         <GatewayMappingEditor

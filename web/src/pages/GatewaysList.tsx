@@ -18,7 +18,7 @@ import { DRIVER_LABEL, METHOD_LABEL, STATUS } from "./gateway-constants";
 export default function GatewaysList() {
   const [data, setData] = useState<GatewaysResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -38,7 +38,9 @@ export default function GatewaysList() {
    * 与真实下单的区别：允许 draft、忽略白名单、**不产生订阅**（契约 §2.4.5）。
    */
   async function testPay(gw: GatewayView, method: string) {
-    setBusy(true);
+    const key = `test:${gw.id}`;
+    if (busyKey) return;
+    setBusyKey(key);
     try {
       const res = await api.testGateway(gw.id, { method, amount_minor: 100 });
       window.open(res.pay_url, "_blank", "noopener,noreferrer");
@@ -46,12 +48,13 @@ export default function GatewaysList() {
     } catch (e) {
       message.error(e instanceof ApiError ? e.message || e.code : "测试支付失败");
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   }
 
-  async function act(fn: () => Promise<unknown>, ok: string) {
-    setBusy(true);
+  async function act(key: string, fn: () => Promise<unknown>, ok: string) {
+    if (busyKey) return;
+    setBusyKey(key);
     try {
       await fn();
       message.success(ok);
@@ -59,7 +62,7 @@ export default function GatewaysList() {
     } catch (e) {
       message.error(e instanceof ApiError ? e.message || e.code : "操作失败");
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   }
 
@@ -83,7 +86,11 @@ export default function GatewaysList() {
               支付网关
             </Typography.Title>
           </Space>
-          <Button type="primary" onClick={() => navigate(`${GATEWAY_LIST_PATH}/new`)} loading={busy}>
+          <Button
+            type="primary"
+            disabled={busyKey !== null}
+            onClick={() => navigate(`${GATEWAY_LIST_PATH}/new`)}
+          >
             新增网关
           </Button>
         </div>
@@ -159,12 +166,18 @@ export default function GatewaysList() {
               width: 280,
               render: (_, gw) => (
                 <Space size={4}>
-                  <Button size="small" onClick={() => navigate(`${GATEWAY_LIST_PATH}/${gw.id}/edit`)}>
+                  <Button
+                    size="small"
+                    disabled={busyKey !== null}
+                    onClick={() => navigate(`${GATEWAY_LIST_PATH}/${gw.id}/edit`)}
+                  >
                     编辑
                   </Button>
                   <Button
                     size="small"
-                    onClick={() => void act(() => api.copyGateway(gw.id), "已复制为草稿")}
+                    loading={busyKey === `copy:${gw.id}`}
+                    disabled={busyKey !== null && busyKey !== `copy:${gw.id}`}
+                    onClick={() => void act(`copy:${gw.id}`, () => api.copyGateway(gw.id), "已复制为草稿")}
                   >
                     复制
                   </Button>
@@ -172,7 +185,12 @@ export default function GatewaysList() {
                     <Button
                       size="small"
                       type="primary"
-                      disabled={!gw.test_ready || (gw.test_require_callback && !gw.test_callback_ok_at)}
+                      loading={busyKey === `publish:${gw.id}`}
+                      disabled={
+                        busyKey !== null && busyKey !== `publish:${gw.id}` ||
+                        !gw.test_ready ||
+                        (gw.test_require_callback && !gw.test_callback_ok_at)
+                      }
                       title={
                         !gw.test_ready
                           ? "先完成测试（创建订单 + 查询订单）"
@@ -180,7 +198,7 @@ export default function GatewaysList() {
                             ? "已开启通知验证，等待测试支付通知"
                             : undefined
                       }
-                      onClick={() => void act(() => api.publishGateway(gw.id), "已启用")}
+                      onClick={() => void act(`publish:${gw.id}`, () => api.publishGateway(gw.id), "已启用")}
                     >
                       发布
                     </Button>
@@ -194,16 +212,27 @@ export default function GatewaysList() {
                         onClick: () => void testPay(gw, m),
                       })),
                     }}
-                    disabled={busy || gw.methods.length === 0}
+                    disabled={busyKey !== null || gw.methods.length === 0}
                   >
-                    <Button size="small">测试支付</Button>
+                    <Button
+                      size="small"
+                      loading={busyKey === `test:${gw.id}`}
+                      disabled={busyKey !== null && busyKey !== `test:${gw.id}`}
+                    >
+                      测试支付
+                    </Button>
                   </Dropdown>
                   {gw.status === "live" && (
                     <Popconfirm
                       title="停用后 App 里立刻看不到这个支付方式"
-                      onConfirm={() => void act(() => api.disableGateway(gw.id), "已停用")}
+                      onConfirm={() => void act(`disable:${gw.id}`, () => api.disableGateway(gw.id), "已停用")}
                     >
-                      <Button size="small" danger>
+                      <Button
+                        size="small"
+                        danger
+                        loading={busyKey === `disable:${gw.id}`}
+                        disabled={busyKey !== null && busyKey !== `disable:${gw.id}`}
+                      >
                         停用
                       </Button>
                     </Popconfirm>
@@ -217,9 +246,15 @@ export default function GatewaysList() {
                     }
                     okText="删除"
                     okButtonProps={{ danger: true }}
-                    onConfirm={() => void act(() => api.deleteGateway(gw.id), "已删除")}
+                    onConfirm={() => void act(`delete:${gw.id}`, () => api.deleteGateway(gw.id), "已删除")}
                   >
-                    <Button size="small" danger type="text">
+                    <Button
+                      size="small"
+                      danger
+                      type="text"
+                      loading={busyKey === `delete:${gw.id}`}
+                      disabled={busyKey !== null && busyKey !== `delete:${gw.id}`}
+                    >
                       删除
                     </Button>
                   </Popconfirm>
