@@ -939,7 +939,7 @@ export const promotionCodes = sqliteTable(
  *   - `stripe` / `paypal`：品牌 PSP，独立薄 driver（OAuth/二次 capture 不属于映射）；
  *   - `manual`：对公转账，人工确认；
  *   - `mock`：**自带的测试网关**（`docs/payments.md` §5.3），不连真实渠道，
- *     有**两道闸门**：`env.ALLOW_MOCK_PAYMENTS` 与 `allowed_emails`。
+ *     只用强制非空白名单隔离（环境开关已移除）。
  *
  * 判据（`docs/payments.md` §6）：**签名能在本地一次算完 → 映射；否则 → driver**。
  *

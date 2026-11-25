@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import { EPAY_V1_MAPPING } from "../../src/payments/builtin/epay";
 import {
   gatewayVisibleTo,
-  isMockEnabled,
   mappingOf,
   parseAllowedEmails,
   pickGateway,
@@ -55,33 +54,18 @@ function gw(over: Partial<GatewayRow> = {}): GatewayRow {
   };
 }
 
-describe("测试网关的第一道闸门：env.ALLOW_MOCK_PAYMENTS", () => {
-  it("默认关闭", () => {
-    expect(isMockEnabled(env())).toBe(false);
-    expect(isMockEnabled(env({ ALLOW_MOCK_PAYMENTS: "false" }))).toBe(false);
-    expect(isMockEnabled(env({ ALLOW_MOCK_PAYMENTS: "true" }))).toBe(true);
-    expect(isMockEnabled(env({ ALLOW_MOCK_PAYMENTS: " TRUE " }))).toBe(true);
-  });
-
-  it("关掉时 mock 网关对谁都不显示", () => {
-    const g = gw({ driver: "mock", allowed_emails: '["a@b.com"]' });
-    expect(gatewayVisibleTo(g, "a@b.com", env())).toBe(false);
-    expect(visibleMethods(g, "a@b.com", env())).toEqual([]);
-  });
-});
-
 describe("测试网关的第二道闸门：allowed_emails", () => {
   const g = gw({ driver: "mock", allowed_emails: '["a@b.com"]' });
 
-  it("白名单非空 + 开闸 → 名单内可见，名单外不可见", () => {
-    const e = env({ ALLOW_MOCK_PAYMENTS: "true" });
+  it("白名单非空 → 名单内可见，名单外不可见", () => {
+    const e = env();
     expect(gatewayVisibleTo(g, "a@b.com", e)).toBe(true);
     expect(gatewayVisibleTo(g, "A@B.COM", e)).toBe(true); // 邮箱归一
     expect(gatewayVisibleTo(g, "other@b.com", e)).toBe(false);
   });
 
-  it("开闸但白名单为空 → 仍然不可见（否则等于向所有真实用户免费开通）", () => {
-    const e = env({ ALLOW_MOCK_PAYMENTS: "true" });
+  it("白名单为空 → 仍然不可见（否则等于向所有真实用户免费开通）", () => {
+    const e = env();
     expect(gatewayVisibleTo(gw({ driver: "mock", allowed_emails: null }), "a@b.com", e)).toBe(false);
     expect(gatewayVisibleTo(gw({ driver: "mock", allowed_emails: "[]" }), "a@b.com", e)).toBe(false);
   });
@@ -105,7 +89,7 @@ describe("真实网关的白名单（灰度发布）", () => {
 });
 
 describe("pickGateway 路由", () => {
-  const mockOn = env({ ALLOW_MOCK_PAYMENTS: "true" });
+  const mockOn = env();
 
   it("按 priority 升序取第一条；draft 不参与", () => {
     const rows = [

@@ -151,7 +151,6 @@ jobs:
       - name: Render wrangler.shard.jsonc
         env:
           CRM_ROOT: ${{ vars.CRM_ROOT }}
-          ALLOW_MOCK_PAYMENTS: ${{ vars.ALLOW_MOCK_PAYMENTS }}
         run: node scripts/render-shard-config.mjs --manifest manifest.json
 
       # ---- 2.3 构建 + 部署 ----

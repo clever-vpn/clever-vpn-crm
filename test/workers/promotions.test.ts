@@ -172,7 +172,6 @@ async function payOrder(token: string, planId: string, promoCode?: string): Prom
 }
 
 beforeAll(async () => {
-  (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
   // 没有平台时订单就该停在 provisioning（契约行为），但这里要断言「付款后真的生效」，
   // 所以装一个假 cf-api —— 与 payment-flow / settlement 测试同一个做法。
   const cfApi = installFakeCfApi();

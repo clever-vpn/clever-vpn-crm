@@ -7,7 +7,7 @@
  *      这种配置，否则显示名与真实能力会打架；
  *   2. 密钥只能通过 `secret`（明文，进来就加密）写入；列表/详情只回 `has_secret`，
  *      租户可通过显式 `GET /gateways/:id/secret` 查看当前值（审计，不写日志）；
- *   3. `mock` 的两道闸门在发布时校验：环境开关必须打开，白名单必须非空。
+ *   3. `mock` 的白名单必须非空才能发布（正式环境也不再用环境开关）。
  *
  * `epay_v1` 的 `mapping` 是**覆盖项**（与内置映射深合并），租户只写差异；
  * `generic_json_v1` 的 `mapping` 是**完整配置**（必须能通过 `validateMapping`）。
@@ -17,7 +17,6 @@ import { createCharge } from "../payments/checkout";
 import { decryptSecret, encryptSecret, secretKeyConfigured } from "../payments/secret";
 import { DRIVERS, validateMapping, type GatewayMapping } from "../payments/mapping";
 import { EPAY_V1_MAPPING } from "../payments/builtin/epay";
-import { isMockEnabled } from "../payments/gateways";
 import { aiReady } from "../payments/ai";
 import { pollOrderOnce } from "../payments/poll";
 import { MOCK_DRIVER } from "../payments/mock";
@@ -30,7 +29,7 @@ const GATEWAY_STATUSES = ["draft", "live", "disabled", "deleted"] as const;
 /**
  * 后台可配置的驱动 = 真实驱动 + `mock`。
  * `mock` 不在 `DRIVERS` 里（它不参与真实下单映射校验），但租户做联调时必须在后台能看到它，
- * 所以这里单独并进来；能不能真正发布由 `ALLOW_MOCK_PAYMENTS` + 白名单把关。
+ * 所以这里单独并进来；发布由强制非空白名单把关。
  */
 const ADMIN_DRIVERS = [...DRIVERS, MOCK_DRIVER];
 
@@ -264,6 +263,31 @@ function normalize(body: Record<string, unknown>, current?: GatewayRow): Normali
   };
 }
 
+function protocolFieldChanged(normalized: NormalizedInput, current: GatewayRow, body: Record<string, unknown>): boolean {
+  return (
+    normalized.endpoint !== current.endpoint ||
+    normalized.merchant_id !== current.merchant_id ||
+    normalized.currency !== current.currency ||
+    sortedJson(normalized.methods) !== sortedJson(parseArray(current.methods)) ||
+    sortedJson(normalized.channel_codes) !== sortedJson(current.channel_codes ? JSON.parse(current.channel_codes) : {}) ||
+    JSON.stringify(normalized.mapping ?? null) !== JSON.stringify(current.mapping ? JSON.parse(current.mapping) : null) ||
+    body.clear_secret === true ||
+    (typeof body.secret === "string" && body.secret.trim() !== "") ||
+    body.clear_webhook === true ||
+    (typeof body.webhook_secret === "string" && body.webhook_secret.trim() !== "")
+  );
+}
+
+function sortedJson(value: unknown): string {
+  if (Array.isArray(value)) return JSON.stringify([...value].map(String).sort());
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+    return JSON.stringify(entries);
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** 只有真正影响支付协议/金额的字段才进入测试 hash；名称/优先级/白名单/汇率/测试设置不进。 */
 export async function gatewayConfigHash(row: GatewayRow): Promise<string> {
   const payload = JSON.stringify({
     driver: row.driver,
@@ -275,9 +299,6 @@ export async function gatewayConfigHash(row: GatewayRow): Promise<string> {
     channel_codes: row.channel_codes,
     mapping: row.mapping,
     currency: row.currency,
-    fx_rate: row.fx_rate,
-    test_amount_minor: row.test_amount_minor,
-    test_require_callback: row.test_require_callback,
   });
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -316,7 +337,6 @@ export async function handleAdminGateways(
     ).all<GatewayRow>();
     return json({
       gateways: (rows.results ?? []).map(view),
-      mock_enabled: isMockEnabled(env),
       secret_key_ready: secretKeyConfigured(env),
       ai_ready: aiReady(env),
       drivers: ADMIN_DRIVERS.map((d) => ({ driver: d, methods: DRIVER_METHODS[d] ?? [] })),
@@ -329,10 +349,6 @@ export async function handleAdminGateways(
     const body = await readBody(request);
     const normalized = normalize(body);
     if (typeof normalized === "string") return fail(400, "invalid_gateway", normalized);
-
-    if (normalized.driver === "mock" && !isMockEnabled(env)) {
-      return fail(400, "mock_disabled", "测试网关未启用（需要 ALLOW_MOCK_PAYMENTS=true）");
-    }
 
     const resolved = resolveMapping(normalized.driver, normalized.mapping);
     if (!resolved.ok) return fail(400, "invalid_mapping", resolved.error);
@@ -530,6 +546,16 @@ export async function handleAdminGateways(
       return fail(409, "driver_locked", "已发布/已停用的网关不能改驱动（新建一条更安全）");
     }
 
+    // 已发布网关的支付协议字段只读：要改必须先停用，避免未测试配置直接收款。
+    // 基本信息（名称/优先级/白名单/汇率/测试设置）不在此列，可直接改。
+    if (current.status === "live" && protocolFieldChanged(normalized, current, body)) {
+      return fail(
+        409,
+        "gateway_must_stop",
+        "已发布网关不能直接修改支付协议配置；请先停用，修改后重新测试并发布",
+      );
+    }
+
     // 已发布的测试网关不能把白名单清空：清空后它对**任何人**都不可见（含登录用户），
     // 但后台仍显示"已发布" —— 这是最难查的一类故障，直接在保存时拦住。
     if (
@@ -593,14 +619,16 @@ export async function handleAdminGateways(
       .run();
 
     await audit(env, actor, "gateway_updated", String(id), { name: normalized.name });
-    const row = await loadGateway(env, id);
-    if (row && current.tested_config_hash && (await gatewayConfigHash(row)) !== current.tested_config_hash) {
+    const beforeHash = await gatewayConfigHash(current);
+    let row = await loadGateway(env, id);
+    if (row && (await gatewayConfigHash(row)) !== beforeHash) {
       await env.DB.prepare(
         `UPDATE payment_gateways SET test_create_ok_at = NULL, test_query_ok_at = NULL,
            test_callback_ok_at = NULL, tested_config_hash = NULL, updated_at = ? WHERE id = ?`,
       )
         .bind(new Date().toISOString(), id)
         .run();
+      row = await loadGateway(env, id);
     }
     return json({ gateway: row ? view(row) : null });
   }
@@ -668,6 +696,7 @@ export async function handleAdminGateways(
     const verb = action[2];
 
     if (verb === "disable") {
+      if (current.status !== "live") return fail(409, "not_live", "只有已发布网关可以停用");
       await env.DB.prepare(`UPDATE payment_gateways SET status = 'disabled', updated_at = ? WHERE id = ?`)
         .bind(new Date().toISOString(), id)
         .run();
@@ -676,9 +705,11 @@ export async function handleAdminGateways(
       return json({ gateway: row ? view(row) : null });
     }
 
+    // publish：只允许草稿/已停用；live 已发布，无需重复发布
+    if (current.status === "live") return fail(409, "already_live", "网关已是发布状态");
+
     // publish：三道检查
     if (current.driver === "mock") {
-      if (!isMockEnabled(env)) return fail(400, "mock_disabled", "测试网关未启用（需要 ALLOW_MOCK_PAYMENTS=true）");
       if (parseArray(current.allowed_emails).length === 0) {
         return fail(400, "mock_whitelist_required", "测试网关必须配置客户白名单才能发布（否则等于向所有人免费开通）");
       }

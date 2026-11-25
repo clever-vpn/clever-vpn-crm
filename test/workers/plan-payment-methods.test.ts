@@ -75,7 +75,6 @@ async function seedPlan(id: string, channels: unknown): Promise<void> {
 }
 
 beforeAll(async () => {
-  (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
 
   // 公开网关：谁都能用
   await seedGateway({

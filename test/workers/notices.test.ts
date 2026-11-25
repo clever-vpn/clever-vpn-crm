@@ -153,7 +153,6 @@ async function noticesOf(customerId: number) {
 }
 
 beforeAll(async () => {
-  (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
   // 退订链接要绝对地址 ⇒ 必须有 SITE_URL；密钥用于签名
   (env as unknown as Record<string, unknown>).SITE_URL = "https://vpn.test";
   (env as unknown as Record<string, unknown>).APP_SECRET = "notice-test-secret";

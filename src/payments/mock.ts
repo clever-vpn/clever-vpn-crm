@@ -9,7 +9,7 @@
  *   - 不依赖公网可达，本地 `wrangler dev` 就能跑完整链路；
  *   - Workers 自己 fetch 自己会占连接配额、还受路由/缓存影响，没必要。
  *
- * 两道闸门不在这里（在 `gateways.ts`）：`env.ALLOW_MOCK_PAYMENTS` + `allowed_emails`。
+ * 隔离不在这里（在 `gateways.ts`）：mock 强制白名单；环境开关已移除。
  */
 
 import { signParams, type SignSpec } from "./sign";

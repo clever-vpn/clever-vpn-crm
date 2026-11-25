@@ -117,16 +117,5 @@ export interface Env {
    */
   CLOUDFLARE_AI_MODEL?: string;
 
-  /**
-   * **测试网关（`driver = 'mock'`）的总开关**，默认关闭（`docs/payments.md` §5.3）。
-   *
-   * 为 `"true"` 时，mock 网关才能创建/发布并参与路由。
-   *
-   * **托管分片默认开**（`scripts/render-shard-config.mjs`）：测试网关是租户验证
-   * 支付流程的产品能力，用真网关去测既费钱也不可重复。
-   *
-   * "不对访客开放"由**网关自身的白名单**保证，不是靠这个开关：`driver='mock'`
-   * 白名单为空时对**任何人**都不存在（含登录用户），发布/编辑/查询三层都会拦。
-   */
-  ALLOW_MOCK_PAYMENTS?: string;
+
 }

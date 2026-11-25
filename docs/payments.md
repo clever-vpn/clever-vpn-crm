@@ -136,7 +136,9 @@ draft ──创建+查单测试──▶ live ──停用──▶ disabled
 - **`deleted` 是软删除**：管理列表隐藏、新下单不再路由，但网关行保留 ——
   `orders.gateway_id`、在途订单的查单、服务端迟到的 webhook、审计都还引用它；
 - 删除后如换新网关，Stripe/PayPal 后台的 webhook 地址要同步删除或改到新网关；
-- `live` 可以测试、停用、删除；**驱动在 `live` / `disabled` 后锁定**，其他集成字段仍可改；
+- `live` 可以测试、停用、删除；**驱动在发布后锁定**；
+- `live` 的**支付协议字段只读**（endpoint/商户号/密钥/webhook/支付方式/通道号/mapping/币种），
+  要改必须先停用；名称/优先级/白名单/汇率/测试设置可直接改，不重测；
   改驱动应新建网关；
 - 新建 / 停用后的网关可以「复制」为新的草稿：复制完整配置和密钥，但**不继承测试状态**。
 
@@ -154,7 +156,7 @@ query_ok：用同一笔测试单调厂商查单，返回合法响应、订单对
 - 测试金额按网关配置 `test_amount_minor`（网关币种最小单位）；默认 1.00；
 - 测试必须走与正式下单相同的 `createCharge → 厂商` 代码路径；
 - `test_create_ok_at` / `test_query_ok_at` / `tested_config_hash` 落库；
-- **任何集成字段变更都会让测试 hash 失效**，必须重新测试；
+- **支付协议字段变更**会让测试 hash 失效；名称/优先级/白名单/汇率/测试设置不失效；
 - 测试通过后，发布按钮才可用；发布接口还会再校验一次状态与 hash。
 
 **查单测试成功不要求已支付**：新测试单状态为 `pending` 是正常的。
@@ -165,9 +167,9 @@ query_ok：用同一笔测试单调厂商查单，返回合法响应、订单对
 `payment_gateways.test_require_callback`：
 
 - `0`（默认）：创建 + 查单通过即可发布；回调到账只记录 `test_callback_ok_at`；
-- `1`：创建 + 查单通过后仍显示「等待回调」，必须真实支付回调到账、
+- `1`：创建 + 查单通过后仍显示「等待通知」，必须真实支付回调到账、
   写入 `test_callback_ok_at` 后才允许发布；
-- 开关本身也参与测试 hash；改开关后旧测试失效。
+- 测试设置（金额/是否必须验证通知）只影响测试流程，不参与协议 hash。
 
 ### 4.3 币种与汇率
 
@@ -184,7 +186,8 @@ query_ok：用同一笔测试单调厂商查单，返回合法响应、订单对
 侧栏 `支付` → `web/src/pages/GatewaysList.tsx` / `GatewayEditor.tsx` / `GatewayMappingEditor.tsx`，
 接口 `/api/admin/gateways*`（`src/admin/gateways.ts`）。
 
-- 编辑页：基本信息、接口配置（① 下单 / ② 回调 / ③ 查单）、测试状态、测试金额、币种、汇率；
+- 编辑页：基本信息（名称/优先级/白名单/汇率/测试设置）、接口配置（① 下单 / ② 通知 / ③ 查单）、
+  测试状态、测试金额、币种；已发布时协议字段只读；
 - 测试入口在编辑页和列表都有；
 - 接口配置按 API 文档组织成「请求 / 响应」；金额单位、时间格式、数字字段都是字段属性；
 - 模板来源：官方模板 / 导入 / 导出 / AI；**租户只编辑结构化表单，不直接编辑原始 JSON**；
@@ -219,7 +222,7 @@ JSON 只作为**只读预览 / 模板导出**，租户不直接编辑；导入�
 **不隐藏**：它们是协议事实，写错就是资损或无限重推。
 
 新建表单只列**能自动下单**的 driver：`epay_v1` / `generic_json_v1` / `stripe` / `paypal` /
-`mock`（环境开关打开时）。`manual`（对公转账）不在此列——它不是自动收银台，线下到账走
+`mock`（租户测试网关）。`manual`（对公转账）不在此列——它不是自动收银台，线下到账走
 「客户 → 手工开通」。支付方式选择器只在 `epay_v1` / `generic_json_v1` / `mock` 时出现；
 Stripe/PayPal 的方式就是品牌本身，由 driver 固定。
 
@@ -364,17 +367,15 @@ method = alipay
  handler。这样验签、金额核对、幂等、发权益走的都是**生产路径**，不依赖公网可达，
 本地 `wrangler dev` 就能跑完整流程。
 
-#### 两道闸门（缺一不可）
+#### 唯一闸门：客户白名单
 
-| 闸门 | 字段 / 开关 | 规则 |
+| 闸门 | 字段 | 规则 |
 |---|---|---|
-| **① 环境总开关** | `env.ALLOW_MOCK_PAYMENTS` | 默认 `false`。为 false 时 mock 网关**不可创建/发布**，已存在的**不参与路由**。**租户业务正式上线时改回 false** —— 这就是"上线后关闭"的机制 |
-| **② 客户白名单** | `payment_gateways.allowed_emails` | 只有名单内邮箱的客户能看到它提供的方式；**mock 网关白名单必须非空才能 `live`**（空名单 = 路由不可用，防御性兼双重） |
+| **客户白名单** | `payment_gateways.allowed_emails` | 只有名单内邮箱的客户能看到/使用 mock；**mock 白名单必须非空才能 `live`**（空名单 = 对任何人都不存在） |
 
-为什么两道都要：
-
-- ① 防的是"忘了关"（上线后 mock 还存在，等于免费开通）；
-- ② 防的是"上线前被真实用户白嫖"（闸门 ① 开着的时候，只有你指定的测试账号能用）。
+正式环境也可以使用 mock：它是租户验证“套餐购买 → 发权益 → App 生效”的产品能力，
+不再需要平台环境开关。租户管理员自己负责白名单里加谁；这和自己手工开通订阅是同一权限级。
+mock 订单会在 `orders.source` 标记为 `mock`，收入/对账统计按此排除。
 
 #### 它不替代真实网关的测试支付
 
@@ -386,7 +387,7 @@ method = alipay
 #### 统计与对账
 
 mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的就不是真实
-路径），识别靠 `gateway_id → driver = 'mock'`：**收入统计与对账一律排除 mock**。
+路径）；`orders.source = 'mock'`，**收入统计与对账一律排除 mock**。
 
 #### 演示页的自我约束
 
@@ -405,7 +406,7 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 | `generic_json_v1` | 映射解释器（`src/payments/mapping.ts`） | 租户填 `mapping`（可让 AI 生成草稿） |
 | `stripe` / `paypal` | 独立薄 driver：create + query + webhook/回跳页（见 §6.4/§6.5） | 租户填 Secret Key + Webhook Secret；PayPal 还要 Client ID + Webhook ID |
 | `manual` | 无协议，人工确认 | **不作为网关创建项**；走后台「手工开通」 |
-| `mock` | **自带的测试网关**（见 §5.3） | 只需配白名单 + 打开环境开关 |
+| `mock` | **自带的测试网关**（见 §5.3） | 只需配非空白名单 |
 
 **`epay_v1` 就是 `generic_json_v1` + 一份常量**，不是第二套实现 —— 只有一条代码
 路径要测。变种差异（路径、渠道码、`&key=` 拼接）通过面板上的「高级：覆盖映射」
@@ -599,7 +600,7 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
 6. **测试网关（mock）** 全链路：`GET /api/app/v1/payment-methods`、
    `POST /api/app/v1/orders`、`/pay/mock/:code` 演示页、`POST /api/pay/notify/:gatewayId`
    （所有网关共用的回调入口）、订单 `pending → active` + 订阅发放
-7. 闸门集中在 `src/payments/gateways.ts`（status / methods / 白名单 / 环境开关）
+7. 闸门集中在 `src/payments/gateways.ts`（status / methods / 白名单）
 8. **密钥加密**：`src/payments/secret.ts`（AES-GCM + 主密钥 `APP_SECRET`，`v1:` 前缀）
    —— 真实网关的 epay 路径已用加密密钥跑通（下单签名、回调验签、查单复核）
 9. **后台「支付」页**：`src/admin/gateways.ts` + `web/src/pages/GatewaysList.tsx` / `GatewayEditor.tsx`

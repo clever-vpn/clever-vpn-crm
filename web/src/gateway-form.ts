@@ -25,13 +25,12 @@ const CREATABLE_DRIVERS = ["epay_v1", "epay_v2", "generic_json_v1", "stripe", "p
 
 export function visibleDrivers(
   all: readonly DriverOption[],
-  opts: { mockEnabled: boolean; current?: string | null },
+  opts: { current?: string | null },
 ): DriverOption[] {
   const seen = new Set<string>();
   const out: DriverOption[] = [];
   for (const d of all) {
     if (!(CREATABLE_DRIVERS as readonly string[]).includes(d.driver)) continue;
-    if (d.driver === "mock" && !opts.mockEnabled) continue;
     if (seen.has(d.driver)) continue;
     seen.add(d.driver);
     out.push(d);
