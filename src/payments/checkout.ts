@@ -417,7 +417,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
         ? "test"
         : route.gateway.driver === MOCK_DRIVER
           ? "mock"
-          : route.gateway.driver === "paypal" && route.gateway.paypal_env === "sandbox"
+          : route.gateway.driver === "paypal" && route.gateway.paypal_env !== "live"
             ? "sandbox"
             : "purchase",
       input.method,

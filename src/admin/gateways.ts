@@ -224,11 +224,11 @@ function normalize(body: Record<string, unknown>, current?: GatewayRow): Normali
   const endpoint = body.endpoint === undefined ? (current?.endpoint ?? null) : String(body.endpoint ?? "").trim() || null;
   const paypalEnvRaw = driver === "paypal"
     ? (body.paypal_env === undefined
-        ? (current?.paypal_env ?? null)
-        : String(body.paypal_env ?? "").trim() || null)
+        ? (current ? (current.paypal_env ?? null) : "sandbox")
+        : String(body.paypal_env ?? "").trim() || "sandbox")
     : null;
   if (paypalEnvRaw !== null && paypalEnvRaw !== "sandbox" && paypalEnvRaw !== "live") {
-    return "PayPal 环境只能是 sandbox / live（留空 = 跟随部署环境）";
+    return "PayPal 环境必须是 sandbox / live";
   }
 
   const rawChannelCodes = body.channel_codes === undefined
@@ -725,7 +725,7 @@ export async function handleAdminGateways(
     if (current.status === "live") return fail(409, "already_live", "网关已是发布状态");
 
     // publish：三道检查
-    if (current.driver === "paypal" && current.paypal_env === "sandbox" && parseArray(current.allowed_emails).length === 0) {
+    if (current.driver === "paypal" && current.paypal_env !== "live" && parseArray(current.allowed_emails).length === 0) {
       return fail(400, "paypal_sandbox_whitelist_required", "PayPal Sandbox 网关必须配置客户白名单才能发布");
     }
     if (current.driver === "mock") {

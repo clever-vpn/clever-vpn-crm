@@ -297,7 +297,7 @@ describe("PayPal driver", () => {
     expect(liveCalls.calls[0]!.url).toBe("https://api-m.paypal.com/v1/oauth2/token");
   });
 
-  it("生产环境用 live base", async () => {
+  it("未显式设置环境时默认 sandbox（不再跟随 ENVIRONMENT）", async () => {
     const { fetch: fetchImpl, calls } = fakeFetch((url) => {
       if (url.endsWith("/v1/oauth2/token")) return json({ access_token: "tok" });
       return json({ id: "O-1", status: "CREATED", links: [{ rel: "approve", href: "https://paypal.test/x" }] });
@@ -305,6 +305,6 @@ describe("PayPal driver", () => {
     await createPaypalCharge(
       chargeInput("paypal", fetchImpl, { env: { ENVIRONMENT: "production" } as unknown as Env }),
     );
-    expect(calls[0]!.url).toBe("https://api-m.paypal.com/v1/oauth2/token");
+    expect(calls[0]!.url).toBe("https://api-m.sandbox.paypal.com/v1/oauth2/token");
   });
 });

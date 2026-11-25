@@ -130,7 +130,7 @@ describe("pickGateway 路由", () => {
     const rows = [
       gw({ id: 1, driver: "manual", methods: '["transfer"]', priority: 1 }),
       gw({ id: 2, driver: "stripe", methods: '["stripe"]', priority: 10 }),
-      gw({ id: 3, driver: "paypal", methods: '["paypal"]', priority: 20 }),
+      gw({ id: 3, driver: "paypal", methods: '["paypal"]', priority: 20, paypal_env: "live" }),
     ];
     const stripe = pickGateway(rows, "stripe", "a@b.com", env());
     expect(stripe?.gateway.id).toBe(2);
@@ -146,7 +146,7 @@ describe("pickGateway 路由", () => {
 
   it("visibleMethods 包含 Stripe/PayPal，不包含 manual", () => {
     const stripe = gw({ driver: "stripe", methods: '["stripe"]' });
-    const paypal = gw({ driver: "paypal", methods: '["paypal"]' });
+    const paypal = gw({ driver: "paypal", methods: '["paypal"]', paypal_env: "live" });
     const manual = gw({ driver: "manual", methods: '["transfer"]' });
     expect(visibleMethods(stripe, "a@b.com", env())).toEqual(["stripe"]);
     expect(visibleMethods(paypal, "a@b.com", env())).toEqual(["paypal"]);

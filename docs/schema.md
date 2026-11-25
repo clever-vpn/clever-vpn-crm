@@ -106,7 +106,7 @@ CRM 尚未正式发布，历史上有 19 个递增迁移（`0000_baseline` + 18 
 | `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`/`currency`（CRM 账本）、`provider_amount_minor`/`provider_currency`/`fx_rate`（实际扣款与汇率快照）、`source`(purchase/gift/manual/test/mock)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`next_poll_at`/`poll_attempts`、`return_poll_at`（回跳页查询冷却）、`status`、`refunded_minor`、`voided_at`、`provision_*` |
 | `refunds` | 退款**明细**（可多次部分退） | `order_id`、`amount_minor`、`mode`、`operator`、`channel_refund_id`、`status` |
 | `adjustments` | 管理员**调整**（非售卖） | `field`、`before_value`、`after_value`、`reason`、`operator`、`platform_applied_at` |
-| `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`paypal_env`（sandbox/live；仅 PayPal，空 = 跟随部署 ENVIRONMENT）、`methods`、`channel_codes`（账户通道号，实例值）、`mapping`（协议类型）、`priority`、`status`(draft/live/disabled/deleted)、`currency`（网关币种）、`fx_rate`（1 网关币种 = X CNY）、`secret_enc`（API 密钥）、`webhook_enc`（Stripe signing secret / PayPal webhook id）、`test_amount_minor`、`test_create_ok_at`/`test_query_ok_at`/`test_callback_ok_at`、`test_require_callback`、`tested_config_hash`、`last_test_order_id` |
+| `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`paypal_env`（sandbox/live；仅 PayPal，新建默认 sandbox；旧 null 按 sandbox）、`methods`、`channel_codes`（账户通道号，实例值）、`mapping`（协议类型）、`priority`、`status`(draft/live/disabled/deleted)、`currency`（网关币种）、`fx_rate`（1 网关币种 = X CNY）、`secret_enc`（API 密钥）、`webhook_enc`（Stripe signing secret / PayPal webhook id）、`test_amount_minor`、`test_create_ok_at`/`test_query_ok_at`/`test_callback_ok_at`、`test_require_callback`、`tested_config_hash`、`last_test_order_id` |
 
 > **没有 `payment_attempts` 表**：订单本身就是那次尝试的证据。理由见 `payments.md` §2。
 
@@ -159,7 +159,7 @@ source: purchase（自助） | gift（赠送） | manual（后台补单） | tes
 | `0003_instance_channel_codes.sql` | `payment_gateways.channel_codes`（账户通道号）；把 mapping 里的通道号搬到实例，并清理 mapping 中 `channel_codes`/`exclude_variants`/`pay_url_force_https` |
 | `0004_polite_meggan.sql` | 网关测试/费率字段（`fx_rate`、`test_amount_minor`、测试状态、`tested_config_hash`）；订单 provider 金额/币种/汇率 |
 | `0005_right_ser_duncan.sql` | `payment_gateways.test_require_callback`（测试是否必须验证通知） |
-| `0006_vengeful_stryfe.sql` | `payment_gateways.paypal_env`（PayPal 每网关 sandbox/live；空 = 跟随部署 ENVIRONMENT） |
+| `0006_vengeful_stryfe.sql` | `payment_gateways.paypal_env`（PayPal 每网关 sandbox/live；新建默认 sandbox） |
 
 **追加式迁移。** 改表继续 `npm run db:generate` 追加，不要改已提交的历史；一旦打了 `v*` tag，
 `check:migrations` 会以最近一次 release tag 强制不可变。

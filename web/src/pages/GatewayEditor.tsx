@@ -8,6 +8,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Radio,
   Select,
   Switch,
   Space,
@@ -28,7 +29,7 @@ interface FormValues {
   driver: string;
   name: string;
   endpoint?: string;
-  paypal_env?: "" | "sandbox" | "live";
+  paypal_env?: "sandbox" | "live";
   merchant_id?: string;
   secret?: string;
   webhook_secret?: string;
@@ -135,7 +136,7 @@ export default function GatewayEditor({ mode, id }: Props) {
   const endpointWatch: string | undefined = Form.useWatch("endpoint", form);
   const nameWatch: string | undefined = Form.useWatch("name", form);
   const testRequireCallback: boolean = Form.useWatch("test_require_callback", form) ?? false;
-  const paypalEnvWatch: "" | "sandbox" | "live" | undefined = Form.useWatch("paypal_env", form);
+  const paypalEnvWatch: "sandbox" | "live" | undefined = Form.useWatch("paypal_env", form);
   /** 已发布：支付协议字段只读；名称/优先级/白名单/汇率/测试设置仍可改。 */
   const protocolLocked = editing?.status === "live";
   /** 驱动只在草稿可改；已发布/已停用都只能复制。 */
@@ -174,7 +175,7 @@ export default function GatewayEditor({ mode, id }: Props) {
             driver: gw.driver,
             name: gw.name,
             endpoint: gw.endpoint ?? "",
-            paypal_env: gw.paypal_env ?? "",
+            paypal_env: gw.paypal_env === "live" ? "live" : "sandbox",
             merchant_id: gw.merchant_id ?? "",
             secret: "",
             webhook_secret: "",
@@ -216,7 +217,7 @@ export default function GatewayEditor({ mode, id }: Props) {
             driver: "epay_v1",
             name: "",
             endpoint: "",
-            paypal_env: "",
+            paypal_env: "sandbox",
             merchant_id: "",
             secret: "",
             webhook_secret: "",
@@ -416,7 +417,7 @@ export default function GatewayEditor({ mode, id }: Props) {
             driver: v.driver,
             name: v.name,
             endpoint: v.endpoint || null,
-            paypal_env: v.driver === "paypal" ? (v.paypal_env || null) : null,
+            paypal_env: v.driver === "paypal" ? (v.paypal_env ?? "sandbox") : null,
             merchant_id: v.merchant_id || null,
             methods: v.methods,
             channel_codes: v.channel_codes ?? {},
@@ -500,14 +501,12 @@ export default function GatewayEditor({ mode, id }: Props) {
               name="paypal_env"
               extra="Sandbox 不会真实扣款；发布前必须配置非空客户白名单。"
             >
-              <Select
-                disabled={protocolLocked}
-                options={[
-                  { value: "", label: "跟随部署环境（未显式选择）" },
-                  { value: "sandbox", label: "Sandbox（测试）" },
-                  { value: "live", label: "Live（正式收款）" },
-                ]}
-              />
+              <Radio.Group disabled={protocolLocked}>
+                <Space direction="vertical" size={4}>
+                  <Radio value="sandbox">Sandbox（测试，不会真实扣款）</Radio>
+                  <Radio value="live">Live（正式收款，会真实扣款）</Radio>
+                </Space>
+              </Radio.Group>
             </Form.Item>
           )}
           {driver === "paypal" && paypalEnvWatch === "sandbox" && (
@@ -517,6 +516,15 @@ export default function GatewayEditor({ mode, id }: Props) {
               style={{ marginBottom: 12 }}
               message="PayPal Sandbox：不会真实扣款"
               description="只对客户白名单开放；发布前必须配置至少一个测试邮箱。"
+            />
+          )}
+          {driver === "paypal" && paypalEnvWatch === "live" && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="PayPal Live：会真实扣款"
+              description="请确认已用 Sandbox 完成测试，再切换为 Live。"
             />
           )}
 
