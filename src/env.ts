@@ -100,6 +100,24 @@ export interface Env {
   TURNSTILE_SECRET?: string;
 
   /**
+   * AI 配置助手（`docs/protocols/ai.md` §8）：走 **Cloudflare AI Gateway**。
+   *
+   * 与 site-studio 同一个模式：AI binding 在账号内预认证，厂商 key 由网关
+   * **BYOK** 注入 ⇒ Worker 里没有 DeepSeek key，也没有 Cloudflare token。
+   * 模型固定 `deepseek/deepseek-flash`；每条请求带 `metadata.tenant`，cf-api 按
+   * 网关日志聚合计费（契约 `usage.md` §9）。
+   */
+  AI?: Ai;
+  /** AI Gateway 名称（我们的是 `studio`）。空 = 不启用 AI 配置助手。 */
+  CLOUDFLARE_GATEWAY_ID?: string;
+  /**
+   * 可选模型覆盖；空 = `deepseek/deepseek-flash`。
+   * 本地网关没有 flash（或只有 `deepseek-chat` 的 BYOK）时可显式改成
+   * `deepseek/deepseek-chat` 做联调，**不改变生产默认**。
+   */
+  CLOUDFLARE_AI_MODEL?: string;
+
+  /**
    * **测试网关（`driver = 'mock'`）的总开关**，默认关闭（`docs/payments.md` §5.3）。
    *
    * 为 `"true"` 时，mock 网关才能创建/发布并参与路由。

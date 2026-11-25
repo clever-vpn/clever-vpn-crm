@@ -13,7 +13,8 @@
  *
  * 必需：`D1_DATABASE_ID`、`CRM_TENANT_ID`
  * 可选：`WORKER_NAME`、`D1_NAME`、`CF_API_BASE`、`CRM_CODE_VERSION`、
- *       `CRM_CONTRACT_VERSION`、`STUDIO_SITE_URL`、`STUDIO_APP_URL`
+ *       `CRM_CONTRACT_VERSION`、`STUDIO_SITE_URL`、`STUDIO_APP_URL`、
+ *       `CLOUDFLARE_GATEWAY_ID`（AI 配置助手用的 AI Gateway，空 = 不开放）
  *
  * 这个文件里**没有也不应该有**任何密钥；token 一律走 `wrangler secret put`。
  */
@@ -80,7 +81,12 @@ setString("CF_API_BASE", value("CF_API_BASE"));
 // studio 票据的跳转落点（GitHub Actions Variables；空值表示该产品还没上线）
 setString("STUDIO_SITE_URL", process.env.STUDIO_SITE_URL ?? "");
 setString("STUDIO_APP_URL", process.env.STUDIO_APP_URL ?? "");
+// AI 配置助手：只渲染网关名（AI binding 已在 wrangler.jsonc）。空 = 不开放。
+setString("CLOUDFLARE_GATEWAY_ID", process.env.CLOUDFLARE_GATEWAY_ID ?? "");
+// 可选模型覆盖；空 = deepseek/deepseek-flash
+setString("CLOUDFLARE_AI_MODEL", process.env.CLOUDFLARE_AI_MODEL ?? "");
 setString("CRM_CODE_VERSION", value("CRM_CODE_VERSION"));
+
 setString("CRM_CONTRACT_VERSION", value("CRM_CONTRACT_VERSION"));
 
 writeFileSync(OUT, source);

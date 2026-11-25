@@ -112,6 +112,8 @@ export default function GatewayEditor({ mode, id }: Props) {
   const [warningsOpen, setWarningsOpen] = useState(false);
   const warningsConfirmedRef = useRef(false);
   const [dirty, setDirty] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [pendingNavHref, setPendingNavHref] = useState<string | null>(null);
   const dirtyRef = useRef(false);
   const hydratingRef = useRef(true);
   const [form] = Form.useForm<FormValues>();
@@ -247,9 +249,11 @@ export default function GatewayEditor({ mode, id }: Props) {
   }, [mode, id]);
 
   useEffect(() => {
-    return setNavGuard(() => {
+    return setNavGuard((href) => {
       if (!dirtyRef.current) return true;
-      return window.confirm("有未保存的修改，确定离开？");
+      setPendingNavHref(href);
+      setLeaveOpen(true);
+      return false;
     });
   }, []);
 
@@ -264,10 +268,21 @@ export default function GatewayEditor({ mode, id }: Props) {
   }, [dirty]);
 
   function cancel(): void {
-    if (dirtyRef.current && !window.confirm("有未保存的修改，确定离开？")) return;
+    if (dirtyRef.current) {
+      setPendingNavHref(GATEWAY_LIST_PATH);
+      setLeaveOpen(true);
+      return;
+    }
+    navigate(GATEWAY_LIST_PATH);
+  }
+
+  function leaveWithoutSaving(): void {
+    const href = pendingNavHref ?? GATEWAY_LIST_PATH;
     dirtyRef.current = false;
     setDirty(false);
-    navigate(GATEWAY_LIST_PATH);
+    setLeaveOpen(false);
+    setPendingNavHref(null);
+    navigate(href);
   }
 
   function onDriverChange(next: string): void {
@@ -710,6 +725,7 @@ export default function GatewayEditor({ mode, id }: Props) {
                           }}
                           attempted={mappingAttempted}
                           gatewayName={nameWatch ?? editing?.name ?? ""}
+                          aiReady={Boolean(data?.ai_ready)}
                         />
                       </>
                     ),
@@ -719,6 +735,22 @@ export default function GatewayEditor({ mode, id }: Props) {
           ]}
         />
       </div>
+      <Modal
+        open={leaveOpen}
+        title="离开当前编辑？"
+        okText="放弃修改"
+        cancelText="继续编辑"
+        okButtonProps={{ danger: true }}
+        onOk={leaveWithoutSaving}
+        onCancel={() => {
+          setLeaveOpen(false);
+          setPendingNavHref(null);
+        }}
+      >
+        <Typography.Paragraph style={{ margin: 0 }}>
+          有未保存的修改。离开后这些修改不会保存。
+        </Typography.Paragraph>
+      </Modal>
       <Modal
         open={warningsOpen}
         title="保存前核对"

@@ -18,6 +18,7 @@ import { decryptSecret, encryptSecret, secretKeyConfigured } from "../payments/s
 import { DRIVERS, validateMapping, type GatewayMapping } from "../payments/mapping";
 import { EPAY_V1_MAPPING } from "../payments/builtin/epay";
 import { isMockEnabled } from "../payments/gateways";
+import { aiReady } from "../payments/ai";
 import { pollOrderOnce } from "../payments/poll";
 import { MOCK_DRIVER } from "../payments/mock";
 
@@ -317,6 +318,7 @@ export async function handleAdminGateways(
       gateways: (rows.results ?? []).map(view),
       mock_enabled: isMockEnabled(env),
       secret_key_ready: secretKeyConfigured(env),
+      ai_ready: aiReady(env),
       drivers: ADMIN_DRIVERS.map((d) => ({ driver: d, methods: DRIVER_METHODS[d] ?? [] })),
       all_methods: ALL_METHODS,
     });

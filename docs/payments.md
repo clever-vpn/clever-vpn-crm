@@ -30,7 +30,7 @@
 | `driver` | App 里看到 | 租户要做什么 |
 |---|---|---|
 | `epay_v1` | 「支付宝」「微信支付」—— **聚合商/易支付站点的名字永远不出现** | 填 endpoint / pid / key，勾方式 |
-| `generic_json_v1` | 同上（由 `methods` 决定） | 用结构化表单填映射（见 §4.0；文档→草稿的 AI 助手见 §8 待做） |
+| `generic_json_v1` | 同上（由 `methods` 决定） | 用结构化表单填映射（见 §4.0；文档→草稿的 AI 助手见 §8） |
 | `stripe` / `paypal` | 「Stripe」「PayPal」—— 品牌即方式，**不再细分卡种** | 填 Secret Key（PayPal 还要 Client ID） |
 | `manual` | 「银行转账」+ 后台人工确认 | **不作为网关创建项**；线下到账走「客户 → 手工开通」 |
 
@@ -616,6 +616,18 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
     （create + query；PayPal capture；见 §6.4）
 12. **Webhook + 回跳页**：`src/payments/webhook.ts`（验签→查单）、
     `src/payments/return.ts` + `return-token.ts`（客户端 refresh / CRM 兜底页；见 §6.5）
+13. **AI 配置助手**：`src/payments/ai.ts`（prompt + AI binding→AI Gateway 调用 +
+    envelope/`validateMapping` 校验）+ `src/admin/gateway-ai.ts`
+    （`POST /api/admin/gateways/ai-draft`，会话 + 每小时 20 次限流）+ 映射编辑器内的
+    「粘贴 + 导入文件/从 URL 导入 → 生成配置」面板（支持 .txt/.md/.json/.html/.mhtml，
+    本地转文本；URL 抓取公开同源页；文件和 URL 页面进入同一个附件集合，
+    统一勾选/移除，不写入 textarea，合并后提交；入口是二态按钮；详情/失败可复制
+    诊断信息给技术支持，不含文档全文/表单密钥）。服务端还有 completeness gate（规则+evidence 回查）：
+    `soft_gaps` 警告未证实项，`insufficient` 禁用应用。只产 v2 草稿，不落库、不保存、不发布；
+    模型默认 `deepseek/deepseek-flash`（`CLOUDFLARE_AI_MODEL` 可覆盖），厂商 key 在网关 BYOK；每条请求带
+    `metadata.tenant`（cf-api 计费键）与 `product=crm`。未配 AI binding /
+    `CLOUDFLARE_GATEWAY_ID` 时 `ai_unavailable`。
+
 
 **主动查单**（`src/payments/poll.ts`，v20）：
 
@@ -642,9 +654,8 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
 待做：
 
 1. 真实网关的测试支付（`draft → live` 闸门：创建 + 查单通过；开启回调验证时还需真实回调到账）
-2. AI 生成映射草稿
-3. 退款走网关（`refunds.channel_refund_id`）
-4. Webhook 的自动注册/轮换（目前仍需在 Stripe/PayPal 后台手工配置）
+2. 退款走网关（`refunds.channel_refund_id`）
+3. Webhook 的自动注册/轮换（目前仍需在 Stripe/PayPal 后台手工配置）
 
 ## 9. 参考
 
@@ -660,6 +671,9 @@ secret / PayPal 的 webhook id 进 `webhook_enc`，后台只回 `has_webhook`，
   <https://docs.xarr.cn/merchant/api/epayn.html>
 - **亿宏数码 API 文档** —— 本仓库 `clever-vpn-cf-api/docs/亿宏数码API接口文档.html`
   （回调 `status=1` / 查单 `status=3` 两套语义的出处）
+-  https://www.yimapay.com/docs/api.html
+-  https://www.xxpay.vip/docs/detail_176.html
+-  https://pay.mzfpay.com/doc
 
 > 注意：这类文档描述的是**聚合商自己的网关**，各家下游的 `submit.php` / `mapi.php`
 > 仍可能有细微差异（路径、渠道码、`&key=` 拼接）。所以 `epay_v1` 必须允许"高级覆盖"，

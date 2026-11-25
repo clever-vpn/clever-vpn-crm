@@ -28,7 +28,8 @@
     "test:unit": "vitest run",
     "test:workers": "vitest run --config vitest.workers.config.ts",
     "site:template:local": "node scripts/seed-site-template-local.mjs",
-    "saas:site": "node scripts/render-site-config.mjs"
+    "saas:site": "node scripts/render-site-config.mjs",
+    "ai:eval": "AI_EVAL=1 vitest run test/payments/ai-eval.test.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.7",

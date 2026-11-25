@@ -64,6 +64,8 @@ Variables（明文）：
 | `EMAIL_FROM` | – | 发信人地址（如 `noreply@your-domain.com`，域名需验证）；**与传输一起才算"邮件就绪"** |
 | `STUDIO_SITE_URL` | 站点必填 | site-studio 的地址（如 `https://site-studio.clever-vpn.org` 或你自己的）。**不配就没有站点上线路径** —— 后台「打开设计器」会报 `studio_not_configured` |
 | `SITE_URL` | 站点必填 | 站点对外地址（`site-serve` 绑的域名）。只用于给租户一个「点开看线上」的链接；不配就是不给链接，**绝不拿 CRM 的 origin 冒充** |
+| `CLOUDFLARE_GATEWAY_ID` | – | 可选：AI 配置助手用的 AI Gateway 名称（空 = 不启用，见 §2.6） |
+| `CLOUDFLARE_AI_MODEL` | – | 可选：模型覆盖；空 = `deepseek/deepseek-flash` |
 
 > `CLOUDFLARE_API_TOKEN` 建议单独建一把、只给这个仓库用；它是"能改你 Cloudflare
 > 账号"的密钥，不要复用主账号 token。
@@ -102,6 +104,42 @@ Variables（明文）：
 
 > 合规提醒：Cloudflare Email Service **只用于交易类邮件**。不要拿它发促销群发
 > （"全场 8 折""限时抢购"），那会打掉发信域名信誉，**连带验证码登录一起挂**。
+
+## 2.6 AI 配置助手（可选）
+
+后台「接口配置」里的「AI 配置助手」可以把厂商接口文档生成 v2 模板草稿。
+**默认关闭**：与 site-studio 同一套 —— AI binding → Cloudflare **AI Gateway**，
+厂商 key 只在网关的 **BYOK**，Worker 里没有任何厂商密钥。
+
+开启步骤：
+
+1. Cloudflare 控制台 → **AI → AI Gateway**，建一个网关（名字自取，如 `crm`）；
+2. 在该网关里加 **DeepSeek BYOK key**，别名用 `default`
+   （binding 路径只读 `default` 别名）；
+3. 仓库 → Settings → Variables 设 `CLOUDFLARE_GATEWAY_ID` = 网关名；
+4. 重新跑一次 deploy（`ai` binding 已在 `wrangler.jsonc`；deploy 会把
+   `CLOUDFLARE_GATEWAY_ID` 渲染成你设的 Variable，不设就是空 = 不启用）。
+   本地 `npm run dev:local` 默认连线上网关 `studio`，需要先 `wrangler login`；
+   自部署测试自己的网关时用 `CLOUDFLARE_GATEWAY_ID=<你的网关> npm run dev:local`。
+
+模型默认 `deepseek/deepseek-flash`（`CLOUDFLARE_AI_MODEL` 可覆盖），走 **provider-native +
+网关 BYOK**，用你自己的 DeepSeek key 即可，不需要 Cloudflare credits。每条请求都带 `metadata`：
+
+| 键 | 值 |
+|---|---|
+| `tenant` | `CRM_TENANT_ID`（必须是 cf-api 的数字租户 ID；缺了/非数字则不开放） |
+| `product` | `crm` |
+| `task` | `gateway-mapping` |
+
+cf-api 按 AI Gateway 日志里的 `metadata.tenant` 聚合 AI 用量（契约 `usage.md` §9），
+所以这个键**不能省**。请求还带 `cf-aig-collect-log-payload: false`，网关日志不存
+prompt / response。
+
+- 不配 `CLOUDFLARE_GATEWAY_ID` ⇒ 服务端 `ai_unavailable`，面板只显示「未配置」，
+  模板导入/手填不受影响；
+- 生成时会把**你粘贴的文档正文**经网关发给 DeepSeek；**别把凭据、商户号贴进文档**；
+- 每小时最多生成 20 次；模型/上游失败只回稳定错误码，不回显厂商报文；
+- AI 只产草稿：不自动保存、不自动发布，应用后仍要完成「创建 + 查单」测试（开启回调验证时还要真实回调）。
 
 ## 3. 跑一次 deploy
 

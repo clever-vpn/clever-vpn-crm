@@ -18,6 +18,10 @@ export default defineConfig({
     cloudflareTest(async () => ({
       // 和 wrangler 用同一份配置：main / compatibility / bindings 全部一致
       wrangler: { configPath: "./wrangler.jsonc" },
+      // wrangler.jsonc 有 AI binding（本地 dev 要连线上网关）。Miniflare 没有 AI 模拟，
+      // 默认 true 会为它开远程代理并在非交互环境要求 CLOUDFLARE_API_TOKEN，
+      // 导致所有 workers 测试起不来。测试里需要 AI 的用例自己注入 `env.AI` 假 binding。
+      remoteBindings: false,
       miniflare: {
         // 站点发布要用：HOSTS（指针 site:<id>:active）+ SITES（产物）。
         // SITES 已在 wrangler.jsonc 里声明；HOSTS 单租户运行时不需要，测试里补上。

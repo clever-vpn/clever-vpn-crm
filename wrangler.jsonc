@@ -16,6 +16,15 @@
   "observability": {
     "enabled": true
   },
+  // AI binding：AI 配置助手走 AI Gateway（与 site-studio 同一个模式）。
+  // binding 在账号内预认证、厂商 key 由网关 BYOK 注入 ⇒ Worker 里没有任何厂商密钥。
+  // **本地 `wrangler dev` 没有模拟，恒为 remote**：用 wrangler CLI 的登录身份
+  // （`wrangler login`，scope 需含 `ai (write)`）或 CLOUDFLARE_API_TOKEN 连线上网关。
+  // 这正是"测试环境能测 AI"的路径；不登录时 `wrangler dev` 起不来。
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
   // **只有一个时钟**：`*/2` 是"队列泵的心跳"，不是"所有活每 2 分钟干一遍"。
   // 具体分频在 `src/index.ts` 的 `scheduled()` 里：
   //   门 B（距上次 ≥55 分钟，自愈门）→ 补落账 / 周期结算 / 到期礼包探测，独占该 tick
@@ -69,6 +78,14 @@
     "ENVIRONMENT": "development",
     // 官网（独立静态站）地址。留空则根路径显示一句部署提示。
     // 跨域调用 /api/app/v1 不需要任何白名单：CORS 是浏览器规矩，不是信任名单。
-    "SITE_URL": ""
+    "SITE_URL": "",
+    // AI 配置助手：AI Gateway 名称（我们的是 `studio`）。
+    // 本地测试想分开账/日志可设 `CLOUDFLARE_GATEWAY_ID=studio-dev`（需同账号建网关 + BYOK）；
+    // 空 = 不启用（面板显示"未配置"，模板导入/手填不受影响）。
+    // 模型固定 deepseek/deepseek-flash，厂商 key 只在网关 BYOK（docs/protocols/ai.md §8）。
+    "CLOUDFLARE_GATEWAY_ID": "studio",
+    // 可选模型覆盖；空 = deepseek/deepseek-flash。
+    // 本地网关若没有 flash（或只有 chat 的 BYOK），可设 deepseek/deepseek-chat 联调。
+    "CLOUDFLARE_AI_MODEL": ""
   }
 }
