@@ -73,6 +73,7 @@ function gateway(): GatewayRow {
     driver: "epay_v2",
     name: "易支付V2",
     endpoint: "https://pay.test/xpay/epayn",
+    paypal_env: null,
     merchant_id: "10001",
     secret_enc: null,
     webhook_enc: null,

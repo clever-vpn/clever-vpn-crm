@@ -9,7 +9,7 @@
  *
  * webhook 验签在 `payments/webhook.ts`（官方 verify 接口），这里只负责
  * create + query；事件本身不直接判已付，仍由 `pollOrderOnce` 复核。
- * 环境决定 sandbox / live：`ENVIRONMENT === "production"` 用 live，否则 sandbox。
+ * 环境优先取网关的 `paypal_env`（sandbox/live）；空时回退到部署 `ENVIRONMENT`。
  */
 
 import {
@@ -38,10 +38,19 @@ interface PayPalOrder {
   }>;
 }
 
-function apiBase(input: { env: { ENVIRONMENT?: string } }): string {
-  return String(input.env.ENVIRONMENT ?? "").trim() === "production"
+export function paypalBaseFor(
+  env: { ENVIRONMENT?: string },
+  paypalEnv?: string | null,
+): string {
+  if (paypalEnv === "sandbox") return PAYPAL_SANDBOX_BASE;
+  if (paypalEnv === "live") return PAYPAL_LIVE_BASE;
+  return String(env.ENVIRONMENT ?? "").trim() === "production"
     ? PAYPAL_LIVE_BASE
     : PAYPAL_SANDBOX_BASE;
+}
+
+function apiBase(input: { env: { ENVIRONMENT?: string }; gateway?: { paypal_env?: string | null } }): string {
+  return paypalBaseFor(input.env, input.gateway?.paypal_env);
 }
 
 function rejected(status: number, text: string): { ok: false; status: number; code: string; message: string } {
@@ -263,6 +272,7 @@ export interface PaypalWebhookInput {
   clientId: string;
   secret: string;
   webhookId: string;
+  paypalEnv?: string | null;
   env: { ENVIRONMENT?: string };
   fetch?: typeof fetch;
 }
@@ -285,7 +295,7 @@ export async function verifyPaypalWebhook(
     return { ok: false, message: "webhook body 不是 JSON" };
   }
 
-  const base = apiBase(input);
+  const base = paypalBaseFor(input.env, input.paypalEnv);
   const auth = await getAccessToken(
     { merchantId: input.clientId, secret: input.secret, env: input.env, fetch: input.fetch },
     base,

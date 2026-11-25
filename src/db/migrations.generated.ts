@@ -6,7 +6,7 @@
  * `d1_migrations` 台账里的文件名集合必须与 `files[].name` 集合相等 ——
  * 缺就 `batch` 补上，多就是"库比代码新"，拒绝服务。
  *
- * `schemaVersion`（sha256:41cc5b5779dca6de）是全部 `(name, sql)` 的内容指纹，
+ * `schemaVersion`（sha256:335521fe41383c51）是全部 `(name, sql)` 的内容指纹，
  * 只用于日志与排障 —— **不参与门禁判断**（判据是文件名集合，理由见 ADR
  * `0007-tenant-migration-execution.md`）。
  */
@@ -23,7 +23,7 @@ export const MIGRATION_BUNDLE: {
   readonly schemaVersion: string;
   readonly files: readonly EmbeddedMigrationFile[];
 } = {
-  "schemaVersion": "sha256:41cc5b5779dca6de",
+  "schemaVersion": "sha256:335521fe41383c51",
   "files": [
     {
       "name": "0000_baseline.sql",
@@ -149,6 +149,13 @@ export const MIGRATION_BUNDLE: {
       "sha256": "b448055afd25dc99e0419df39449415109c4428acf0a5bcebe80a0966ed05e9e",
       "statements": [
         "ALTER TABLE `payment_gateways` ADD `test_require_callback` integer DEFAULT 0 NOT NULL;"
+      ]
+    },
+    {
+      "name": "0006_vengeful_stryfe.sql",
+      "sha256": "8001b2754062a478c10cf6566f96936f5d27948624eb274223c2f8c6aaec0737",
+      "statements": [
+        "ALTER TABLE `payment_gateways` ADD `paypal_env` text;"
       ]
     }
   ]

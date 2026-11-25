@@ -956,6 +956,11 @@ export const paymentGateways = sqliteTable(
     name: text("name").notNull(),
     /** 收银台 / API 根地址 */
     endpoint: text("endpoint"),
+    /**
+     * PayPal 专属：sandbox | live；null = 跟随部署 ENVIRONMENT。
+     * 同一部署内可以同时存在 sandbox 与 live 两条 PayPal 网关。
+     */
+    paypal_env: text("paypal_env"),
     /** 商户号 / app_id / client_id */
     merchant_id: text("merchant_id"),
     /**

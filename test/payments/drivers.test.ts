@@ -25,6 +25,7 @@ function gateway(driver: string, merchantId: string | null = null): GatewayRow {
     driver,
     name: driver,
     endpoint: null,
+    paypal_env: null,
     merchant_id: merchantId,
     secret_enc: null,
     webhook_enc: null,
@@ -264,6 +265,36 @@ describe("PayPal driver", () => {
     expect(result.status).toBe("unpaid");
     if (result.status === "error") return;
     expect(result.amountMinor).toBe(1500);
+  });
+
+  it("网关级 PayPal 环境优先于部署 ENVIRONMENT", async () => {
+    const sandbox = gateway("paypal", "client-id");
+    sandbox.paypal_env = "sandbox";
+    const sandboxCalls = fakeFetch((url) => {
+      if (url.endsWith("/v1/oauth2/token")) return json({ access_token: "tok" });
+      return json({ id: "O-1", status: "CREATED", links: [{ rel: "approve", href: "https://paypal.test/x" }] });
+    });
+    await createPaypalCharge(
+      chargeInput("paypal", sandboxCalls.fetch, {
+        gateway: sandbox,
+        env: { ENVIRONMENT: "production" } as unknown as Env,
+      }),
+    );
+    expect(sandboxCalls.calls[0]!.url).toBe("https://api-m.sandbox.paypal.com/v1/oauth2/token");
+
+    const live = gateway("paypal", "client-id");
+    live.paypal_env = "live";
+    const liveCalls = fakeFetch((url) => {
+      if (url.endsWith("/v1/oauth2/token")) return json({ access_token: "tok" });
+      return json({ id: "O-1", status: "CREATED", links: [{ rel: "approve", href: "https://paypal.test/x" }] });
+    });
+    await createPaypalCharge(
+      chargeInput("paypal", liveCalls.fetch, {
+        gateway: live,
+        env: { ENVIRONMENT: "development" } as unknown as Env,
+      }),
+    );
+    expect(liveCalls.calls[0]!.url).toBe("https://api-m.paypal.com/v1/oauth2/token");
   });
 
   it("生产环境用 live base", async () => {

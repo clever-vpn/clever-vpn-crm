@@ -43,6 +43,13 @@
       "when": 1795495278830,
       "tag": "0005_right_ser_duncan",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795585331334,
+      "tag": "0006_vengeful_stryfe",
+      "breakpoints": true
     }
   ]
 }

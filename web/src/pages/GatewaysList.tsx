@@ -267,6 +267,12 @@ export default function GatewaysList() {
               <Space direction="vertical" size={4} style={{ fontSize: 12 }}>
                 <span>网关地址：{gw.endpoint || "—"}</span>
                 <span>{gw.driver === "paypal" ? "Client ID" : "商户号"}：{gw.merchant_id || "—"}</span>
+                {gw.driver === "paypal" && (
+                  <span>
+                    PayPal 环境：
+                    {gw.paypal_env === "sandbox" ? "Sandbox（测试）" : gw.paypal_env === "live" ? "Live（正式）" : "跟随部署环境"}
+                  </span>
+                )}
                 {(gw.driver === "stripe" || gw.driver === "paypal") && (
                   <span>Webhook：{gw.has_webhook ? "已配置" : "未配置"}</span>
                 )}

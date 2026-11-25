@@ -30,6 +30,7 @@ function gw(over: Partial<GatewayRow> = {}): GatewayRow {
     driver: "epay_v1",
     name: "支付宝-主号",
     endpoint: "https://pay.example.com",
+    paypal_env: null,
     merchant_id: "M1",
     secret_enc: null,
     webhook_enc: null,
@@ -68,6 +69,15 @@ describe("测试网关的第二道闸门：allowed_emails", () => {
     const e = env();
     expect(gatewayVisibleTo(gw({ driver: "mock", allowed_emails: null }), "a@b.com", e)).toBe(false);
     expect(gatewayVisibleTo(gw({ driver: "mock", allowed_emails: "[]" }), "a@b.com", e)).toBe(false);
+  });
+});
+
+describe("PayPal Sandbox 的白名单", () => {
+  const g = gw({ driver: "paypal", methods: '["paypal"]', paypal_env: "sandbox", allowed_emails: '["sandbox@b.com"]' });
+  it("Sandbox 只对白名单可见；空名单不路由", () => {
+    expect(gatewayVisibleTo(g, "sandbox@b.com", env())).toBe(true);
+    expect(gatewayVisibleTo(g, "real@b.com", env())).toBe(false);
+    expect(gatewayVisibleTo({ ...g, allowed_emails: null }, "sandbox@b.com", env())).toBe(false);
   });
 });
 

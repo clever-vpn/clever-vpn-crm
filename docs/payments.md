@@ -137,7 +137,7 @@ draft ──创建+查单测试──▶ live ──停用──▶ disabled
   `orders.gateway_id`、在途订单的查单、服务端迟到的 webhook、审计都还引用它；
 - 删除后如换新网关，Stripe/PayPal 后台的 webhook 地址要同步删除或改到新网关；
 - `live` 可以测试、停用、删除；**驱动在发布后锁定**；
-- `live` 的**支付协议字段只读**（endpoint/商户号/密钥/webhook/支付方式/通道号/mapping/币种），
+- `live` 的**支付协议字段只读**（endpoint/商户号/密钥/webhook/支付方式/通道号/mapping/币种/PayPal 环境），
   要改必须先停用；名称/优先级/白名单/汇率/测试设置可直接改，不重测；
   改驱动应新建网关；
 - 新建 / 停用后的网关可以「复制」为新的草稿：复制完整配置和密钥，但**不继承测试状态**。
@@ -376,6 +376,7 @@ method = alipay
 正式环境也可以使用 mock：它是租户验证“套餐购买 → 发权益 → App 生效”的产品能力，
 不再需要平台环境开关。租户管理员自己负责白名单里加谁；这和自己手工开通订阅是同一权限级。
 mock 订单会在 `orders.source` 标记为 `mock`，收入/对账统计按此排除。
+PayPal Sandbox 订单标记为 `sandbox`，同样排除收入统计。
 
 #### 它不替代真实网关的测试支付
 
@@ -479,7 +480,8 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 | 收银台 | `session.url` | `approve` 链接 |
 | 查单 | `GET /v1/checkout/sessions/{id}`；`payment_status=paid` 才认 | `GET /v2/checkout/orders/{id}`；`APPROVED` 时**主动 capture**，`COMPLETED` 才认 |
 | 权威交易号 | session id | capture id |
-| 环境 | key 决定 test/live（同一个 API 根） | `ENVIRONMENT=production` → live；否则 sandbox |
+| 环境 | key 决定 test/live（同一个 API 根） | `paypal_env=sandbox/live`；空 = 跟随部署 `ENVIRONMENT`；create/query/webhook 必须同一环境 |
+| Sandbox 安全 | — | **必须配置非空客户白名单**才能发布；不会向普通访客开放 |
 
 几个明确取舍：
 
@@ -493,6 +495,8 @@ mock 订单的 `payment_method` **仍然是** `alipay` / `wechat`（否则测的
 - **金额**：Stripe 传最小单位，PayPal 传两位小数；本轮只覆盖两位小数币种（JPY 等零小数
   币种不做）。测试金额按网关 `test_amount_minor` 配置，默认 1.00（网关币种）；低于厂商最低限额时测试失败。
 - **退款**：未做；仍走后台内部退款流程。
+- **PayPal Sandbox**：单独一条网关，使用 sandbox 的 Client ID / Secret / Webhook ID；
+  和 live 可以同时存在。环境变更属于支付协议变更，已发布网关必须先停用再重测发布。
 
 ### 6.5 Webhook 与回跳页（即时确认）
 

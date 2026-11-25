@@ -189,7 +189,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   const recent = await env.DB.prepare(
     `SELECT code, pay_url, amount_minor, currency, expires_at FROM orders
       WHERE customer_id = ? AND plan_id = ? AND payment_method = ? AND status = 'pending'
-        AND source IN ('purchase', 'mock')
+        AND source IN ('purchase', 'mock', 'sandbox')
         AND amount_minor = ?
         AND pay_url IS NOT NULL AND created_at >= ? AND expires_at > ?
       ORDER BY id DESC LIMIT 1`,
@@ -413,7 +413,13 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
       input.promotionId ?? null,
       input.codeId ?? null,
       input.entry ?? null,
-      input.testGatewayId ? "test" : route.gateway.driver === MOCK_DRIVER ? "mock" : "purchase",
+      input.testGatewayId
+        ? "test"
+        : route.gateway.driver === MOCK_DRIVER
+          ? "mock"
+          : route.gateway.driver === "paypal" && route.gateway.paypal_env === "sandbox"
+            ? "sandbox"
+            : "purchase",
       input.method,
       route.gateway.id,
       orderCode,
