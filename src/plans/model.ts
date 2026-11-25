@@ -79,6 +79,8 @@ export interface ControlParams {
   up_mbps: number | null;
   down_mbps: number | null;
   licence_limit: number;
+  /** 线路权益：`null` = 全部线路；数组 = 只允许这些 id（`plans.line_ids` 的落账形态） */
+  line_ids: number[] | null;
 }
 
 // ---- 校验 ----
@@ -285,6 +287,7 @@ export function addDaysIso(now: Date, days: number): string {
  * | traffic | today + validity_days（null = 永久） | traffic_gb |
  *
  * `quota` **恒为 null**：重置权在 CRM，平台不参与。
+ * `line_ids` 两种 kind 都带：空数组 = 全部线路（落账写成 `null`）。
  */
 export function planToControlParams(plan: Plan, now: Date = new Date()): ControlParams {
   if (plan.kind === "period") {
@@ -295,6 +298,7 @@ export function planToControlParams(plan: Plan, now: Date = new Date()): Control
       up_mbps: plan.up_mbps,
       down_mbps: plan.down_mbps,
       licence_limit: plan.licence_limit,
+      line_ids: plan.line_ids.length ? plan.line_ids : null,
     };
   }
   if (plan.kind === "traffic") {
@@ -305,6 +309,7 @@ export function planToControlParams(plan: Plan, now: Date = new Date()): Control
       up_mbps: plan.up_mbps,
       down_mbps: plan.down_mbps,
       licence_limit: plan.licence_limit,
+      line_ids: plan.line_ids.length ? plan.line_ids : null,
     };
   }
   throw new Error(`addon 不是主订阅，不能直接落账（plan ${plan.id}）`);

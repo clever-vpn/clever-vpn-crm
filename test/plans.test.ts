@@ -166,6 +166,8 @@ describe("planToControlParams", () => {
       up_mbps: null,
       down_mbps: null,
       licence_limit: 1,
+      // 线路权益：空 = 全部线路（落账写 null）
+      line_ids: null,
     });
   });
 
@@ -173,6 +175,11 @@ describe("planToControlParams", () => {
     const c = planToControlParams(makePlan({ monthly_quota_gb: null }), NOW);
     expect(c.traffic_balance).toBeNull();
     expect(c.quota).toBeNull();
+  });
+
+  it("线路权益随套餐落账：有线路 ⇒ 数组；空 ⇒ null（= 全部）", () => {
+    expect(planToControlParams(makePlan({ line_ids: [1, 2] }), NOW).line_ids).toEqual([1, 2]);
+    expect(planToControlParams(makePlan({ line_ids: [] }), NOW).line_ids).toBeNull();
   });
 
   it("traffic 永久包：expire_date = null", () => {

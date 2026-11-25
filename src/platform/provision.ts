@@ -9,6 +9,8 @@
  *      客户付完钱就会立刻断网。
  *   3. `quota` **恒为 NULL**：月度重置归 CRM（按用户购买锚点），平台只在 `quota`
  *      非空时才会按月重置，那是"记账自然月"，会给 10 号买的用户少半个月。
+ *   4. `line_ids` 是**线路权益**，与到期日/流量同级：绝对值投影（`[]` → `null` = 全部），
+ *      平台据此过滤 `key-lines` 并在发放许可时校验。
  *
  * 幂等：`auth_id = crm:<customer_id>`，跨换档不变；重复调用只会 PATCH 或复用既有客户。
  */
@@ -52,6 +54,8 @@ export function controlParams(sub: Subscription): Record<string, unknown> {
     // 平台自带的月度重置要关掉：重置权在 CRM
     quota: null,
     traffic_balance: trafficBytes(sub),
+    // 线路权益（绝对值投影）：空 = 全部线路（含以后新增的）；有值 = 只允许这些 id
+    line_ids: sub.line_ids.length ? sub.line_ids : null,
   };
 }
 

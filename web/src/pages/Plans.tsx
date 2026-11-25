@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, ApiError, type PlanDraft, type PlanView } from "../api";
+import { api, ApiError, type PlanDraft, type PlanView, type PlatformLine } from "../api";
 
 /** 网页收银台能勾的支付方式（与 `payment_methods` 的 id 一一对应） */
 const WEB_METHODS = [
@@ -70,6 +70,9 @@ export default function Plans() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** cf-api 线路目录（读取失败不影响保存：仍可保留/移除原有选择） */
+  const [lines, setLines] = useState<PlatformLine[] | null>(null);
+  const [linesError, setLinesError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -83,6 +86,18 @@ export default function Plans() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await api.platformLines();
+        setLines(r.lines);
+        setLinesError(null);
+      } catch (e) {
+        setLinesError(e instanceof ApiError ? e.message : "读不到线路目录");
+      }
+    })();
+  }, []);
 
   async function run(action: () => Promise<unknown>, okMessage: string) {
     setBusy(true);
@@ -255,6 +270,8 @@ export default function Plans() {
           draft={draft}
           existing={plans.some((p) => p.plan_id === draft.id)}
           busy={busy}
+          lines={lines}
+          linesError={linesError}
           onChange={setDraft}
           onCancel={() => setDraft(null)}
           onSave={save}
@@ -269,6 +286,8 @@ function PlanForm({
   draft,
   existing,
   busy,
+  lines,
+  linesError,
   onChange,
   onCancel,
   onSave,
@@ -277,6 +296,10 @@ function PlanForm({
   /** true = 改已有套餐（走 PATCH，只影响之后的新购买）；false = 新建草稿 */
   existing: boolean;
   busy: boolean;
+  /** cf-api 线路目录；`null` = 未加载 */
+  lines: PlatformLine[] | null;
+  /** 目录读取失败的原因（不影响保存） */
+  linesError: string | null;
   onChange: (next: PlanDraft) => void;
   onCancel: () => void;
   onSave: () => Promise<void>;
@@ -285,6 +308,11 @@ function PlanForm({
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   const set = <K extends keyof PlanDraft>(key: K, value: PlanDraft[K]) => onChange({ ...draft, [key]: value });
+
+  // 目录已加载时，计划里引用了但目录中不存在的线路 = 已下线（契约：展示"已下线"，不报错）
+  const staleLineIds = lines
+    ? draft.line_ids.filter((id) => !lines.some((line) => line.id === id))
+    : [];
 
   async function runPreview() {
     setPreviewError(null);
@@ -526,21 +554,66 @@ function PlanForm({
           </small>
         </label>
 
-        <label>
-          可用线路 ID（逗号分隔，留空 = 全部）
-          <input
-            value={draft.line_ids.join(",")}
-            onChange={(e) =>
-              set(
-                "line_ids",
-                e.target.value
-                  .split(",")
-                  .map((v) => Number(v.trim()))
-                  .filter((v) => Number.isInteger(v) && v > 0),
-              )
-            }
-          />
-        </label>
+        {draft.kind !== "addon" && (
+          <div className="field">
+            <div className="row between">
+              <strong>可用线路</strong>
+              <div className="row">
+                <small className="hint">一条都不勾 = 全部线路（含以后新增的）</small>
+                {draft.line_ids.length > 0 && (
+                  <button type="button" className="ghost" onClick={() => set("line_ids", [])}>
+                    恢复全部
+                  </button>
+                )}
+              </div>
+            </div>
+            {linesError && (
+              <div className="notice warn">
+                读不到线路目录：{linesError}
+                <br />
+                仍可保存/移除已有选择；线路以 cf-api 的目录为准。
+              </div>
+            )}
+            <div className="row" style={{ gap: 12 }}>
+              {(lines ?? []).map((line) => (
+                <label key={line.id} className="row" style={{ gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={draft.line_ids.includes(line.id)}
+                    onChange={(e) =>
+                      set(
+                        "line_ids",
+                        e.target.checked
+                          ? [...draft.line_ids, line.id].sort((a, b) => a - b)
+                          : draft.line_ids.filter((id) => id !== line.id),
+                      )
+                    }
+                  />
+                  {line.label ?? `线路 #${line.id}`}
+                  {line.traffic_factor != null && Number(line.traffic_factor) !== 1 && (
+                    <small className="hint">×{line.traffic_factor}</small>
+                  )}
+                  {Number(line.is_default) === 1 && <small className="hint">缺省</small>}
+                </label>
+              ))}
+            </div>
+            {staleLineIds.length > 0 && (
+              <div className="row">
+                <small className="hint">已下线（可移除）：</small>
+                {staleLineIds.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className="ghost"
+                    onClick={() => set("line_ids", draft.line_ids.filter((v) => v !== id))}
+                  >
+                    线路 #{id} ✕
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="row between">

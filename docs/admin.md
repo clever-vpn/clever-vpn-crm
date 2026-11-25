@@ -175,6 +175,8 @@ console.log(`pbkdf2$sha256$50000$${b64(salt)}$${b64(bits)}`);' '新密码'
 | GET/POST | `/api/admin/customers` | 客户列表 / 建客户（本地联调与补单用） |
 | GET/POST | `/api/admin/subscriptions` | 订阅历史 / 手工开通，见 [plans.md](plans.md) |
 | POST | `/api/admin/subscriptions/settle` | 跑一轮额度结算（**默认 dry-run**；线上由 cron 每小时跑） |
+| GET | `/api/admin/platform/lines` | 线路目录（只读直通 cf-api，不落库）；读不到时 502/400 + 可操作说明 |
+| POST | `/api/admin/customers/:id/lines` | 改这个客户的可用线路 `{line_ids, reason}`（`[]` = 全部），写订阅快照并投影到 cf-api |
 
 ## 6. 审计
 
