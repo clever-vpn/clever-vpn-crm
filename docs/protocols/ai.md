@@ -169,7 +169,8 @@
 - 应用模板前用产品化确认弹窗展示模板名、来源、描述、模板自身 issues 和
   “覆盖未保存配置 / 保存才入库”提示，不再使用浏览器原生 `window.confirm`；
 - 支持**粘贴 + 多文件附件**：`.txt` / `.md` / `.json` / `.html` / `.mhtml`
-  （MHTML 取正文最长的 HTML part；均去掉 nav/header/footer/aside 后转文本，不上传原文件）；
+  （MHTML 取正文最长的 HTML part；按源码顺序去标签，保留文档原貌；
+  不去用 DOMParser 重排不规范的 MHTML 表格；并去掉 nav/header/footer/aside，不上传原文件）；
   PDF / Word / 图片不支持，提示另存为文本或粘贴；
 - **附件不写入 textarea**：textarea 只放粘贴/手写内容；提交时合并
   `粘贴 + 附件`（附件带文件名分隔头），合并后 ≤100KB、最多 8 个附件；
