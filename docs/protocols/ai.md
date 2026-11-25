@@ -66,6 +66,9 @@
 约束：不猜；query 必填且必须签名；不生成 endpoint/merchant/secret/methods/channel_codes；
       fields.channel 只写字段名，不写具体通道号；
       response.sign 未确认就留空并写 uncertainty；
+      create/query response 的 data.* 不得复用为 notify；
+      notify 的字段路径只按通知章节的字段表/示例（顶层或 data 包裹都要照文档），
+      找不到通知示例就写 uncertainty；
       文档里没有的东西不要编造；拿不准就降级为 driver/unsupported。
 ```
 
@@ -166,7 +169,7 @@
 - 应用模板前用产品化确认弹窗展示模板名、来源、描述、模板自身 issues 和
   “覆盖未保存配置 / 保存才入库”提示，不再使用浏览器原生 `window.confirm`；
 - 支持**粘贴 + 多文件附件**：`.txt` / `.md` / `.json` / `.html` / `.mhtml`
-  （MHTML 取正文最长的 HTML part；均在浏览器本地转文本，不上传原文件）；
+  （MHTML 取正文最长的 HTML part；均去掉 nav/header/footer/aside 后转文本，不上传原文件）；
   PDF / Word / 图片不支持，提示另存为文本或粘贴；
 - **附件不写入 textarea**：textarea 只放粘贴/手写内容；提交时合并
   `粘贴 + 附件`（附件带文件名分隔头），合并后 ≤100KB、最多 8 个附件；
