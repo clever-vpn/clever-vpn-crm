@@ -16,8 +16,16 @@ export interface FakeCustomer {
   expire_date: string | null;
   traffic_balance: number | null;
   quota: number | null;
+  /** 线路权益：`null` = 全部线路；数组 = 白名单（与 cf-api `customers.line_ids` 同形） */
+  line_ids?: number[] | null;
   _is_deleted: number;
 }
+
+/** 假平台线路目录（`GET /api/v1/lines` 的返回；CRM 只读） */
+export const FAKE_LINES = [
+  { id: 1, label: "HK", icon_kind: "service", icon: "general", is_default: 1, traffic_factor: 1, servers_count: 2, relays_count: 1, licences_count: 0 },
+  { id: 2, label: "JP", icon_kind: "service", icon: "general", is_default: 0, traffic_factor: 1.5, servers_count: 1, relays_count: 0, licences_count: 0 },
+];
 
 export interface FakeCfApi {
   base: string;
@@ -36,7 +44,10 @@ function json(body: unknown, status = 200): Response {
 }
 
 /** 装上假的 cf-api，返回句柄；`restore()` 还原全局 fetch */
-export function installFakeCfApi(base = "https://api.cf.test"): FakeCfApi {
+export function installFakeCfApi(
+  base = "https://api.cf.test",
+  opts: { lines?: unknown[] } = {},
+): FakeCfApi {
   const customers = new Map<number, FakeCustomer>();
   const patches: { id: number; body: Record<string, unknown> }[] = [];
   let idSeq = 4200;
@@ -50,6 +61,12 @@ export function installFakeCfApi(base = "https://api.cf.test"): FakeCfApi {
 
     const method = (init?.method ?? "GET").toUpperCase();
     const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+
+    // 线路目录（只读）
+    if (url.pathname === "/api/v1/lines" && method === "GET") {
+      return json(opts.lines ?? FAKE_LINES);
+    }
+
     const match = url.pathname.match(/^\/api\/v1\/customers(?:\/(\d+))?$/);
     if (!match) return json({ error: "not found" }, 404);
 
@@ -82,6 +99,7 @@ export function installFakeCfApi(base = "https://api.cf.test"): FakeCfApi {
         expire_date: (body.expire_date as string | null) ?? null,
         traffic_balance: (body.traffic_balance as number | null) ?? null,
         quota: (body.quota as number | null) ?? null,
+        line_ids: (body.line_ids as number[] | null) ?? null,
         _is_deleted: 0,
       };
       customers.set(created.id, created);
@@ -98,7 +116,7 @@ export function installFakeCfApi(base = "https://api.cf.test"): FakeCfApi {
       patches.push({ id, body });
       // 真实 cf-api：只改 allow-list 里**传了的**字段（licence_limit 静默丢弃）
       const next: FakeCustomer = { ...current };
-      for (const key of ["frozen", "expire_date", "traffic_balance", "quota", "up_mbps", "down_mbps"] as const) {
+      for (const key of ["frozen", "expire_date", "traffic_balance", "quota", "up_mbps", "down_mbps", "line_ids"] as const) {
         if (Object.prototype.hasOwnProperty.call(body, key)) {
           Object.assign(next, { [key]: body[key] });
         }

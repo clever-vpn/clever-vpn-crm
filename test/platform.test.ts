@@ -103,6 +103,11 @@ describe("controlParams：控制参数只写平台认识的那几个", () => {
   it("不含 licence_limit（创建后不可改，变了要删旧建新）", () => {
     expect(controlParams(sub())).not.toHaveProperty("licence_limit");
   });
+
+  it("线路权益：空 = 全部（null）；有值原样投影（cf-api 负责归一/校验）", () => {
+    expect(controlParams(sub())).toMatchObject({ line_ids: null });
+    expect(controlParams(sub({ line_ids: [1, 3] }))).toMatchObject({ line_ids: [1, 3] });
+  });
 });
 
 describe("authIdOf：幂等键跨换档不变", () => {

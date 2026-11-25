@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Button,
+  Checkbox,
   Form,
   Input,
   InputNumber,
@@ -14,7 +15,7 @@ import {
   message,
 } from "antd";
 
-import { api, ApiError, type AdminCustomer, type PlanView, type SubscriptionStatus } from "../api";
+import { api, ApiError, type AdminCustomer, type PlanView, type PlatformLine, type SubscriptionStatus } from "../api";
 
 const STATUS: Record<string, { color: string; text: string }> = {
   active: { color: "green", text: "生效中" },
@@ -71,6 +72,14 @@ export default function Customers() {
   const [holdTarget, setHoldTarget] = useState<AdminCustomer | null>(null);
   const [holdBusy, setHoldBusy] = useState(false);
   const [holdForm] = Form.useForm<{ reason: string }>();
+
+  // 线路权益（与"调整权益"是两件事：它只改可用线路白名单，不涉及天数/流量）
+  const [linesOpen, setLinesOpen] = useState(false);
+  const [linesTarget, setLinesTarget] = useState<AdminCustomer | null>(null);
+  const [linesBusy, setLinesBusy] = useState(false);
+  const [linesCatalog, setLinesCatalog] = useState<PlatformLine[] | null>(null);
+  const [linesCatalogError, setLinesCatalogError] = useState<string | null>(null);
+  const [linesForm] = Form.useForm<{ line_ids?: number[]; reason: string }>();
 
   const load = useCallback(async () => {
     try {
@@ -190,6 +199,38 @@ export default function Customers() {
     }
   }
 
+  async function openLines(customer: AdminCustomer) {
+    setLinesTarget(customer);
+    linesForm.setFieldsValue({ line_ids: customer.subscription?.line_ids ?? [], reason: "" });
+    setLinesOpen(true);
+    if (linesCatalog) return;
+    try {
+      const r = await api.platformLines();
+      setLinesCatalog(r.lines);
+      setLinesCatalogError(null);
+    } catch (e) {
+      setLinesCatalogError(e instanceof ApiError ? e.message : "读不到线路目录");
+    }
+  }
+
+  async function submitLines() {
+    if (!linesTarget) return;
+    const v = await linesForm.validateFields();
+    setLinesBusy(true);
+    try {
+      const r = await api.setCustomerLines(linesTarget.id, v.line_ids ?? [], v.reason.trim());
+      message.success(
+        `已改为${r.applied.length ? ` ${r.applied.length} 条线路` : "全部线路"}${r.platform_synced ? "" : "（未同步平台）"}`,
+      );
+      setLinesOpen(false);
+      await load();
+    } catch (e) {
+      message.error(e instanceof ApiError ? e.message || e.code : "改线路失败");
+    } finally {
+      setLinesBusy(false);
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {error && <Alert type="error" showIcon message={error} />}
@@ -306,9 +347,15 @@ export default function Customers() {
               render: (s: AdminCustomer["subscription"]) => s?.licence_limit ?? "—",
             },
             {
+              title: "线路",
+              dataIndex: "subscription",
+              render: (s: AdminCustomer["subscription"]) =>
+                s ? (s.line_ids.length ? `${s.line_ids.length} 条` : "全部") : "—",
+            },
+            {
               title: "操作",
               key: "actions",
-              width: 160,
+              width: 200,
               render: (_, c) => (
                 <Space size={4}>
                   <Button size="small" onClick={() => openGrant(c, c.subscription?.plan_id)}>
@@ -317,6 +364,11 @@ export default function Customers() {
                   {c.subscription && (
                     <Button size="small" onClick={() => openAdjust(c)}>
                       调整权益
+                    </Button>
+                  )}
+                  {c.subscription && (
+                    <Button size="small" onClick={() => void openLines(c)}>
+                      线路
                     </Button>
                   )}
                   {c.subscription && (
@@ -464,6 +516,58 @@ export default function Customers() {
             rules={[{ required: true, message: "必须写清楚为什么冻结 / 解冻" }]}
           >
             <Input placeholder="例：欠费暂停 / 投诉核实中 / 已结清" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 线路权益：直接改这个客户能用的线路（写订阅快照 + 投影到 cf-api） */}
+      <Modal
+        open={linesOpen}
+        title={linesTarget ? `可用线路：${linesTarget.email}` : "可用线路"}
+        onCancel={() => setLinesOpen(false)}
+        onOk={() => void submitLines()}
+        confirmLoading={linesBusy}
+        okText="写入"
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+          一条都不勾 = <strong>全部线路</strong>（含以后新增的）。改完写进订阅快照并投影到 cf-api；
+          对<strong>下次取许可</strong>生效，已建立的隧道不会立刻断开。只影响这一个客户 ——
+          想改所有新买家请去改套餐。
+        </Typography.Paragraph>
+        {linesCatalogError && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`读不到 cf-api 线路目录：${linesCatalogError}`}
+            description="仍可移除已有选择或点「取消」；写入前请确认 cf-api 已配置。"
+          />
+        )}
+        <Form form={linesForm} layout="vertical">
+          <Form.Item label="可用线路" name="line_ids">
+            <Checkbox.Group
+              style={{ display: "flex", flexDirection: "column", gap: 6 }}
+              options={(() => {
+                const catalog = linesCatalog ?? [];
+                const selected: number[] = linesForm.getFieldValue("line_ids") ?? [];
+                const stale = selected.filter((id: number) => !catalog.some((line) => line.id === id));
+                return [
+                  ...catalog.map((line) => ({
+                    value: line.id,
+                    label: `${line.label ?? `线路 #${line.id}`}${line.traffic_factor && line.traffic_factor !== 1 ? ` ×${line.traffic_factor}` : ""}${Number(line.is_default) === 1 ? "（缺省）" : ""}`,
+                  })),
+                  ...stale.map((id: number) => ({ value: id, label: `线路 #${id}（已下线）` })),
+                ];
+              })()}
+            />
+          </Form.Item>
+          <Form.Item
+            label="原因（必填）"
+            name="reason"
+            rules={[{ required: true, message: "必须写清楚为什么改线路" }]}
+          >
+            <Input placeholder="例：线路故障临时切到备用线" />
           </Form.Item>
         </Form>
       </Modal>

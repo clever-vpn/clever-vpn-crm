@@ -21,6 +21,7 @@ import {
 } from "../subscriptions/store";
 import { adjustSubscription } from "../subscriptions/adjust";
 import { setCustomerHold } from "../subscriptions/hold";
+import { setSubscriptionLines } from "../subscriptions/lines";
 import { pollOrderOnce } from "../payments/poll";
 import { refundOrder } from "../payments/refund";
 
@@ -50,6 +51,19 @@ async function audit(env: Env, actor: string, action: string, target: string, de
     .run();
 }
 
+/** 订阅快照里的 `line_ids` 是 JSON 文本；空/坏值按"全部线路"（`[]`）—— 与 `store.ts` 同口径 */
+function parseLineIds(raw: string | null): number[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return Array.isArray(value)
+      ? value.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function handleAdminSubscriptions(
   request: Request,
   env: Env,
@@ -66,7 +80,8 @@ export async function handleAdminSubscriptions(
       `SELECT c.id, c.email, c.display_name, c.status, c.created_at,
               s.plan_id, s.kind AS sub_kind, s.expires_at, s.hold, s.hold_reason,
               s.period_anchor_day, s.traffic_remaining_gb, s.period_quota_gb,
-              s.traffic_total_gb, s.period_extra_gb, s.licence_limit, s.paid_minor, s.trial
+              s.traffic_total_gb, s.period_extra_gb, s.licence_limit, s.paid_minor, s.trial,
+              s.line_ids
          FROM customers c
          LEFT JOIN platform_subscriptions s ON s.customer_id = c.id
         ORDER BY c.id DESC LIMIT 200`,
@@ -89,6 +104,7 @@ export async function handleAdminSubscriptions(
       licence_limit: number | null;
       paid_minor: number | null;
       trial: number | null;
+      line_ids: string | null;
     }>();
 
     const customers = (rows.results ?? []).map((r) => {
@@ -123,6 +139,8 @@ export async function handleAdminSubscriptions(
           period_extra_gb: r.period_extra_gb,
           paid_minor: r.paid_minor,
           trial: r.trial === 1,
+          // 线路权益快照（空 = 全部线路）：后台表格直接展示，避免再点一次详情
+          line_ids: parseLineIds(r.line_ids),
           status: state.status,
           // 后台看到的是机器原因 + 用户文案两个字段
           status_reason: state.reason,
@@ -291,6 +309,39 @@ export async function handleAdminSubscriptions(
     await audit(env, actor, result.hold === "frozen" ? "customer_frozen" : "customer_unfrozen",
       String(holdOne[1]), { reason: body.reason });
     return json({ ok: true, hold: result.hold, platform_synced: result.platform_synced });
+  }
+
+  // ── 线路权益：单独给一个客户开/关线路（不重开订阅）──
+  //    写的是订阅快照（`platform_subscriptions.line_ids`），所以续费/落账不会丢；
+  //    换套餐会被新套餐的线路覆盖（`domain.md` I3：CRM 账本为准）。
+  const linesOne = /^\/customers\/(\d+)\/lines$/.exec(path);
+  if (method === "POST" && linesOne) {
+    const body = await readBody(request);
+    if (!Array.isArray(body.line_ids) && body.line_ids !== null) {
+      return fail(400, "invalid_line_ids", "line_ids 必须是数组（空数组 = 全部线路）");
+    }
+    const result = await setSubscriptionLines(env, {
+      customerId: Number(linesOne[1]),
+      lineIds: body.line_ids ?? [],
+      reason: typeof body.reason === "string" ? body.reason : "",
+      operator: actor,
+    });
+    if (!result.ok) {
+      const status =
+        result.error === "no_subscription" ? 404 : result.error === "platform_failed" ? 502 : 400;
+      return fail(status, result.error ?? "invalid", result.message);
+    }
+    await audit(env, actor, "subscription_lines_changed", String(linesOne[1]), {
+      before: result.before?.line_ids ?? [],
+      after: result.applied,
+      reason: typeof body.reason === "string" ? body.reason.trim() : "",
+    });
+    return json({
+      ok: true,
+      subscription: result.after,
+      applied: result.applied,
+      platform_synced: result.platform_synced,
+    });
   }
 
   if (method === "POST" && path === "/subscriptions/adjust") {

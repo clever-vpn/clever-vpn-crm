@@ -109,8 +109,11 @@ plans (id, name, kind, price_minor, currency, licence_limit,
 - `id` 不可改（订单与订阅都指着它）；`status` / `retired_at` 只能由 `publish` / `retire` 改，
   不能用一次 `PATCH` 绕过状态机。
 - `retire` **只断绝「还能再卖」**，不会让老用户掉线，也不影响他们升级（升级报价读订阅快照）。
-- `line_ids`：空数组 = 不限线路。它只是**展示层过滤**（App 与 `/api/v3/key-lines` 取交集），
-  不是权限边界——真要做「这个套餐不能连那条线路」得改 cf-api。
+- `line_ids`：空数组 = 不限线路（**动态包含以后新增的线路**）。它是**硬约束**，
+  落账时作为控制参数投影到 cf-api `customers.line_ids`；cf-api 在 `key-lines` 与
+  `app-licences` 两处按它判定（越权线路回 `NoLine`）。详见 `clever-vpn-docs` `crm-api.md` §5.2.1。
+- **单客户覆盖**：后台客户列表的「线路」操作可以直接改某个人的可用线路（写进订阅快照，不重开订阅）；
+  下次续费/换套餐会被新套餐的 `line_ids` 覆盖。
 
 ### 4.1 商店商品 ID（`sales_channels` + `store_product_id`）
 
@@ -204,6 +207,8 @@ $$R = P + B, \qquad B' = \min(B, R), \qquad R' = P + B'$$
 | GET | `/api/admin/subscriptions?customer_id=` | 某客户的订阅历史 |
 | POST | `/api/admin/subscriptions` | `{customer_id, plan_id, paid_minor?, now?}` **手工开通**（本地/补单） |
 | POST | `/api/admin/subscriptions/settle` | `{customer_id?, dry_run?}` 跑结算（默认 dry-run） |
+| GET | `/api/admin/platform/lines` | 线路目录（只读直通 cf-api，供套餐/客户选线路） |
+| POST | `/api/admin/customers/:id/lines` | `{line_ids, reason}` **单客户线路权益**（`[]` = 全部；写订阅快照并投影 cf-api） |
 
 ## 8. 待办
 
@@ -211,5 +216,6 @@ $$R = P + B, \qquad B' = \min(B, R), \qquad R' = P + B'$$
 - [x] 下单 / 续订 / 升级时调 cf-api（软删旧客户 → 同 `auth_id` 建新 → 写控制参数 + 存 `platform_customer_id`/`code`）
   —— 实现见 `src/platform/{client,provision}.ts`，失败停在 `provisioning`，cron 每小时重试
 - [x] App 端登录（邮箱验证码 + `session_token`）与 `/plans`（每项只带一个 `action`）
-- [ ] 读 cf-api `lines` 填充线路选择器
+- [x] 读 cf-api `lines` 填充线路选择器（`GET /api/admin/platform/lines`，只读直通）
+- [x] 线路作为权益落账（`controlParams.line_ids`）+ 后台单客户改线路
 - [ ] 支付（网页收银台 + 商店内购）

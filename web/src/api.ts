@@ -329,6 +329,21 @@ export interface PlatformCredsView {
   cipher_ready: boolean;
 }
 
+/** cf-api 线路目录（`GET /api/admin/platform/lines` 直通；CRM 不落库） */
+export interface PlatformLine {
+  id: number;
+  label: string | null;
+  icon_kind: string | null;
+  icon: string | null;
+  /** 1 = 租户缺省线路（App 不带 line 时优先用它） */
+  is_default: number;
+  /** 倍率：plan 里的 "100G" 是计费流量，走 2x 线路实际只能用 50G */
+  traffic_factor: number | null;
+  servers_count: number | null;
+  relays_count: number | null;
+  licences_count: number | null;
+}
+
 export const api = {
   bootstrap: () => call<Bootstrap>("GET", "/bootstrap"),
   setup: (token: string, email: string, password: string, turnstileToken?: string) =>
@@ -436,6 +451,8 @@ export const api = {
   testPlatform: () => call<{ ok: true; status: number }>("POST", "/platform/test"),
   retryProvisioning: () =>
     call<{ ok: true; retried: number; failed: number }>("POST", "/platform/provision"),
+  /** 线路目录（只读直通 cf-api）：套餐设计器与客户「线路」弹窗共用 */
+  platformLines: () => call<{ ok: true; lines: PlatformLine[] }>("GET", "/platform/lines"),
   /** 运行期设置（目前只有发信配额） */
   settings: () => call<AdminSettings>("GET", "/settings"),
   saveMailSettings: (input: { daily_quota?: number; soft_ratio?: number }) =>
@@ -502,6 +519,17 @@ export const api = {
       applied: { days: number; gb: number };
       platform_synced: boolean;
     }>("POST", "/subscriptions/adjust", input),
+  /**
+   * **单客户线路权益**：直接改这条订阅的可用线路（`[]` = 全部线路）。
+   * 立即投影到 cf-api；已建立的隧道不会因此断开（下次取许可才生效）。
+   */
+  setCustomerLines: (customerId: number, line_ids: number[], reason: string) =>
+    call<{
+      ok: true;
+      subscription: { line_ids: number[] };
+      applied: number[];
+      platform_synced: boolean;
+    }>("POST", `/customers/${customerId}/lines`, { line_ids, reason }),
 
   // ── 支付网关 ──
   gateways: () => call<GatewaysResponse>("GET", "/gateways"),
@@ -699,6 +727,8 @@ export interface AdminSubscriptionSummary {
   /** 平台真实剩余（缓存，TTL 15 分钟；null = 还没同步过） */
   traffic_remaining_gb: number | null;
   paid_minor: number | null;
+  /** 线路权益快照：空数组 = 全部线路 */
+  line_ids: number[];
   status: SubscriptionStatus;
   /** 不可用的原因（expired / exhausted / frozen）；`active` 时为 null */
   status_reason: InactiveReason | null;

@@ -1,16 +1,17 @@
 /**
  * 管理后台：cf-api 对接 `/api/admin/platform*`
  *
- * 四件事：
+ * 五件事：
  *   `GET  /platform`             当前配置（**不含明文 token**）+ 最后成功/失败时间
  *   `PUT  /platform`             改基址 / 换 token（token 加密落库）
  *   `POST /platform/test`        真发一次只读请求，区分"没配好 / token 不对 / 网络不通"
  *   `POST /platform/provision`   重试卡在 `provisioning` 的订单（不再等每小时 cron）
+ *   `GET  /platform/lines`       线路目录（只读直通 cf-api，供套餐/客户选线路）
  *
  * 为什么 `test` 要单独一个按钮：租户看到的报错一律是"支付成功但没开通"，
  * 真正原因却可能是三种完全不同的事。把判断做成一次点击，比让它猜强。
  */
-import { PlatformError } from "../platform/client";
+import { PlatformError, listLines } from "../platform/client";
 import { markPlatformError, markPlatformOk, readPlatformCreds, savePlatformCreds } from "../platform/creds";
 import { platformAuth } from "../platform/client";
 import { retryProvisioning } from "../platform/provision";
@@ -108,6 +109,25 @@ export async function handleAdminPlatform(
   if (method === "POST" && path === "/platform/provision") {
     const result = await retryProvisioning(env, { limit: 50 });
     return json({ ok: true, ...result });
+  }
+
+  /**
+   * 线路目录（只读直通 cf-api，不在本地落库）。
+   *
+   * 面板读不到时**不该**变成"套餐保存不了"：套餐设计器允许在没有目录时继续编辑原有选择，
+   * 所以这里只回 502 + 一句能行动的说明。
+   */
+  if (method === "GET" && path === "/platform/lines") {
+    try {
+      const lines = await listLines(env);
+      return json({ ok: true, lines });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (e instanceof PlatformError && (e.status === 401 || e.status === 403)) {
+        return fail(400, "invalid_token", `cf-api 拒绝了这把 token：${message}（去「设置 → cf-api 对接」换一把）`);
+      }
+      return fail(502, "platform_unavailable", `读不到 cf-api 线路目录：${message}`);
+    }
   }
 
   return null;

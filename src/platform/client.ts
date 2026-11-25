@@ -31,6 +31,26 @@ export interface PlatformCustomer {
   quota: number | null;
   up_mbps: number | null;
   down_mbps: number | null;
+  /**
+   * 线路权益：`null` = 全部线路（含以后新增的）；数组 = 只允许这些线路 id。
+   * cf-api 在 `key-lines` / `app-licences` 按它判定（`crm-api.md` §5.2.1）。
+   */
+  line_ids: number[] | null;
+}
+
+/** 平台线路目录（只读；`upstream` 等内部字段平台不会下发） */
+export interface PlatformLine {
+  id: number;
+  label: string | null;
+  icon_kind: string | null;
+  icon: string | null;
+  /** 1 = 租户缺省线路（App 不带 line 时优先用它） */
+  is_default: number;
+  /** 倍率：plan 里的 "100G" 是计费流量，走 2x 线路实际只能用 50G */
+  traffic_factor: number | null;
+  servers_count: number | null;
+  relays_count: number | null;
+  licences_count: number | null;
 }
 
 export interface CreateCustomerInput {
@@ -130,6 +150,19 @@ export async function findCustomerByAuthId(env: Env, authId: string): Promise<Pl
 export async function getCustomer(env: Env, id: number): Promise<PlatformCustomer> {
   const res = await platformRequest(env, `/api/v1/customers/${id}`);
   return platformJson<PlatformCustomer>(res);
+}
+
+/**
+ * 线路目录（cf-api `lines`，只读；`crm-api.md` §5.2）。
+ *
+ * CRM **不存线路表**：`label` / `icon` / 倍率全部由平台定义，这里只读来给套餐设计器
+ * 与后台选线路。线路是**硬删**的：返回里没有的 id 就是已下线。
+ */
+export async function listLines(env: Env): Promise<PlatformLine[]> {
+  const res = await platformRequest(env, "/api/v1/lines");
+  const data = await platformJson<PlatformLine[] | { items?: PlatformLine[] }>(res);
+  const items = Array.isArray(data) ? data : (data.items ?? []);
+  return [...items].sort((a, b) => Number(a.id) - Number(b.id));
 }
 
 export async function createCustomer(env: Env, input: CreateCustomerInput): Promise<PlatformCustomer> {
