@@ -139,6 +139,8 @@ export default function GatewayEditor({ mode, id }: Props) {
   const paypalEnvWatch: "sandbox" | "live" | undefined = Form.useWatch("paypal_env", form);
   /** 已发布：支付协议字段只读；名称/优先级/白名单/汇率/测试设置仍可改。 */
   const protocolLocked = editing?.status === "live";
+  /** Webhook 凭据保存后不回显；只提示“已配置”，留空保存 = 不修改。 */
+  const webhookConfigured = Boolean(editing?.has_webhook);
   /** 驱动只在草稿可改；已发布/已停用都只能复制。 */
   const driverLocked = mode === "edit" && editing !== null && editing.status !== "draft";
 
@@ -560,11 +562,35 @@ export default function GatewayEditor({ mode, id }: Props) {
 
           {fields.webhook && (
             <>
-              <Form.Item label={fields.webhookLabel} name="webhook_secret">
+              <Form.Item
+                label={
+                  <Space size={6}>
+                    {fields.webhookLabel}
+                    {webhookConfigured && <Tag color="green">已配置</Tag>}
+                  </Space>
+                }
+                name="webhook_secret"
+                extra={
+                  protocolLocked
+                    ? "已发布：先停用才能修改 Webhook 凭据。"
+                    : webhookConfigured
+                      ? "已保存的凭据不会回显；留空保存 = 不修改，填写新值 = 替换。"
+                      : driver === "paypal"
+                        ? "从 PayPal 后台创建 Webhook 后复制 WH-... 填到这里。"
+                        : "从 Stripe 后台复制 whsec_... 填到这里。"
+                }
+              >
                 {driver === "paypal" ? (
-                  <Input disabled={protocolLocked} placeholder="WH-..." />
+                  <Input
+                    disabled={protocolLocked}
+                    placeholder={webhookConfigured ? "已配置，留空不修改" : "WH-..."}
+                  />
                 ) : (
-                  <Input.Password disabled={protocolLocked} autoComplete="new-password" placeholder="whsec_..." />
+                  <Input.Password
+                    disabled={protocolLocked}
+                    autoComplete="new-password"
+                    placeholder={webhookConfigured ? "已配置，留空不修改" : "whsec_..."}
+                  />
                 )}
               </Form.Item>
               <Form.Item label="Webhook 地址">
