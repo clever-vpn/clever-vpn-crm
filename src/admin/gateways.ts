@@ -703,7 +703,7 @@ export async function handleAdminGateways(
         return fail(400, "test_required", "发布前必须先测试：创建订单 + 查询订单");
       }
       if (current.test_require_callback && !current.test_callback_ok_at) {
-        return fail(400, "test_callback_required", "已开启回调验证：请完成测试支付并收到回调后再发布");
+        return fail(400, "test_callback_required", "已开启通知验证：请完成测试支付并收到通知后再发布");
       }
       if (!current.tested_config_hash || current.tested_config_hash !== (await gatewayConfigHash(current))) {
         return fail(400, "test_required", "配置已变更，请重新测试后再发布");

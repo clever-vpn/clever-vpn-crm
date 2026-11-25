@@ -6,7 +6,7 @@
  *
  *   mapping JSON（服务端权威） ⇄ MappingFormState（表单） ⇄ 控件
  *
- * - 固定结构（下单、响应、回调、查单、签名）用带标签的字段编辑；
+ * - 固定结构（下单、响应、通知、查单、签名）用带标签的字段编辑；
  * - 真正动态的 map（`fields` / `constants` / `query.fields`）用 KV 行；
  * - 表单不认识的键放在 `unknown` 里原样带回，服务端 `validateMapping` 会报错（不静默丢）。
  *
@@ -813,15 +813,15 @@ export function requiredChecks(state: MappingFormState): CheckItem[] {
       label: "收银台字段",
       ok: nonEmpty(state.response.pay_url),
     },
-    { key: "notify.order_no", label: "回调订单号字段", ok: nonEmpty(notifyOrderNo) },
+    { key: "notify.order_no", label: "通知订单号字段", ok: nonEmpty(notifyOrderNo) },
     {
       key: "notify.paid_when",
-      label: "回调已付判定",
+      label: "通知已付判定",
       ok: nonEmpty(state.notify.paid_when.path) && state.notify.paid_when.values.length > 0,
     },
     { key: "notify.reply", label: "应答原文", ok: state.notify.reply !== "" },
     { key: "sign", label: "下单签名", ok: state.sign.enabled },
-    { key: "notify.sign", label: "回调验签", ok: state.notify_sign.enabled },
+    { key: "notify.sign", label: "通知验签", ok: state.notify_sign.enabled },
     { key: "query.path", label: "查单地址", ok: nonEmpty(state.query.path) },
     { key: "query.sign", label: "查单签名", ok: state.query_sign.enabled },
     {
@@ -890,7 +890,7 @@ export function describeMapping(state: MappingFormState): MappingDescription {
       } · 金额=${state.fields.amount || "（未填）"}`,
     },
     {
-      label: "回调地址字段",
+      label: "通知地址字段",
       value: state.fields.notify_url || "（未配置；若服务商后台已填可跳过）",
     },
     {
@@ -912,7 +912,7 @@ export function describeMapping(state: MappingFormState): MappingDescription {
         : "不验签（仅 TLS）",
     },
     {
-      label: "回调",
+      label: "通知",
       value: `${state.notify.method} / ${FORMAT_LABEL[state.notify.format]} · 订单号 ${
         notify.orderNo || "（未填）"
       } · 金额 ${notify.amount || "（不核对）"} · 已付 ${whenText(state.notify.paid_when)} · 应答 ${
@@ -929,7 +929,7 @@ export function describeMapping(state: MappingFormState): MappingDescription {
 
   const summary = `${state.create.method} ${state.create.path.trim() || "（未填路径）"}（${
     FORMAT_LABEL[state.create.format]
-  }）· 金额按${UNIT_LABEL[state.amount_unit]} · 成功 ${whenText(state.response.ok)} · 回调 ${
+  }）· 金额按${UNIT_LABEL[state.amount_unit]} · 成功 ${whenText(state.response.ok)} · 通知 ${
     state.notify.method
   }/${FORMAT_LABEL[state.notify.format]}，应答 ${
     state.notify.reply === "" ? "（未填）" : JSON.stringify(state.notify.reply)
@@ -937,16 +937,16 @@ export function describeMapping(state: MappingFormState): MappingDescription {
 
   const warnings: string[] = [];
   if (!state.fields.notify_url.trim()) {
-    warnings.push("未配置回调地址字段：若服务商后台也没配回调地址，将收不到支付通知。");
+    warnings.push("未配置通知地址字段：若服务商后台也没配通知地址，将收不到支付通知。");
   }
   if (!notify.amount) {
-    warnings.push("未配置回调金额字段：回调不会核对金额（代码会跳过这一步）。");
+    warnings.push("未配置通知金额字段：通知不会核对金额（代码会跳过这一步）。");
   }
   if (state.notify.reply === "") {
     warnings.push("未填应答原文：厂商会认为没收到，可能无限重推。");
   }
   if (!state.sign.enabled) {
-    warnings.push("未启用签名：回调不会验签（不建议）。");
+    warnings.push("未启用签名：通知不会验签（不建议）。");
   }
   if (state.sign.enabled && !state.sign.exclude.length) {
     warnings.push("签名排除字段为空：确认厂商文档没要求排除其它字段。");

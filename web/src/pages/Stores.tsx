@@ -102,7 +102,7 @@ export default function Stores() {
       </Typography.Title>
       <Typography.Text type="secondary">
         App Store / Google Play 的内购凭证。内购的钱由商店收、商店结算 —— CRM
-        只能<strong>查单</strong>，不能发起支付、不能退款、也不接签名回调。
+        只能<strong>查单</strong>，不能发起支付、不能退款、也不接签名通知。
         每平台最多一条，只有「已启用」才会被查单调用。
       </Typography.Text>
 
