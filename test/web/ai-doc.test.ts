@@ -130,7 +130,7 @@ describe("mergeAiSubmission", () => {
     expect(merged.chars).toBeGreaterThan(8);
   });
 
-  it("超过文件数 / 合并超 60KB → 明确 error，不返回正文", () => {
+  it("超过文件数 / 合并超 100KB → 明确 error，不返回正文", () => {
     const tooMany = Array.from({ length: AI_DOC_MAX_FILES + 1 }, (_, i) => ({
       name: `${i}.html`,
       text: "x",

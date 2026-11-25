@@ -40,7 +40,7 @@ import {
 } from "../mapping-form";
 import { OFFICIAL_TEMPLATES, parseTemplateText, type PaymentTemplate } from "../payment-templates";
 import { api, ApiError, type GatewayAiDraft, type GatewayAiGate } from "../api";
-import { AI_DOC_MAX_FILES, mergeAiSubmission, readAiDocument } from "../ai-doc";
+import { AI_DOC_MAX_BYTES, AI_DOC_MAX_FILES, mergeAiSubmission, readAiDocument } from "../ai-doc";
 import { buildAiSupportReport } from "../ai-support";
 
 interface Props {
@@ -597,7 +597,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
     setAiMeta(null);
   }
 
-  /** 文件与 URL 页面共用这一个集合；总数/60KB 在这里统一把关 */
+  /** 文件与 URL 页面共用这一个集合；总数/100KB 在这里统一把关 */
   function addAiItems(items: AiDocFileItem[]): { ok: boolean; error?: string; added: number; chars: number } {
     const existing = new Set(aiFiles.map((f) => f.id));
     const fresh = items.filter((f) => !existing.has(f.id));
@@ -1397,7 +1397,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                 </Button>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   将提交：粘贴 {aiSubmission.pasteChars} 字 + 附件/页面 {aiSubmission.fileChars} 字 ={" "}
-                  {aiSubmission.chars} 字（至少 200；上限 60KB）
+                  {aiSubmission.chars} 字（至少 200；上限 {AI_DOC_MAX_BYTES / 1024}KB）
                 </Typography.Text>
               </Space>
               {aiSubmission.error && <Alert type="error" showIcon message={aiSubmission.error} />}
@@ -1580,7 +1580,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
       >
         <Space direction="vertical" size={10} style={{ width: "100%" }}>
           <Typography.Text type="secondary">
-            只抓公开、同源、静态 HTML 的一层页面（最多 8 页、总正文 60KB）。登录页、JS 渲染页面
+            只抓公开、同源、静态 HTML 的一层页面（最多 8 页、总正文 {AI_DOC_MAX_BYTES / 1024}KB）。登录页、JS 渲染页面
             抓不到；失败时请改用「导入文件」或粘贴。
           </Typography.Text>
           <Input

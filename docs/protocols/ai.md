@@ -126,12 +126,17 @@
 - 2026-11-24 Responses `json_schema` 实测：四家均 HTTP 200、schema 通过；
   attempts 分别为 QWGUA 1 / 亿宏 2 / 布拉格 1 / XArrPay 1，语义匹配 22/22、20/21、22/22、22/22。
   对比切换前 Chat Completions `json_object` 多为 2 次，结构化输出减少了首次结构错误。
+- 2026-11-25 URL 导入实测（总正文上限 100KB）：
+  - `https://www.yimapay.com/docs/api.html`：7 页 / 44KB，AI 草稿 200 `soft_gaps`（合格）；
+  - `https://www.xxpay.vip/docs/detail_176.html`：2 页 / 22KB，AI 草稿 200 `soft_gaps`（合格）；
+  - `https://pay.mzfpay.com/doc`：1 页 / 1.5KB，纯 JS 加载壳，AI 草稿 200
+    `unsupported` / gate `insufficient`（不合格；需粘贴或另存多文件）。
 
 ## 6. 数据边界
 
 - 文档是外部数据，不是指令；
 - 接受**粘贴、上传的文本文件，或用户提供的公开文档 URL**；
-  URL 抓取只走同源、公开、静态 HTML/文本，最多 8 页、总正文 ≤60KB；
+  URL 抓取只走同源、公开、静态 HTML/文本，最多 8 页、总正文 ≤100KB；
   不抓登录态/付费/反爬页面，不做跨站/递归全站；
 - 原始文档的版权/授权按内部语料约定；
 - 仓库只放规范/映射/夹具说明，原始大文件引用来源路径/URL；
@@ -163,12 +168,12 @@
   （MHTML 取正文最长的 HTML part；均在浏览器本地转文本，不上传原文件）；
   PDF / Word / 图片不支持，提示另存为文本或粘贴；
 - **附件不写入 textarea**：textarea 只放粘贴/手写内容；提交时合并
-  `粘贴 + 附件`（附件带文件名分隔头），合并后 ≤60KB、最多 8 个附件；
+  `粘贴 + 附件`（附件带文件名分隔头），合并后 ≤100KB、最多 8 个附件；
 - **统一附件集合**：「导入文件」和「从 URL 导入」进入同一个列表，统一显示
   来源/字数/勾选/移除；只提交勾选项；URL 页面与文件一样是附件，不写 textarea；
 - **URL 抓取**：点「从 URL 导入」弹窗输入公开文档入口 URL → 服务端抓同源相关页；
   AI 选页 + 关键词兜底；抓取成功的页面直接追加到统一附件集合；
-  超过上限/超 60KB 整批拒绝，不静默截断；
+  超过上限/超 100KB 整批拒绝，不静默截断；
 - **单动作「生成配置」**：成功（`complete`/`soft_gaps`）自动填入同一张映射表单，
   并提示未保存；第一步只显示「已识别 + 下单/查单/回调/金额摘要 + 下一步」，
   完整摘要、依据、不确定点折叠在「查看配置摘要与 AI 依据」里；
@@ -194,7 +199,7 @@
 
 | 项 | 说明 |
 |---|---|
-| 请求 | `{ "document": "厂商接口文档正文" }`，≥200 字、≤60 KB |
+| 请求 | `{ "document": "厂商接口文档正文" }`，≥200 字、≤100 KB |
 | 成功（可生成） | `{ draft: { classification:"generic_mapping", template, evidence, uncertainty }, model, attempts, gate }` |
 | 成功（不可生成） | `{ draft: { classification:"driver"\|"unsupported", template:null, evidence, uncertainty }, model, attempts, gate }` |
 | 输出不合法 | `422 invalid_draft` + `details.errors[]`（字段路径 + 原因）+ `details.attempts` |

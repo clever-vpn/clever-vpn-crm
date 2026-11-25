@@ -539,7 +539,7 @@ describe("completeAiJson：AI Gateway provider-native 路径", () => {
 
   it("上限常量与文档一致", () => {
     expect(AI_LIMITS.minDocChars).toBe(200);
-    expect(AI_LIMITS.maxDocBytes).toBe(60 * 1024);
+    expect(AI_LIMITS.maxDocBytes).toBe(100 * 1024);
     expect(AI_LIMITS.perHour).toBe(20);
     expect(AI_LIMITS.maxAttempts).toBe(2);
   });

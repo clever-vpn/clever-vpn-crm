@@ -161,7 +161,7 @@ describe("AI 配置助手端点", () => {
 
     const huge = await call("/api/admin/gateways/ai-draft", {
       method: "POST",
-      body: { document: "x".repeat(61 * 1024) },
+      body: { document: "x".repeat(101 * 1024) },
     });
     expect(huge.status).toBe(400);
     expect(run).not.toHaveBeenCalled();

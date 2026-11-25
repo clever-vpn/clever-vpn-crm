@@ -9,7 +9,7 @@
  * 其它类型（PDF/Word/图片）不做解析，提示用户另存为文本或直接粘贴。
  */
 
-export const AI_DOC_MAX_BYTES = 60 * 1024;
+export const AI_DOC_MAX_BYTES = 100 * 1024;
 export const AI_DOC_MAX_FILES = 8;
 
 export interface AiDocFile {
@@ -203,7 +203,7 @@ export interface MergedAiSubmission {
  *
  * - 文本框只代表粘贴/手写内容；文件不写回 textarea；
  * - 只有文件时才给每段加文件名分隔头；两者都有时先标「粘贴内容」；
- * - 超过 8 个文件或 60KB 直接报错，不静默截断。
+ * - 超过 8 个文件或 100KB 直接报错，不静默截断。
  */
 export function mergeAiSubmission(paste: string, files: AiDocFilePart[]): MergedAiSubmission {
   const pasteText = paste.trim();

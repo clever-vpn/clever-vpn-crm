@@ -58,7 +58,7 @@ describe("scoreDocLink / extractDocLinks", () => {
 });
 
 describe("combineDocPages", () => {
-  it("按页面分隔合并；超过 60KB 截断并标记", () => {
+  it("按页面分隔合并；超过 100KB 截断并标记", () => {
     const pages: DocPage[] = [
       { url: "https://x/a", title: "A", text: "甲".repeat(20), chars: 20, selected: true, reason: "entry" },
       { url: "https://x/b", title: "B", text: "乙".repeat(20), chars: 20, selected: true, reason: "keyword" },
@@ -69,9 +69,9 @@ describe("combineDocPages", () => {
     expect(normal.document).toContain("===== 页面 2/2: B — https://x/b =====");
 
     const huge = combineDocPages([
-      { url: "https://x/a", title: "A", text: "甲".repeat(60 * 1024), chars: 60 * 1024, selected: true, reason: "entry" },
+      { url: "https://x/a", title: "A", text: "甲".repeat(100 * 1024), chars: 100 * 1024, selected: true, reason: "entry" },
     ]);
     expect(huge.truncated).toBe(true);
-    expect(new TextEncoder().encode(huge.document).length).toBeLessThanOrEqual(60 * 1024);
+    expect(new TextEncoder().encode(huge.document).length).toBeLessThanOrEqual(100 * 1024);
   });
 });

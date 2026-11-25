@@ -50,7 +50,7 @@ export interface AiDraft {
 export const AI_LIMITS = {
   /** 太短的文本不可能是完整接口文档 */
   minDocChars: 200,
-  maxDocBytes: 60 * 1024,
+  maxDocBytes: 100 * 1024,
   /** 每小时每租户生成次数（按 audit_log 计，跨 isolate） */
   perHour: 20,
   /** 每小时每租户 URL 文档抓取次数 */

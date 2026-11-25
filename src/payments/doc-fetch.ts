@@ -16,7 +16,7 @@ const PAGE_TIMEOUT_MS = 12_000;
 const TOTAL_TIMEOUT_MS = 45_000;
 const MAX_PAGE_BYTES = 2 * 1024 * 1024;
 const MAX_PAGE_TEXT = 20 * 1024;
-const MAX_DOC_BYTES = 60 * 1024;
+const MAX_DOC_BYTES = 100 * 1024;
 
 export class DocFetchError extends Error {
   readonly code: string;
@@ -349,7 +349,7 @@ async function fetchPage(input: string, fetchImpl: typeof fetch, timeoutMs: numb
   };
 }
 
-/** 合并页面；总正文超 60KB 时截断并返回 warning。 */
+/** 合并页面；总正文超 100KB 时截断并返回 warning。 */
 export function combineDocPages(pages: DocPage[]): { document: string; truncated: boolean } {
   const sections = pages.map((p, i) => `===== 页面 ${i + 1}/${pages.length}: ${p.title} — ${p.url} =====\n${p.text}`);
   const joined = sections.join("\n\n").trim();
