@@ -847,7 +847,6 @@ export interface AiDocFetchResponse {
 
 export interface GatewaysResponse {
   gateways: GatewayView[];
-  mock_enabled: boolean;
   secret_key_ready: boolean;
   /** AI 配置助手是否已配置（AI binding + CLOUDFLARE_GATEWAY_ID） */
   ai_ready: boolean;

@@ -103,7 +103,7 @@ CRM 尚未正式发布，历史上有 19 个递增迁移（`0000_baseline` + 18 
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`/`currency`（CRM 账本）、`provider_amount_minor`/`provider_currency`/`fx_rate`（实际扣款与汇率快照）、`source`(purchase/gift/manual/test)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`next_poll_at`/`poll_attempts`、`return_poll_at`（回跳页查询冷却）、`status`、`refunded_minor`、`voided_at`、`provision_*` |
+| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`/`currency`（CRM 账本）、`provider_amount_minor`/`provider_currency`/`fx_rate`（实际扣款与汇率快照）、`source`(purchase/gift/manual/test/mock)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`next_poll_at`/`poll_attempts`、`return_poll_at`（回跳页查询冷却）、`status`、`refunded_minor`、`voided_at`、`provision_*` |
 | `refunds` | 退款**明细**（可多次部分退） | `order_id`、`amount_minor`、`mode`、`operator`、`channel_refund_id`、`status` |
 | `adjustments` | 管理员**调整**（非售卖） | `field`、`before_value`、`after_value`、`reason`、`operator`、`platform_applied_at` |
 | `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`methods`、`channel_codes`（账户通道号，实例值）、`mapping`（协议类型）、`priority`、`status`(draft/live/disabled/deleted)、`currency`（网关币种）、`fx_rate`（1 网关币种 = X CNY）、`secret_enc`（API 密钥）、`webhook_enc`（Stripe signing secret / PayPal webhook id）、`test_amount_minor`、`test_create_ok_at`/`test_query_ok_at`/`test_callback_ok_at`、`test_require_callback`、`tested_config_hash`、`last_test_order_id` |
@@ -117,7 +117,7 @@ status: pending → paid → provisioning → active
                      ↘ expired（超时/明确失败；钱晚到仍可转 paid）
         paid → refunded（可能同时 voided）
         周期到期 → closed
-source: purchase（自助） | gift（赠送） | manual（后台补单） | test（网关测试，不发权益）
+source: purchase（自助） | gift（赠送） | manual（后台补单） | test（网关测试，不发权益） | mock（租户测试网关，走完整履约）
 ```
 
 ### 2.5 容易混的字段（`platform_subscriptions`）

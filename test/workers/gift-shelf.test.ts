@@ -152,7 +152,6 @@ let racerBToken = "";
 let nobodyToken = "";
 
 beforeAll(async () => {
-  (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
   (env as unknown as Record<string, unknown>).APP_SECRET = "master-key-for-tests";
   const cfApi: FakeCfApi = installFakeCfApi();
   await seedPlatformCreds(env.DB, cfApi);

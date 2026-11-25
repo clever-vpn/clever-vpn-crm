@@ -8,8 +8,8 @@
  *   2. `methods` 含本次要收的支付方式；
  *   3. **白名单**：`allowed_emails` 为空 = 不限；非空则客户邮箱必须在名单里。
  *
- * 另外 `driver = 'mock'` 还有一道**环境闸门**（`env.ALLOW_MOCK_PAYMENTS`）与
- * 「白名单必须非空」，见 `docs/payments.md` §5.3。
+ * `driver = 'mock'` 是租户自测网关：**只靠强制非空白名单隔离**，见
+ * `docs/payments.md` §5.3。
  */
 
 import { EPAY_V1_MAPPING } from "./builtin/epay";
@@ -93,22 +93,17 @@ export function parseAllowedEmails(raw: string | null): string[] {
   return parseJsonArray(raw).map((e) => e.toLowerCase());
 }
 
-/** 第一道闸门：mock 网关的环境总开关（默认关） */
-export function isMockEnabled(env: Env): boolean {
-  return String(env.ALLOW_MOCK_PAYMENTS ?? "").trim().toLowerCase() === "true";
-}
-
 /**
  * 第三道条件：这条网关对某个客户可见吗？
  *
- * `mock` 特殊：它**额外要求白名单非空**（空名单 = 对所有真实用户开放 = 免费开通）。
+ * `mock` 特殊：它**额外要求白名单非空**（空名单 = 对任何人都不存在）。
  */
-export function gatewayVisibleTo(gw: GatewayRow, email: string, env: Env): boolean {
+export function gatewayVisibleTo(gw: GatewayRow, email: string, _env: Env): boolean {
   const allowed = parseAllowedEmails(gw.allowed_emails);
   const who = email.trim().toLowerCase();
 
   if (gw.driver === MOCK_DRIVER) {
-    if (!isMockEnabled(env)) return false;
+    // 生产/测试环境都允许 mock；只靠强制非空白名单隔离，绝不向陌生访客开放。
     if (allowed.length === 0) return false;
     return allowed.includes(who);
   }
@@ -201,7 +196,7 @@ export async function listGateways(env: Env): Promise<GatewayRow[]> {
  *
  *   `live` + 有可路由实现 + 对这个人是可见的（`gatewayVisibleTo`）
  *
- * 1. **白名单为空 = 公开网关**：谁都可见，游客也算（这是绝大多数情况）。
+ * 1. **白名单为空 = 公开网关**：谁都可见，游客也算（除 mock 外）。
  * 2. **白名单非空 = 私有网关**：只对名单内的**已登录**用户可见；游客一律不可见
  *    （游客没有邮箱，不可能命中名单）。
  * 3. **`driver='mock'` 额外要求名单非空**：空名单的测试网关等于不存在 —— 连登录

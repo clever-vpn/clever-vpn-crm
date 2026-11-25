@@ -53,7 +53,6 @@ function call(path: string, init: { method?: string; body?: unknown } = {}) {
 beforeAll(async () => {
   // 本文件需要"配了主密钥"的默认态
   (env as unknown as Record<string, unknown>).APP_SECRET = "master-key-for-tests";
-  (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
 
   const now = new Date().toISOString();
   await env.DB.prepare(
@@ -77,11 +76,9 @@ describe("网关管理", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       drivers: { driver: string; methods: string[] }[];
-      mock_enabled: boolean;
       secret_key_ready: boolean;
       gateways: Record<string, unknown>[];
     };
-    expect(body.mock_enabled).toBe(true);
     expect(body.secret_key_ready).toBe(true);
     expect(body.drivers.find((d) => d.driver === "stripe")?.methods).toEqual(["stripe"]);
     for (const gw of body.gateways) expect(gw).not.toHaveProperty("secret");
@@ -516,15 +513,81 @@ describe("网关管理", () => {
     expect(draftCleared.status).toBe(200);
   });
 
-  it("环境开关关闭时不能创建测试网关", async () => {
-    (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "false";
+  it("正式环境可以直接创建测试网关；白名单仍是发布/路由的必要条件", async () => {
     const res = await call("/api/admin/gateways", {
       method: "POST",
-      body: { driver: "mock", name: "测试网关-关闭态", methods: ["alipay"] },
+      body: {
+        driver: "mock",
+        name: "正式环境测试网关",
+        methods: ["alipay"],
+        allowed_emails: ["tester@example.com"],
+      },
     });
-    (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toBe("mock_disabled");
+    expect(res.status).toBe(201);
+  });
+
+  it("已发布网关：基本信息可改，协议字段/币种必须先停用", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "epay_v1",
+        name: "已发布-字段锁定",
+        endpoint: "https://pay-lock.example.com",
+        merchant_id: "M-LOCK",
+        secret: "lock-secret",
+        methods: ["alipay"],
+      },
+    });
+    expect(created.status).toBe(201);
+    const id = ((await created.json()) as { gateway: { id: number } }).gateway.id;
+    await markTested(id);
+    expect((await call(`/api/admin/gateways/${id}/publish`, { method: "POST" })).status).toBe(200);
+
+    const before = await env.DB.prepare(
+      `SELECT test_create_ok_at, fx_rate FROM payment_gateways WHERE id = ?`,
+    )
+      .bind(id)
+      .first<{ test_create_ok_at: string | null; fx_rate: number }>();
+
+    // 汇率 / 名称 / 优先级属于基本信息：live 可直接改，且不清测试结果
+    const basic = await call(`/api/admin/gateways/${id}`, {
+      method: "PATCH",
+      body: { fx_rate: 2, name: "已发布-改名" },
+    });
+    expect(basic.status).toBe(200);
+    const basicBody = (await basic.json()) as { gateway: { status: string; test_create_ok_at: string | null } };
+    expect(basicBody.gateway.status).toBe("live");
+    expect(basicBody.gateway.test_create_ok_at).toBe(before?.test_create_ok_at);
+
+    // 协议字段 / 币种：必须先停用
+    const endpoint = await call(`/api/admin/gateways/${id}`, {
+      method: "PATCH",
+      body: { endpoint: "https://pay-lock-2.example.com" },
+    });
+    expect(endpoint.status).toBe(409);
+    expect(((await endpoint.json()) as { error: string }).error).toBe("gateway_must_stop");
+
+    const currency = await call(`/api/admin/gateways/${id}`, {
+      method: "PATCH",
+      body: { currency: "USD" },
+    });
+    expect(currency.status).toBe(409);
+
+    expect((await call(`/api/admin/gateways/${id}/disable`, { method: "POST" })).status).toBe(200);
+    const stopped = await call(`/api/admin/gateways/${id}`, {
+      method: "PATCH",
+      body: { endpoint: "https://pay-lock-3.example.com" },
+    });
+    expect(stopped.status).toBe(200);
+    const row = await env.DB.prepare(
+      `SELECT status, test_create_ok_at, test_query_ok_at, tested_config_hash FROM payment_gateways WHERE id = ?`,
+    )
+      .bind(id)
+      .first<{ status: string; test_create_ok_at: string | null; test_query_ok_at: string | null; tested_config_hash: string | null }>();
+    expect(row?.status).toBe("disabled");
+    expect(row?.test_create_ok_at).toBeNull();
+    expect(row?.test_query_ok_at).toBeNull();
+    expect(row?.tested_config_hash).toBeNull();
   });
 
   it("没配主密钥时拒绝保存密钥（不退化成存明文）", async () => {

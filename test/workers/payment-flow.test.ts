@@ -68,7 +68,6 @@ async function seedCustomer(email: string, token: string): Promise<number> {
 
 beforeAll(async () => {
   // 第一道闸门：打开 mock
-  (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
 
   // 平台落账：没有 cf-api 就只能是 provisioning（这是契约行为），
   // 所以这里装一个假平台，让付款后真的能拿到 code。
@@ -175,10 +174,11 @@ describe("mock 支付全链路", () => {
     expect(await paid.text()).toContain("已模拟支付成功");
 
     // 4. 订单与订阅
-    const row = await env.DB.prepare(`SELECT status, subscription_id, paid_at FROM orders WHERE code = ?`)
+    const row = await env.DB.prepare(`SELECT status, source, subscription_id, paid_at FROM orders WHERE code = ?`)
       .bind(order.order_code)
-      .first<{ status: string; subscription_id: number | null; paid_at: string | null }>();
+      .first<{ status: string; source: string; subscription_id: number | null; paid_at: string | null }>();
     expect(row?.status).toBe("active");
+    expect(row?.source).toBe("mock");
     expect(row?.paid_at).toBeTruthy();
     expect(row?.subscription_id).toBeGreaterThan(0);
 

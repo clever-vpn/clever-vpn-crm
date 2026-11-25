@@ -51,12 +51,14 @@ function PaymentMethodsEditor({
   methods,
   codes,
   showChannel,
+  disabled,
   onChange,
 }: {
   options: { value: string; label: string }[];
   methods: string[];
   codes: Record<string, string | number>;
   showChannel: boolean;
+  disabled?: boolean;
   onChange: (nextMethods: string[], nextCodes: Record<string, string | number>) => void;
 }) {
   if (!showChannel) {
@@ -67,6 +69,7 @@ function PaymentMethodsEditor({
         onChange={(next: string[]) => onChange(next, codes)}
         options={options}
         placeholder="选择支付方式"
+        disabled={disabled}
       />
     );
   }
@@ -122,7 +125,6 @@ export default function GatewayEditor({ mode, id }: Props) {
   const driverMethods = data?.drivers.find((d) => d.driver === driver)?.methods ?? [];
   const fields = driverFields(driver);
   const driverChoices = visibleDrivers(data?.drivers ?? [], {
-    mockEnabled: Boolean(data?.mock_enabled),
     current: editing?.driver ?? null,
   });
   const methodsWatch: string[] = Form.useWatch("methods", form) ?? [];
@@ -132,6 +134,10 @@ export default function GatewayEditor({ mode, id }: Props) {
   const endpointWatch: string | undefined = Form.useWatch("endpoint", form);
   const nameWatch: string | undefined = Form.useWatch("name", form);
   const testRequireCallback: boolean = Form.useWatch("test_require_callback", form) ?? false;
+  /** 已发布：支付协议字段只读；名称/优先级/白名单/汇率/测试设置仍可改。 */
+  const protocolLocked = editing?.status === "live";
+  /** 驱动只在草稿可改；已发布/已停用都只能复制。 */
+  const driverLocked = mode === "edit" && editing !== null && editing.status !== "draft";
 
   function markDirty(): void {
     if (hydratingRef.current) return;
@@ -437,9 +443,28 @@ export default function GatewayEditor({ mode, id }: Props) {
 
   const basicPane = (
     <>
+        {protocolLocked && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="已发布网关：支付协议配置只读"
+            description="修改网关地址/商户号/密钥/Webhook/支付方式/通道号/接口映射/币种，请先停用；名称/优先级/白名单/汇率/测试设置可直接修改。"
+          />
+        )}
+        {driverLocked && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="网关类型已锁定"
+            description="发布/停用后不能改驱动；需要换驱动请复制成新网关。"
+          />
+        )}
         <Form form={form} layout="vertical" onValuesChange={markDirty} scrollToFirstError>
           <Form.Item label="网关类型" name="driver" rules={[{ required: true }]}>
             <Select
+              disabled={driverLocked}
               options={driverChoices.map((d) => ({
                 value: d.driver,
                 label: DRIVER_LABEL[d.driver] ?? d.driver,
@@ -463,13 +488,13 @@ export default function GatewayEditor({ mode, id }: Props) {
 
           {fields.endpoint && (
             <Form.Item label="网关地址" name="endpoint" rules={[{ required: true }]}>
-              <Input placeholder="https://pay.example.com" />
+              <Input disabled={protocolLocked} placeholder="https://pay.example.com" />
             </Form.Item>
           )}
 
           {fields.merchant && (
             <Form.Item label={fields.merchantLabel} name="merchant_id" rules={[{ required: true }]}>
-              <Input placeholder={driver === "paypal" ? "PayPal Client ID" : "pid / mchId / appid"} />
+              <Input disabled={protocolLocked} placeholder={driver === "paypal" ? "PayPal Client ID" : "pid / mchId / appid"} />
             </Form.Item>
           )}
 
@@ -477,6 +502,7 @@ export default function GatewayEditor({ mode, id }: Props) {
             <Form.Item label={secretFieldLabel(driver)} name="secret">
               {driver === "epay_v2" ? (
                 <Input.TextArea
+                  disabled={protocolLocked}
                   rows={4}
                   placeholder='{"merchant_private_key":"-----BEGIN PRIVATE KEY-----...","platform_public_key":"-----BEGIN PUBLIC KEY-----..."}'
                 />
@@ -490,9 +516,9 @@ export default function GatewayEditor({ mode, id }: Props) {
             <>
               <Form.Item label={fields.webhookLabel} name="webhook_secret">
                 {driver === "paypal" ? (
-                  <Input placeholder="WH-..." />
+                  <Input disabled={protocolLocked} placeholder="WH-..." />
                 ) : (
-                  <Input.Password autoComplete="new-password" placeholder="whsec_..." />
+                  <Input.Password disabled={protocolLocked} autoComplete="new-password" placeholder="whsec_..." />
                 )}
               </Form.Item>
               <Form.Item label="Webhook 地址">
@@ -530,6 +556,7 @@ export default function GatewayEditor({ mode, id }: Props) {
                 methods={methodsWatch}
                 codes={channelCodesWatch}
                 showChannel={hasChannel}
+                disabled={protocolLocked}
                 onChange={(nextMethods, nextCodes) => {
                   form.setFieldValue("methods", nextMethods);
                   form.setFieldValue("channel_codes", nextCodes);
@@ -559,6 +586,7 @@ export default function GatewayEditor({ mode, id }: Props) {
                   <>
                     <Form.Item label="结算币种" name="currency" extra="网关实际扣款币种，如 CNY / USD">
             <Select
+              disabled={protocolLocked}
               options={[
                 { value: "CNY", label: "CNY" },
                 { value: "USD", label: "USD" },
@@ -586,6 +614,7 @@ export default function GatewayEditor({ mode, id }: Props) {
                     {fields.mapping === "epay" && (
                       <Form.Item label="覆盖接口配置（JSON，可选）" extra="只写与默认值不同的部分">
                         <Input.TextArea
+                          disabled={protocolLocked}
                           rows={6}
                           className="mono"
                           placeholder="{ }"

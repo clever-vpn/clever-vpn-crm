@@ -41,7 +41,6 @@ function call(path: string, init: { method?: string; body?: unknown } = {}) {
 }
 
 beforeAll(async () => {
-  (env as unknown as Record<string, unknown>).ALLOW_MOCK_PAYMENTS = "true";
 
   await env.DB.prepare(
     `INSERT INTO admin_users (email, password_hash, totp_enabled, created_at, updated_at)

@@ -51,7 +51,6 @@ jobs:
       REGISTRY_D1_ID: ${{ vars.REGISTRY_D1_ID }}
       BASE_DOMAIN: ${{ vars.SAAS_BASE_DOMAIN || 'clever-vpn.org' }}
       SITE_URL: ${{ vars.SITE_URL }}
-      ALLOW_MOCK_PAYMENTS: ${{ vars.ALLOW_MOCK_PAYMENTS }}
     steps:
       - uses: actions/checkout@v5
         with:

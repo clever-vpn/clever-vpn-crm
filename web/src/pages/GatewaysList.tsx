@@ -67,14 +67,6 @@ export default function GatewaysList() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {error && <Alert type="error" showIcon message={error} />}
 
-      {data && !data.mock_enabled && data.gateways.some((g) => g.driver === "mock") && (
-        <Alert
-          type="info"
-          showIcon
-          message="测试网关未启用"
-          description="已有测试网关不会参与路由。需要联调时再打开 ALLOW_MOCK_PAYMENTS。"
-        />
-      )}
       {data && !data.secret_key_ready && (
         <Alert
           type="warning"

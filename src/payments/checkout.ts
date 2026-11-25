@@ -189,7 +189,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
   const recent = await env.DB.prepare(
     `SELECT code, pay_url, amount_minor, currency, expires_at FROM orders
       WHERE customer_id = ? AND plan_id = ? AND payment_method = ? AND status = 'pending'
-        AND source = 'purchase'
+        AND source IN ('purchase', 'mock')
         AND amount_minor = ?
         AND pay_url IS NOT NULL AND created_at >= ? AND expires_at > ?
       ORDER BY id DESC LIMIT 1`,
@@ -209,7 +209,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
     };
   }
 
-  // ── 2. 路由：闸门全在这一处（status / methods / 白名单 / 环境开关）──
+  // ── 2. 路由：闸门全在这一处（status / methods / 白名单）──
   const route = input.testGatewayId
     ? routeForTest(await listGateways(env), input.testGatewayId, input.method)
     : pickGateway(await listLiveGateways(env), input.method, input.customerEmail, env);
@@ -413,7 +413,7 @@ export async function createCharge(env: Env, input: CreateChargeInput): Promise<
       input.promotionId ?? null,
       input.codeId ?? null,
       input.entry ?? null,
-      input.testGatewayId ? "test" : "purchase",
+      input.testGatewayId ? "test" : route.gateway.driver === MOCK_DRIVER ? "mock" : "purchase",
       input.method,
       route.gateway.id,
       orderCode,

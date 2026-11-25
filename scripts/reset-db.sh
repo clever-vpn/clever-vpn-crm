@@ -113,7 +113,7 @@ SELECT 'ORD-DEV-0001', c.id, 'dev_period_100g', 'period',
        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
 FROM customers c WHERE c.email = 'alice@example.com'
   AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.code = 'ORD-DEV-0001');
--- 测试网关（docs/payments.md §5.3）：默认关闭，需 ALLOW_MOCK_PAYMENTS=true 才可见；
+-- 测试网关（docs/payments.md §5.3）：正式/本地都可用，靠非空白名单隔离；
 -- 白名单只放 dev 客户 —— 空名单等于向所有真实用户免费开通，这里绝不能留空。
 INSERT INTO payment_gateways
   (driver, name, endpoint, merchant_id, secret_enc, methods, mapping, priority, status,

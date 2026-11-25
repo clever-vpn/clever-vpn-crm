@@ -25,30 +25,26 @@ const DRIVERS = [
 ];
 
 describe("visibleDrivers", () => {
-  it("新建：列出有实现的 driver，排除 manual；mock 关闭时也排除", () => {
-    const out = visibleDrivers(DRIVERS, { mockEnabled: false });
+  it("新建：列出有实现的 driver，排除 manual；mock 始终可用", () => {
+    const out = visibleDrivers(DRIVERS, {});
     expect(out.map((d) => d.driver)).toEqual([
       "epay_v1",
       "generic_json_v1",
       "stripe",
       "paypal",
+      "mock",
     ]);
-  });
-
-  it("mock 打开时加入测试网关", () => {
-    const out = visibleDrivers(DRIVERS, { mockEnabled: true });
-    expect(out.map((d) => d.driver)).toContain("mock");
   });
 
   it("编辑历史 manual：把当前 driver 加回，且不改输入", () => {
     const snapshot = JSON.stringify(DRIVERS);
-    const out = visibleDrivers(DRIVERS, { mockEnabled: false, current: "manual" });
+    const out = visibleDrivers(DRIVERS, { current: "manual" });
     expect(out[0]!.driver).toBe("manual");
     expect(JSON.stringify(DRIVERS)).toBe(snapshot);
   });
 
-  it("编辑历史 mock 但环境开关关闭：仍加回当前行", () => {
-    const out = visibleDrivers(DRIVERS, { mockEnabled: false, current: "mock" });
+  it("编辑历史 mock：仍加回当前行", () => {
+    const out = visibleDrivers(DRIVERS, { current: "mock" });
     expect(out.some((d) => d.driver === "mock")).toBe(true);
   });
 });
