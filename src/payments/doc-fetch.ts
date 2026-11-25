@@ -15,7 +15,7 @@ const MAX_LINKS = 80;
 const PAGE_TIMEOUT_MS = 12_000;
 const TOTAL_TIMEOUT_MS = 45_000;
 const MAX_PAGE_BYTES = 2 * 1024 * 1024;
-const MAX_PAGE_TEXT = 20 * 1024;
+const MAX_PAGE_TEXT = 80 * 1024;
 const MAX_DOC_BYTES = 100 * 1024;
 
 export class DocFetchError extends Error {
@@ -399,7 +399,11 @@ export async function fetchDocFromUrl(input: string, options: DocFetchOptions = 
       .slice(0, maxPages - 1);
   }
   if (selectedLinks.length === 0) {
-    warnings.push("没有发现明显的下单/通知/查单页面；建议直接粘贴或上传完整文档");
+    // 单页文档常用 #anchor 组织章节；只要入口正文本身像接口文档，就不该误导用户。
+    const entryLooksRelevant = /(下单|创建订单|发起支付|支付通知|回调|查单|查询订单|签名|验签)/i.test(entry.text);
+    if (!entryLooksRelevant) {
+      warnings.push("没有发现明显的下单/通知/查单页面；建议直接粘贴或上传完整文档");
+    }
   }
 
   const pages: DocPage[] = [{

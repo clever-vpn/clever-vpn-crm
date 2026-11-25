@@ -52,7 +52,7 @@ const ENTRY_HTML = `
   <main><h1>概述</h1><p>支付 API 总览</p></main>
 `;
 
-function fakeFetch(options: { empty?: boolean; dnsIp?: string } = {}): { impl: typeof fetch; calls: string[] } {
+function fakeFetch(options: { empty?: boolean; dnsIp?: string; entryHtml?: string } = {}): { impl: typeof fetch; calls: string[] } {
   const calls: string[] = [];
   const impl = (async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -62,7 +62,7 @@ function fakeFetch(options: { empty?: boolean; dnsIp?: string } = {}): { impl: t
         headers: { "content-type": "application/dns-json" },
       });
     }
-    if (url === ENTRY) return html(options.empty ? "" : ENTRY_HTML);
+    if (url === ENTRY) return html(options.empty ? "" : options.entryHtml ?? ENTRY_HTML);
     if (url === "https://docs.example.com/docs/api/sign.html") return html("<h1>签名规则</h1><p>MD5 排序</p>");
     if (url === "https://docs.example.com/docs/api.html?chapter=1") return html("<h1>创建订单</h1><p>POST /v1/order</p>");
     if (url === "https://docs.example.com/docs/api.html?chapter=2") return html("<h1>查询订单</h1><p>POST /v1/query</p>");
@@ -156,6 +156,23 @@ describe("文档网址抓取", () => {
     expect(body.document).toContain("创建订单");
     expect(body.document).toContain("查询订单");
     expect(body.pages.filter((p) => p.reason === "keyword").length).toBeGreaterThan(0);
+  });
+
+  it("单页长文档：80KB 内不截断，且不误报没有下单/通知/查单页面", async () => {
+    disableAi();
+    const longEntry = `<h1>支付 API</h1><p>下单 创建订单 支付通知 回调 查单</p><p>${"甲".repeat(25_000)}</p>`;
+    const fake = fakeFetch({ entryHtml: longEntry });
+    vi.stubGlobal("fetch", fake.impl);
+    const res = await call("/api/admin/gateways/ai-fetch-doc", { method: "POST", body: { url: ENTRY } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      pages: { chars: number; text: string }[];
+      warnings: string[];
+    };
+    expect(body.pages[0]!.chars).toBeGreaterThan(20_000);
+    expect(body.pages[0]!.text).toContain("甲".repeat(25_000));
+    expect(body.warnings.join("\n")).not.toContain("入口页正文超过");
+    expect(body.warnings.join("\n")).not.toContain("没有发现明显的下单/通知/查单页面");
   });
 
   it("有 AI → 按 AI 返回的编号选页", async () => {
