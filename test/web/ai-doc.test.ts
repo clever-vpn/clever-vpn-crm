@@ -60,6 +60,19 @@ describe("readAiDocument", () => {
     expect(r.text).not.toContain("<h1>");
   });
 
+  it("按源码顺序提取：表格不规范时也不把通知表挪到响应表后面", () => {
+    const html = `<h2>2. 支付查单</h2>
+      <table><tr><td>data.mchOrderNo</td><td>data.status</td></tr>
+      <h2>3. 支付通知</h2>
+      <table><tr><td>mchOrderNo</td><td>status</td><td>sign</td></tr></table>`;
+    const r = readAiDocument("doc.html", html);
+    expect(r.error).toBeUndefined();
+    const notify = r.text.slice(r.text.indexOf("3. 支付通知"));
+    expect(notify).toContain("mchOrderNo");
+    expect(notify).toContain("status");
+    expect(notify).not.toContain("data.mchOrderNo");
+  });
+
   it("mhtml 支持 quoted-printable / base64 / 明文 HTML part", () => {
     const html = "<h1>布拉格</h1><p>POST /api/pay/unifiedorder</p>";
     for (const enc of ["quoted-printable", "base64", "none"] as const) {

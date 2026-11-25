@@ -110,30 +110,26 @@ function htmlFromMhtml(raw: string): string | null {
   return best;
 }
 
-/** 只声明用到的 DOM 形状：根 tsconfig 没有 DOM lib（worker 侧也不该有）。 */
-interface ParsedDocument {
-  body: { textContent: string } | null;
-  querySelectorAll(selector: string): ArrayLike<{ remove(): void }>;
-}
-type DocumentParser = new () => {
-  parseFromString(input: string, type: "text/html"): ParsedDocument;
-};
-
+/**
+ * 按**源码顺序**去标签，而不是交给 DOMParser 重排。
+ *
+ * MHTML 是从浏览器保存的，表格/段落嵌套可能不合法（例如未闭合的 table）。
+ * 浏览器的 HTML 解析器会做容错修复，可能把「通知参数」表格移动到响应表格后面，
+ * 导致 AI 看到 notify 的 data.* 响应字段。按源码顺序提取可以保持文档原貌。
+ */
 function htmlToText(html: string): string {
   const marked = withLineBreaks(html);
-  const Parser = (globalThis as { DOMParser?: DocumentParser }).DOMParser;
-  if (!Parser) {
-    return marked
-      .replace(/<(script|style|noscript|nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\s*\n\s*/g, "\n")
-      .trim();
-  }
-  const doc = new Parser().parseFromString(marked, "text/html");
-  Array.from(doc.querySelectorAll("script,style,noscript,template,nav,header,footer,aside")).forEach((el) => el.remove());
-  const text = doc.body?.textContent ?? "";
-  return text
+  return marked
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style|noscript|template|nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&hellip;/gi, "…")
     .replace(/[ \t]+/g, " ")
     .replace(/\s*\n\s*/g, "\n")
     .replace(/\n{2,}/g, "\n")
