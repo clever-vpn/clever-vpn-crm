@@ -443,22 +443,17 @@ export default function GatewayEditor({ mode, id }: Props) {
 
   const basicPane = (
     <>
-        {protocolLocked && (
+        {(protocolLocked || driverLocked) && (
           <Alert
-            type="warning"
+            type={protocolLocked ? "warning" : "info"}
             showIcon
             style={{ marginBottom: 12 }}
-            message="已发布网关：支付协议配置只读"
-            description="修改网关地址/商户号/密钥/Webhook/支付方式/通道号/接口映射/币种，请先停用；名称/优先级/白名单/汇率/测试设置可直接修改。"
-          />
-        )}
-        {driverLocked && (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="网关类型已锁定"
-            description="发布/停用后不能改驱动；需要换驱动请复制成新网关。"
+            message={protocolLocked ? "已发布网关：支付协议配置只读" : "网关类型已锁定"}
+            description={
+              protocolLocked
+                ? "网关类型/驱动已锁定；修改网关地址/商户号/密钥/Webhook/支付方式/通道号/接口映射/币种，请先停用。名称/优先级/白名单/汇率/测试设置可直接修改。"
+                : "换驱动请复制成新网关；支付协议配置可直接修改，保存后需要重新测试并发布。"
+            }
           />
         )}
         <Form form={form} layout="vertical" onValuesChange={markDirty} scrollToFirstError>
