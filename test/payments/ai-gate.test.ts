@@ -80,6 +80,18 @@ describe("evaluateAiDraft", () => {
     expect(report.warnings.join("；")).toContain("应答原文");
   });
 
+  it("文档含 HTML 实体时，quote 用渲染后的 &/空格 仍能匹配", () => {
+    const doc = `${DOC}
+签名：在stringA最后拼接上key[即 StringA + "&amp;key=" + 私钥 ]&nbsp;得到stringSignTemp字符串。`;
+    const draft = draftWith();
+    draft.evidence = [{
+      section: "签名",
+      quote: '在stringA最后拼接上key[即 StringA + "&key=" + 私钥 ] 得到stringSignTemp字符串',
+    }];
+    const report = evaluateAiDraft(doc, draft);
+    expect(report.warnings.join("；")).not.toContain("evidence");
+  });
+
   it("evidence 引用伪造 → soft_gaps", () => {
     const draft = draftWith();
     draft.evidence = [{ section: "x", quote: "这句话文档里没有" }];

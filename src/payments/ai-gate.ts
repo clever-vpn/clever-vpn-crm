@@ -35,8 +35,19 @@ const DOC_GAP_PHRASES = [
   "todo",
 ];
 
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&hellip;/gi, "…");
+}
+
 function normalize(text: string): string {
-  return text.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  return decodeEntities(text).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function contains(haystack: string, needle: string): boolean {
@@ -46,7 +57,7 @@ function contains(haystack: string, needle: string): boolean {
 
 /** evidence 引用比对：忽略空白、标点、引号；省略号只比最长的一段。 */
 function normalizeEvidence(text: string): string {
-  return text
+  return decodeEntities(text)
     .toLowerCase()
     .replace(/[\u00a0\s]+/g, " ")
     .replace(/[`"'“”‘’]/g, "")

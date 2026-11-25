@@ -69,7 +69,7 @@ interface FetchedPage {
 }
 
 function normalize(text: string): string {
-  return text.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  return decodeEntities(text).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function decodeEntities(text: string): string {
@@ -78,8 +78,9 @@ function decodeEntities(text: string): string {
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
-    .replace(/&#0*39;/gi, "'")
-    .replace(/&nbsp;/gi, " ");
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&hellip;/gi, "…");
 }
 
 function isPrivateIpv4(ip: string): boolean {

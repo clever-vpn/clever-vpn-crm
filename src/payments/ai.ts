@@ -178,7 +178,9 @@ mapping 规则：
   （data.sign → data_path: "data"）；doc 没说验签对象就留空并写 uncertainty，不要猜；
 - pay_url 必须是**具体字段路径**（data.uri / datas.url），不要写对象前缀（datas）；
 - 文档只写对象名/JSONObject 而没有列出子字段时，**不要发明子字段**；把该点写进 uncertainty；
-- evidence 必须引用文档原文；pay_url / response.sign / reply 等关键项找不到原文依据时写 uncertainty；
+- evidence 必须**逐字、连续**引用文档原文，不要改写、省略、截断或拼接；
+  无法逐字引用时就不要写 evidence，把该点写进 uncertainty；
+  pay_url / response.sign / reply 等关键项找不到原文依据时也要写 uncertainty；
 - 判定值按字符串比较；equals 与 in 只能二选一；
 - query 必填且必须签名，禁止 {"mode":"none"}。
 
