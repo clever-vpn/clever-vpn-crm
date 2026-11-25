@@ -396,23 +396,35 @@ export default function GatewayEditor({ mode, id }: Props) {
         .split(/[,\s]+/)
         .map((s) => s.trim())
         .filter(Boolean);
-      const payload: GatewayDraft = {
-        driver: v.driver,
-        name: v.name,
-        endpoint: v.endpoint || null,
-        merchant_id: v.merchant_id || null,
-        methods: v.methods,
-        channel_codes: v.channel_codes ?? {},
-        priority: v.priority,
-        currency: v.currency,
-        fx_rate: Number(v.fx_rate),
-        test_amount_minor: Math.round(Number(v.test_amount) * 100),
-        test_require_callback: v.test_require_callback,
-        allowed_emails: emails,
-      };
-      if (v.secret && v.secret.trim()) payload.secret = v.secret.trim();
-      if (v.webhook_secret && v.webhook_secret.trim()) payload.webhook_secret = v.webhook_secret.trim();
-      if (mapping !== undefined) payload.mapping = mapping;
+      // 已发布时协议字段只读：只提交基本信息，避免把预填的 secret/mapping 当成“修改”。
+      const payload: GatewayDraft = protocolLocked
+        ? {
+            driver: v.driver,
+            name: v.name,
+            methods: v.methods,
+            priority: v.priority,
+            fx_rate: Number(v.fx_rate),
+            test_amount_minor: Math.round(Number(v.test_amount) * 100),
+            test_require_callback: v.test_require_callback,
+            allowed_emails: emails,
+          }
+        : {
+            driver: v.driver,
+            name: v.name,
+            endpoint: v.endpoint || null,
+            merchant_id: v.merchant_id || null,
+            methods: v.methods,
+            channel_codes: v.channel_codes ?? {},
+            priority: v.priority,
+            currency: v.currency,
+            fx_rate: Number(v.fx_rate),
+            test_amount_minor: Math.round(Number(v.test_amount) * 100),
+            test_require_callback: v.test_require_callback,
+            allowed_emails: emails,
+          };
+      if (!protocolLocked && v.secret && v.secret.trim()) payload.secret = v.secret.trim();
+      if (!protocolLocked && v.webhook_secret && v.webhook_secret.trim()) payload.webhook_secret = v.webhook_secret.trim();
+      if (!protocolLocked && mapping !== undefined) payload.mapping = mapping;
 
       if (mode === "edit" && editing) await api.updateGateway(editing.id, payload);
       else await api.createGateway(payload);
