@@ -1,0 +1,1 @@
+ALTER TABLE `payment_gateways` ADD `paypal_env` text;

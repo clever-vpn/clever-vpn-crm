@@ -94,6 +94,7 @@ function view(row: GatewayRow): Record<string, unknown> {
     driver: row.driver,
     name: row.name,
     endpoint: row.endpoint,
+    paypal_env: row.paypal_env,
     merchant_id: row.merchant_id,
     has_secret: !!row.secret_enc,
     has_webhook: !!row.webhook_enc,
@@ -156,6 +157,7 @@ interface NormalizedInput {
   driver: string;
   name: string;
   endpoint: string | null;
+  paypal_env: string | null;
   merchant_id: string | null;
   methods: string[];
   channel_codes: Record<string, string | number>;
@@ -220,6 +222,14 @@ function normalize(body: Record<string, unknown>, current?: GatewayRow): Normali
   }
 
   const endpoint = body.endpoint === undefined ? (current?.endpoint ?? null) : String(body.endpoint ?? "").trim() || null;
+  const paypalEnvRaw = driver === "paypal"
+    ? (body.paypal_env === undefined
+        ? (current?.paypal_env ?? null)
+        : String(body.paypal_env ?? "").trim() || null)
+    : null;
+  if (paypalEnvRaw !== null && paypalEnvRaw !== "sandbox" && paypalEnvRaw !== "live") {
+    return "PayPal 环境只能是 sandbox / live（留空 = 跟随部署环境）";
+  }
 
   const rawChannelCodes = body.channel_codes === undefined
     ? (current?.channel_codes ? (JSON.parse(current.channel_codes) as unknown) : null)
@@ -250,6 +260,7 @@ function normalize(body: Record<string, unknown>, current?: GatewayRow): Normali
     driver,
     name,
     endpoint,
+    paypal_env: paypalEnvRaw,
     merchant_id,
     methods,
     channel_codes,
@@ -266,6 +277,7 @@ function normalize(body: Record<string, unknown>, current?: GatewayRow): Normali
 function protocolFieldChanged(normalized: NormalizedInput, current: GatewayRow, body: Record<string, unknown>): boolean {
   return (
     normalized.endpoint !== current.endpoint ||
+    normalized.paypal_env !== current.paypal_env ||
     normalized.merchant_id !== current.merchant_id ||
     normalized.currency !== current.currency ||
     sortedJson(normalized.methods) !== sortedJson(parseArray(current.methods)) ||
@@ -299,6 +311,7 @@ export async function gatewayConfigHash(row: GatewayRow): Promise<string> {
     channel_codes: row.channel_codes,
     mapping: row.mapping,
     currency: row.currency,
+    paypal_env: row.paypal_env,
   });
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -306,7 +319,7 @@ export async function gatewayConfigHash(row: GatewayRow): Promise<string> {
 
 async function loadGateway(env: Env, id: number): Promise<GatewayRow | null> {
   return env.DB.prepare(
-    `SELECT id, driver, name, endpoint, merchant_id, secret_enc, webhook_enc, methods, mapping, priority,
+    `SELECT id, driver, name, endpoint, paypal_env, merchant_id, secret_enc, webhook_enc, methods, mapping, priority,
        channel_codes, status, currency, fx_rate, test_amount_minor, test_create_ok_at, test_query_ok_at,
        test_callback_ok_at, test_require_callback, tested_config_hash, allowed_emails, last_test_order_id, last_ok_at, last_error
      FROM payment_gateways WHERE id = ?`,
@@ -373,14 +386,15 @@ export async function handleAdminGateways(
 
     const now = new Date().toISOString();
     const res = await env.DB.prepare(
-      `INSERT INTO payment_gateways (driver, name, endpoint, merchant_id, secret_enc, webhook_enc,
+      `INSERT INTO payment_gateways (driver, name, endpoint, paypal_env, merchant_id, secret_enc, webhook_enc,
          methods, channel_codes, mapping, priority, status, currency, fx_rate, test_amount_minor, test_require_callback, allowed_emails, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         normalized.driver,
         normalized.name,
         normalized.endpoint,
+        normalized.paypal_env,
         normalized.merchant_id,
         secretEnc,
         webhookEnc,
@@ -593,7 +607,7 @@ export async function handleAdminGateways(
     }
 
     await env.DB.prepare(
-      `UPDATE payment_gateways SET driver = ?, name = ?, endpoint = ?, merchant_id = ?, secret_enc = ?,
+      `UPDATE payment_gateways SET driver = ?, name = ?, endpoint = ?, paypal_env = ?, merchant_id = ?, secret_enc = ?,
          webhook_enc = ?, methods = ?, channel_codes = ?, mapping = ?, priority = ?, currency = ?, fx_rate = ?, test_amount_minor = ?, test_require_callback = ?, allowed_emails = ?,
          updated_at = ? WHERE id = ?`,
     )
@@ -601,6 +615,7 @@ export async function handleAdminGateways(
         normalized.driver,
         normalized.name,
         normalized.endpoint,
+        normalized.paypal_env,
         normalized.merchant_id,
         secretEnc,
         webhookEnc,
@@ -642,14 +657,15 @@ export async function handleAdminGateways(
     const now = new Date().toISOString();
     const name = `${current.name}（副本）`.slice(0, 60);
     const res = await env.DB.prepare(
-      `INSERT INTO payment_gateways (driver, name, endpoint, merchant_id, secret_enc, webhook_enc,
+      `INSERT INTO payment_gateways (driver, name, endpoint, paypal_env, merchant_id, secret_enc, webhook_enc,
          methods, channel_codes, mapping, priority, status, currency, fx_rate, test_amount_minor, test_require_callback, allowed_emails, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         current.driver,
         name,
         current.endpoint,
+        current.paypal_env,
         current.merchant_id,
         current.secret_enc,
         current.webhook_enc,
@@ -709,6 +725,9 @@ export async function handleAdminGateways(
     if (current.status === "live") return fail(409, "already_live", "网关已是发布状态");
 
     // publish：三道检查
+    if (current.driver === "paypal" && current.paypal_env === "sandbox" && parseArray(current.allowed_emails).length === 0) {
+      return fail(400, "paypal_sandbox_whitelist_required", "PayPal Sandbox 网关必须配置客户白名单才能发布");
+    }
     if (current.driver === "mock") {
       if (parseArray(current.allowed_emails).length === 0) {
         return fail(400, "mock_whitelist_required", "测试网关必须配置客户白名单才能发布（否则等于向所有人免费开通）");

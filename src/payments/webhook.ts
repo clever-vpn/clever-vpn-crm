@@ -143,6 +143,7 @@ export async function handlePaypalWebhook(
     clientId: gateway.merchant_id,
     secret,
     webhookId,
+    paypalEnv: gateway.paypal_env,
     env,
     fetch: deps.fetch,
   });

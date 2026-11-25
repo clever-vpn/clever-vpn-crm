@@ -230,6 +230,35 @@ describe("网关管理", () => {
     expect(pub.status).toBe(200);
   });
 
+  it("PayPal Sandbox：必须显式环境 + 客户白名单才能发布", async () => {
+    const created = await call("/api/admin/gateways", {
+      method: "POST",
+      body: {
+        driver: "paypal",
+        name: "PayPal Sandbox",
+        merchant_id: "sandbox-client",
+        secret: "sandbox-secret",
+        webhook_secret: "WH-sandbox",
+        methods: ["paypal"],
+        paypal_env: "sandbox",
+      },
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { gateway: { id: number; paypal_env: string | null } };
+    expect(body.gateway.paypal_env).toBe("sandbox");
+    await markTested(body.gateway.id);
+    const denied = await call(`/api/admin/gateways/${body.gateway.id}/publish`, { method: "POST" });
+    expect(denied.status).toBe(400);
+    expect(((await denied.json()) as { error: string }).error).toBe("paypal_sandbox_whitelist_required");
+
+    await call(`/api/admin/gateways/${body.gateway.id}`, {
+      method: "PATCH",
+      body: { allowed_emails: ["sandbox@example.com"] },
+    });
+    const published = await call(`/api/admin/gateways/${body.gateway.id}/publish`, { method: "POST" });
+    expect(published.status).toBe(200);
+  });
+
   it("Stripe/PayPal 发布前必须有 webhook 凭据；保存后只回 has_webhook", async () => {
     const created = await call("/api/admin/gateways", {
       method: "POST",

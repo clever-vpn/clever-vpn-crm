@@ -740,6 +740,7 @@ export interface GatewayView {
   driver: string;
   name: string;
   endpoint: string | null;
+  paypal_env: "sandbox" | "live" | null;
   merchant_id: string | null;
   has_secret: boolean;
   has_webhook: boolean;
@@ -767,6 +768,7 @@ export interface GatewayDraft {
   driver: string;
   name: string;
   endpoint?: string | null;
+  paypal_env?: "sandbox" | "live" | null;
   merchant_id?: string | null;
   /** 明文密钥：只有传了才会更新；留空 = 不改 */
   secret?: string;

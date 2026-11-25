@@ -28,6 +28,7 @@ interface FormValues {
   driver: string;
   name: string;
   endpoint?: string;
+  paypal_env?: "" | "sandbox" | "live";
   merchant_id?: string;
   secret?: string;
   webhook_secret?: string;
@@ -134,6 +135,7 @@ export default function GatewayEditor({ mode, id }: Props) {
   const endpointWatch: string | undefined = Form.useWatch("endpoint", form);
   const nameWatch: string | undefined = Form.useWatch("name", form);
   const testRequireCallback: boolean = Form.useWatch("test_require_callback", form) ?? false;
+  const paypalEnvWatch: "" | "sandbox" | "live" | undefined = Form.useWatch("paypal_env", form);
   /** 已发布：支付协议字段只读；名称/优先级/白名单/汇率/测试设置仍可改。 */
   const protocolLocked = editing?.status === "live";
   /** 驱动只在草稿可改；已发布/已停用都只能复制。 */
@@ -172,6 +174,7 @@ export default function GatewayEditor({ mode, id }: Props) {
             driver: gw.driver,
             name: gw.name,
             endpoint: gw.endpoint ?? "",
+            paypal_env: gw.paypal_env ?? "",
             merchant_id: gw.merchant_id ?? "",
             secret: "",
             webhook_secret: "",
@@ -213,6 +216,7 @@ export default function GatewayEditor({ mode, id }: Props) {
             driver: "epay_v1",
             name: "",
             endpoint: "",
+            paypal_env: "",
             merchant_id: "",
             secret: "",
             webhook_secret: "",
@@ -412,6 +416,7 @@ export default function GatewayEditor({ mode, id }: Props) {
             driver: v.driver,
             name: v.name,
             endpoint: v.endpoint || null,
+            paypal_env: v.driver === "paypal" ? (v.paypal_env || null) : null,
             merchant_id: v.merchant_id || null,
             methods: v.methods,
             channel_codes: v.channel_codes ?? {},
@@ -463,7 +468,7 @@ export default function GatewayEditor({ mode, id }: Props) {
             message={protocolLocked ? "已发布网关：支付协议配置只读" : "网关类型已锁定"}
             description={
               protocolLocked
-                ? "网关类型/驱动已锁定；修改网关地址/商户号/密钥/Webhook/支付方式/通道号/接口映射/币种，请先停用。名称/优先级/白名单/汇率/测试设置可直接修改。"
+                ? "网关类型/驱动已锁定；修改网关地址/商户号/密钥/Webhook/支付方式/通道号/接口映射/币种/PayPal 环境，请先停用。名称/优先级/白名单/汇率/测试设置可直接修改。"
                 : "换驱动请复制成新网关；支付协议配置可直接修改，保存后需要重新测试并发布。"
             }
           />
@@ -486,6 +491,32 @@ export default function GatewayEditor({ mode, id }: Props) {
               showIcon
               message="对公转账不再作为网关创建项；已有行可以停用。"
               style={{ marginBottom: 16 }}
+            />
+          )}
+
+          {driver === "paypal" && (
+            <Form.Item
+              label="PayPal 环境"
+              name="paypal_env"
+              extra="Sandbox 不会真实扣款；发布前必须配置非空客户白名单。"
+            >
+              <Select
+                disabled={protocolLocked}
+                options={[
+                  { value: "", label: "跟随部署环境（未显式选择）" },
+                  { value: "sandbox", label: "Sandbox（测试）" },
+                  { value: "live", label: "Live（正式收款）" },
+                ]}
+              />
+            </Form.Item>
+          )}
+          {driver === "paypal" && paypalEnvWatch === "sandbox" && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="PayPal Sandbox：不会真实扣款"
+              description="只对客户白名单开放；发布前必须配置至少一个测试邮箱。"
             />
           )}
 

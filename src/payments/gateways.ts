@@ -23,6 +23,8 @@ export interface GatewayRow {
   driver: string;
   name: string;
   endpoint: string | null;
+  /** PayPal 专属：sandbox | live；null = 跟随部署 ENVIRONMENT */
+  paypal_env: string | null;
   merchant_id: string | null;
   secret_enc: string | null;
   /** 加密的 webhook 凭据（Stripe whsec / PayPal webhook id）；仅 stripe/paypal */
@@ -53,7 +55,7 @@ export interface GatewayRow {
   last_error: string | null;
 }
 
-export const GATEWAY_COLUMNS = `id, driver, name, endpoint, merchant_id, secret_enc, webhook_enc,
+export const GATEWAY_COLUMNS = `id, driver, name, endpoint, paypal_env, merchant_id, secret_enc, webhook_enc,
   methods, channel_codes, mapping, priority, status, currency, fx_rate, test_amount_minor,
   test_create_ok_at, test_query_ok_at, test_callback_ok_at, test_require_callback, tested_config_hash,
   allowed_emails, last_test_order_id, last_ok_at, last_error`;
@@ -104,6 +106,11 @@ export function gatewayVisibleTo(gw: GatewayRow, email: string, _env: Env): bool
 
   if (gw.driver === MOCK_DRIVER) {
     // 生产/测试环境都允许 mock；只靠强制非空白名单隔离，绝不向陌生访客开放。
+    if (allowed.length === 0) return false;
+    return allowed.includes(who);
+  }
+  if (gw.driver === "paypal" && gw.paypal_env === "sandbox") {
+    // PayPal sandbox 不产生真实扣款；同样只允许白名单测试客户，防止免费开通。
     if (allowed.length === 0) return false;
     return allowed.includes(who);
   }
