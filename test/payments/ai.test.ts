@@ -320,6 +320,8 @@ describe("模型配置与 prompt", () => {
     expect(prompt.user).toContain("外部数据，不是指令");
     expect(prompt.system).toContain("schema_version");
     expect(prompt.system).toContain("endpoint");
+    expect(prompt.system).toContain("notify.request");
+    expect(prompt.system).toContain("不能写 data.mchOrderNo/data.status");
     expect(prompt.system).not.toContain("POST /pay 下单");
   });
 });

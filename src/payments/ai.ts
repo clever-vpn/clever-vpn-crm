@@ -174,6 +174,17 @@ mapping 规则：
 - **data_path 只属于 response.sign**；create/notify/query 的 request.sign 绝对不能写 data_path（非法键）；
 - 状态/判定字段（status、code、state 等）不要放进 fields：它们由 paid_when / response.ok
   表达；fields 只列运行时需要读取的字段（如 order_no / trade_no / amount）；
+- 端点方向：create/query 的 request 是我方发给厂商，response 是厂商回给我方；
+  notify.request 是厂商主动 POST 到我方 notifyUrl 的通知报文，notify.response 是我方应答；
+- **notify 的字段路径只能来自「支付通知/回调」章节自己的字段表或示例**：
+  * 通知示例是顶层字段（mchOrderNo、status、sign）→ 写顶层路径；
+  * 通知示例有 data 包裹 → 写 data.mchOrderNo、data.status；
+  * 不要因为 create/query response 有 data 包裹，就推断 notify 也有 data；
+    也不要反过来强行去掉 notify 的 data；
+  * 找不到通知示例就写进 uncertainty，不要猜；
+- 反例：response 示例是 {"code":200,"data":{"mchOrderNo":"M1","status":3}}，
+  通知示例是 {"mchOrderNo":"M1","status":3} 时，notify 必须写 mchOrderNo/status，
+  不能写 data.mchOrderNo/data.status；
 - response.sign 只在文档**明确有响应验签**时写；field 是点号路径时 data_path 写父对象
   （data.sign → data_path: "data"）；doc 没说验签对象就留空并写 uncertainty，不要猜；
 - pay_url 必须是**具体字段路径**（data.uri / datas.url），不要写对象前缀（datas）；

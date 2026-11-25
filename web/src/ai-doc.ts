@@ -124,14 +124,14 @@ function htmlToText(html: string): string {
   const Parser = (globalThis as { DOMParser?: DocumentParser }).DOMParser;
   if (!Parser) {
     return marked
-      .replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<(script|style|noscript|nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, " ")
       .replace(/<[^>]+>/g, " ")
       .replace(/[ \t]+/g, " ")
       .replace(/\s*\n\s*/g, "\n")
       .trim();
   }
   const doc = new Parser().parseFromString(marked, "text/html");
-  Array.from(doc.querySelectorAll("script,style,noscript,template")).forEach((el) => el.remove());
+  Array.from(doc.querySelectorAll("script,style,noscript,template,nav,header,footer,aside")).forEach((el) => el.remove());
   const text = doc.body?.textContent ?? "";
   return text
     .replace(/[ \t]+/g, " ")

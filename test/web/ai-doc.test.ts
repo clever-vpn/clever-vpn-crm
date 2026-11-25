@@ -46,13 +46,17 @@ describe("readAiDocument", () => {
 
   it("html 去标签、去 script/style，保留正文", () => {
     const html = `<html><head><style>.x{}</style><script>alert(1)</script></head>
-      <body><h1>支付接口</h1><p>POST /pay/create</p><p>签名 MD5</p></body></html>`;
+      <body><nav>菜单</nav><header>页头</header><h1>支付接口</h1><p>POST /pay/create</p><p>签名 MD5</p><footer>页脚</footer><aside>侧栏</aside></body></html>`;
     const r = readAiDocument("doc.html", html);
     expect(r.error).toBeUndefined();
     expect(r.kind).toBe("html");
     expect(r.text).toContain("支付接口");
     expect(r.text).toContain("POST /pay/create");
     expect(r.text).not.toContain("alert");
+    expect(r.text).not.toContain("菜单");
+    expect(r.text).not.toContain("页头");
+    expect(r.text).not.toContain("页脚");
+    expect(r.text).not.toContain("侧栏");
     expect(r.text).not.toContain("<h1>");
   });
 
