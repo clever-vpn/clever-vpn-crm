@@ -2,7 +2,7 @@
   "schema_version": 2,
   "id": "xarrpay",
   "name": "XArrPay",
-  "description": "JSON/表单、MD5、下单元/回调分；三端点签名",
+  "description": "JSON/表单、MD5、下单元/通知分；三端点签名",
   "source": "official",
   "mapping": {
     "create": {

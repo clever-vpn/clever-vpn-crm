@@ -330,7 +330,7 @@ export default function GatewayEditor({ mode, id }: Props) {
       window.open(res.pay_url, "_blank", "noopener,noreferrer");
       message.success(
         res.callback_required
-          ? `已建测试单 ${res.order_code}（${res.currency} ${(res.amount_minor / 100).toFixed(2)}），创建+查询通过；等待回调验证`
+          ? `已建测试单 ${res.order_code}（${res.currency} ${(res.amount_minor / 100).toFixed(2)}），创建+查询通过；等待通知验证`
           : `已建测试单 ${res.order_code}（${res.currency} ${(res.amount_minor / 100).toFixed(2)}），创建+查询通过`,
       );
       const refreshed = await api.gateways();
@@ -566,7 +566,7 @@ export default function GatewayEditor({ mode, id }: Props) {
               ]}
             />
           </Form.Item>
-          <Form.Item label="测试必须验证回调" name="test_require_callback" valuePropName="checked" extra="开启后，测试支付回调到账才算测试通过">
+          <Form.Item label="测试必须验证通知" name="test_require_callback" valuePropName="checked" extra="开启后，测试支付通知到账才算测试通过">
             <Switch />
           </Form.Item>
           <Form.Item label="汇率（1 网关币种 = X CNY）" name="fx_rate" extra="CNY 网关填 1；USD 网关按实际汇率">
@@ -609,11 +609,11 @@ export default function GatewayEditor({ mode, id }: Props) {
               <Typography.Text strong>测试</Typography.Text>
               <Space wrap>
                 {editing.test_callback_ok_at ? (
-                  <Tag color="green">创建 + 查单 + 回调已通过</Tag>
+                  <Tag color="green">创建 + 查单 + 通知已通过</Tag>
                 ) : testRequireCallback ? (
-                  <Tag color="orange">等待回调验证</Tag>
+                  <Tag color="orange">等待通知验证</Tag>
                 ) : editing.test_ready ? (
-                  <Tag color="blue">创建 + 查单已通过（回调未验证）</Tag>
+                  <Tag color="blue">创建 + 查单已通过（通知未验证）</Tag>
                 ) : editing.test_create_ok_at ? (
                   <Tag color="orange">创建通过，查单未通过</Tag>
                 ) : (
@@ -622,7 +622,7 @@ export default function GatewayEditor({ mode, id }: Props) {
                 <Button loading={busy} onClick={() => void testNow()}>测试支付</Button>
               </Space>
               <Typography.Text type="secondary">
-                发布前必须完成：创建订单 + 查询订单。回调可选；回调验证后才会显示“回调已通过”。
+                发布前必须完成：创建订单 + 查询订单。通知可选；通知验证后才会显示“通知已通过”。
               </Typography.Text>
             </Space>
           </div>

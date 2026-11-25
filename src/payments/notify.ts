@@ -287,7 +287,7 @@ export async function handlePayNotify(
     const order = await env.DB.prepare(
       `SELECT id, code, customer_id, plan_id, plan_snapshot, amount_minor, discount_minor,
          promotion_id, code_id, currency, provider_amount_minor, provider_currency, fx_rate,
-       payment_method, gateway_id, status
+       payment_method, gateway_id, status, source
        FROM orders WHERE provider_order_no = ? AND gateway_id = ?`,
     )
       .bind(orderNo, gateway.id)
@@ -334,7 +334,7 @@ export async function handlePayNotify(
   const order = await env.DB.prepare(
     `SELECT id, code, customer_id, plan_id, plan_snapshot, amount_minor, discount_minor,
        promotion_id, code_id, currency, provider_amount_minor, provider_currency, fx_rate,
-       payment_method, gateway_id, status
+       payment_method, gateway_id, status, source
      FROM orders WHERE provider_order_no = ? AND gateway_id = ?`,
   )
     .bind(parsed.orderNo, gateway.id)

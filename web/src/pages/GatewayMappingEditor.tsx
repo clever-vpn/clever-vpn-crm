@@ -87,9 +87,9 @@ interface AiFailure {
 
 const AI_DOC_CHECKLIST = [
   "三个端点：创建订单、支付通知、查询订单（method / path / format）",
-  "请求字段：商户号、订单号、金额（单位）、商品名、回调地址、渠道、时间戳/随机串（如有）",
+  "请求字段：商户号、订单号、金额（单位）、商品名、通知地址、渠道、时间戳/随机串（如有）",
   "签名：字段名、算法、排序/拼接规则、密钥位置、大小写",
-  "判定：成功码、已付状态、查单终态、回调应答原文",
+  "判定：成功码、已付状态、查单终态、通知应答原文",
   "响应：收银台字段、平台订单号、金额、响应验签（如有）",
   "多页文档：下单、查单、通知、签名规则分别提交为附件；尽量带字段表和示例",
 ];
@@ -104,7 +104,7 @@ const FIELD_ROWS: {
   { key: "order_no", label: "订单号字段", required: true, hint: "out_trade_no / trade_order_id" },
   { key: "amount", label: "金额字段", required: true, hint: "money / total_fee / amount" },
   { key: "subject", label: "商品名字段", hint: "name / title；不传可留空" },
-  { key: "notify_url", label: "回调地址字段", hint: "notify_url / notifyUrl；服务商后台已配可留空" },
+  { key: "notify_url", label: "通知地址字段", hint: "notify_url / notifyUrl；服务商后台已配可留空" },
   { key: "return_url", label: "返回地址字段", hint: "return_url / returnUrl；可选" },
   { key: "client_ip", label: "客户 IP 字段", hint: "clientip / ip；可选" },
   { key: "body", label: "商品描述字段", hint: "body / desc；可选" },
@@ -453,7 +453,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
         label: "查单",
         value: mapping.query ? `${mapping.query.request.method ?? "POST"} ${mapping.query.request.path}` : "未配置",
       },
-      { label: "回调应答", value: mapping.notify.response.reply },
+      { label: "通知应答", value: mapping.notify.response.reply },
       {
         label: "金额",
         value: amount ? `${amount.field}（${amount.unit === "cent" ? "分" : "元"}）` : "未配置",
@@ -888,7 +888,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
    * 用户在 JSON 页也要立刻看见，而不是切回表单才发现。
    */
   const createLabel = <>① 下单 {createMissing > 0 && <Badge count={createMissing} size="small" />}</>;
-  const callbackLabel = <>② 回调 {callbackMissing > 0 && <Badge count={callbackMissing} size="small" />}</>;
+  const callbackLabel = <>② 通知 {callbackMissing > 0 && <Badge count={callbackMissing} size="small" />}</>;
   const queryLabel = <>③ 查单 {queryMissing > 0 && <Badge count={queryMissing} size="small" />}</>;
 
   const paramHeader = (
@@ -1053,7 +1053,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                   />
                 </Line>
                 <SubTitle>参数</SubTitle>
-                <Line label="订单号字段" required error={attempted && missingKeys.has("notify.order_no") ? "请填写回调订单号字段" : undefined}>
+                <Line label="订单号字段" required error={attempted && missingKeys.has("notify.order_no") ? "请填写通知订单号字段" : undefined}>
                   <Space direction="vertical" size={6} style={{ width: "100%" }}>
                     <Radio.Group
                       value={state.notify.order_no_mode}
@@ -1096,7 +1096,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                   <WhenEditor value={state.notify.paid_when} onChange={(v) => patch((d) => void (d.notify.paid_when = v))} />
                 </Line>
                 <SubTitle>签名</SubTitle>
-                <SignEditor title="回调验签" value={state.notify_sign} onChange={(v) => patch((d) => void (d.notify_sign = v))} />
+                <SignEditor title="通知验签" value={state.notify_sign} onChange={(v) => patch((d) => void (d.notify_sign = v))} />
               </Section>
               <Section title="响应">
                 <Line label="应答原文" required hint="必须与厂商要求逐字一致，写错会被无限重发" error={attempted && missingKeys.has("notify.reply") ? "请填写应答原文" : undefined}>
@@ -1474,7 +1474,7 @@ export default function GatewayMappingEditor({ initial, methods, endpoint, onCha
                           复制给技术支持
                         </Button>
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          下一步：保存 → 测试「创建 + 查单」；开启回调验证时还要真实回调。
+                          下一步：保存 → 测试「创建 + 查单」；开启通知验证时还要真实通知。
                         </Typography.Text>
                       </Space>
                     </>

@@ -90,6 +90,33 @@ describe("后台测试支付", () => {
     expect(row?.amount_minor).toBe(1);
   });
 
+  it("测试单收到通知后，写 test_callback_ok_at（不再一直等待）", async () => {
+    const created = await call(`/api/admin/gateways/${gatewayId}/test`, {
+      method: "POST",
+      body: { method: "alipay", amount_minor: 1 },
+    });
+    expect(created.status).toBe(200);
+    const body = (await created.json()) as { order_code: string };
+
+    const paid = await worker.default.fetch(
+      new Request(`${BASE}/pay/mock/${body.order_code}/paid`, { method: "POST" }),
+    );
+    expect(paid.status).toBe(200);
+
+    const order = await env.DB.prepare(`SELECT status FROM orders WHERE code = ?`)
+      .bind(body.order_code)
+      .first<{ status: string }>();
+    expect(order?.status).toBe("paid");
+
+    const gateway = await env.DB.prepare(
+      `SELECT test_callback_ok_at, last_test_order_id FROM payment_gateways WHERE id = ?`,
+    )
+      .bind(gatewayId)
+      .first<{ test_callback_ok_at: string | null; last_test_order_id: number | null }>();
+    expect(gateway?.test_callback_ok_at).not.toBeNull();
+    expect(gateway?.last_test_order_id).not.toBeNull();
+  });
+
   it("不支持的方式直接拒绝", async () => {
     const res = await call(`/api/admin/gateways/${gatewayId}/test`, {
       method: "POST",

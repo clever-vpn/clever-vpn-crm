@@ -139,7 +139,7 @@ export default function GatewaysList() {
               width: 120,
               render: (_: unknown, gw: GatewayView) =>
                 gw.test_require_callback && !gw.test_callback_ok_at ? (
-                  <Tag color="orange">等待回调</Tag>
+                  <Tag color="orange">等待通知</Tag>
                 ) : gw.test_ready ? (
                   <Tag color="green">{gw.test_require_callback ? "全部通过" : "创建+查单已过"}</Tag>
                 ) : gw.test_create_ok_at ? (
@@ -185,7 +185,7 @@ export default function GatewaysList() {
                         !gw.test_ready
                           ? "先完成测试（创建订单 + 查询订单）"
                           : gw.test_require_callback && !gw.test_callback_ok_at
-                            ? "已开启回调验证，等待测试支付回调"
+                            ? "已开启通知验证，等待测试支付通知"
                             : undefined
                       }
                       onClick={() => void act(() => api.publishGateway(gw.id), "已启用")}
@@ -220,8 +220,8 @@ export default function GatewaysList() {
                     title="删除这个支付网关？"
                     description={
                       gw.driver === "stripe" || gw.driver === "paypal"
-                        ? "删除后列表不再显示，收银台立即下线；历史订单和在途回调保留。Stripe/PayPal 后台的 Webhook 地址也要删除或改到新网关。"
-                        : "删除后列表不再显示，收银台立即下线；历史订单和在途回调保留。"
+                        ? "删除后列表不再显示，收银台立即下线；历史订单和在途通知保留。Stripe/PayPal 后台的 Webhook 地址也要删除或改到新网关。"
+                        : "删除后列表不再显示，收银台立即下线；历史订单和在途通知保留。"
                     }
                     okText="删除"
                     okButtonProps={{ danger: true }}

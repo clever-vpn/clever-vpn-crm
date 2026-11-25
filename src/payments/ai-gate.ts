@@ -184,7 +184,7 @@ function evidenceWarnings(doc: string, draft: AiDraft, warnings: string[]): void
 function replyWarning(mapping: GatewayMapping, doc: string, warnings: string[]): void {
   const reply = mapping.notify.response.reply;
   if (!contains(doc, reply)) {
-    pushUnique(warnings, `回调应答原文 ${JSON.stringify(reply)} 在文档里找不到；写错会被厂商无限重推`);
+    pushUnique(warnings, `通知应答原文 ${JSON.stringify(reply)} 在文档里找不到；写错会被厂商无限重推`);
   }
 }
 

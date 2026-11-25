@@ -67,7 +67,7 @@ async function simulateCancel(env: Env, code: string): Promise<Response> {
   if (!order) return noticePage("订单不存在", "请回到 App 重新发起。", 404);
   return noticePage(
     "已模拟用户取消",
-    "没有发送任何回调：订单保持待支付，到期后自动过期。可以回站点看未付款时的样子。",
+    "没有发送任何通知：订单保持待支付，到期后自动过期。可以回站点看未付款时的样子。",
   );
 }
 
@@ -209,12 +209,12 @@ async function simulateNotify(
   const res = await handlePayNotify(env, mockNotifyRequest(notifyUrl, params), String(gateway.id));
 
   if (res.status >= 400) {
-    return noticePage("模拟回调失败", `网关处理器返回 ${res.status}：${await res.text()}`, 502);
+    return noticePage("模拟通知失败", `网关处理器返回 ${res.status}：${await res.text()}`, 502);
   }
   if (status === "FAILED") {
     return noticePage(
       "已模拟支付失败",
-      "回调是验签通过的非成功态：订单仍是待支付，站点/App 应当显示未完成，不会发货。",
+      "通知是验签通过的非成功态：订单仍是待支付，站点/App 应当显示未完成，不会发货。",
     );
   }
   return noticePage("已模拟支付成功", "可以回到 App 查看，订阅应已生效。");

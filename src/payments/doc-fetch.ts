@@ -399,7 +399,7 @@ export async function fetchDocFromUrl(input: string, options: DocFetchOptions = 
       .slice(0, maxPages - 1);
   }
   if (selectedLinks.length === 0) {
-    warnings.push("没有发现明显的下单/回调/查单页面；建议直接粘贴或上传完整文档");
+    warnings.push("没有发现明显的下单/通知/查单页面；建议直接粘贴或上传完整文档");
   }
 
   const pages: DocPage[] = [{

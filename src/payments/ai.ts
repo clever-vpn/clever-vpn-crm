@@ -166,7 +166,7 @@ mapping 规则：
 - **fields 里不要写 sign / sign_type 等签名字段**：签名由 sign 配置生成，不属于请求参数；
   role 只能是上面列出的值（sign/sign_type 都不是 role）；
 - create/query 的请求字段必须同时写 role + value（如 { "field":"out_trade_no","role":"order_no","value":"{order_no}" }）；
-  notify.request 是入站回调参数，可以只写 role（值由对方传入）；
+  notify.request 是入站通知参数，可以只写 role（值由对方传入）；
   常量只写 field + value（无 role）；不要出现既无 role 又无 value 的字段；
 - amount 字段必须写 unit；timestamp 字段写 format（ymdhms 固定 Asia/Shanghai）；
 - sign: {field?（默认 sign）, algo?("md5"|"sha256"), key_append?, exclude?, upper?, encode?}；
