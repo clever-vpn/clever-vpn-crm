@@ -54,7 +54,7 @@ export interface Env {
    * 票据 URL 形如 `<origin>/#t=<ticket>`。
    *
    * `STUDIO_SITE_URL` 是**站点功能的前提**：发布需要一份租户源包，而源包只能由
-   * 设计器交付（种子不发布，见契约 `site-studio-crm.md` Contract 19）。自部署也一样
+   * 设计器交付（种子不发布，见契约 `site-studio.md` Contract 19）。自部署也一样
    * —— studio 不区分部署模式。不配 ⇒ `studio_not_configured`，站点没有上线路径。
    */
   STUDIO_SITE_URL?: string;
@@ -67,7 +67,6 @@ export interface Env {
   /** 代码版本（发布时注入，用于 /__version 与托管侧版本核对） */
   CRM_CODE_VERSION?: string;
   /** 契约版本（与 cf-api 对齐的接口版本） */
-  CRM_CONTRACT_VERSION?: string;
 
   /**
    * 运行环境。`production` 以外会**把验证码直接回显给客户端**

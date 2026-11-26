@@ -19,7 +19,7 @@ Status: `as-built`（本仓内部实现说明，**不是跨仓契约**）
 g/templates/<模板>/<版本>/…           全局模板（公共模板），一份，所有租户共享
 tpl/<sha256>/…                        租户模板包的**内容寻址**存储（studio 交付）
   files/<包内路径>                    包里的静态文件
-  manifest.json                       包清单（契约 site-studio-crm.md §4.1）
+  manifest.json                       包清单（契约 site-studio.md §4.1）
 art/<artifact_sha>/…                产物，**内容寻址**（渲染后的全部文件 + 素材 + _crm/*）
 ```
 
@@ -84,7 +84,7 @@ site:<tenant>:active   { template_seq, artifact_sha,         写：本仓发布 
 
 - `seq` 是 `MAX(seq)+1`，唯一索引挡住并发撞号（撞了就返回 `version_conflict`）
 - 回滚前校验"这个 `seq` 真实存在过"，防止指针指向从未发布的版本（那会 404 且难排查）
-- 保留策略未实现（契约 `site-studio-crm.md` §9.3 定的是最近 30 版 + blob mark-and-sweep）
+- 保留策略未实现（契约 `site-studio.md` §9.3 定的是最近 30 版 + blob mark-and-sweep）
 
 ## 4. 设置：烘焙进产物（保存即重烘焙）
 

@@ -8,7 +8,6 @@
 // 价格、划线价、角标、按钮文案、能不能买 —— 全部由 SDK 给，页面不判断。
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var KIND = { period: '按时长', traffic: '按流量', addon: '加量包', trial: '免费试用' };
   /** 套餐 id → 视图：点「购买」时要拿到这一档的 method_options */
   var ALL = {};
   function flash(kind, text) {
@@ -40,13 +39,13 @@
     el.innerHTML =
       '<div class="row" style="justify-content:space-between;align-items:flex-start">'
       + '<div><p class="plan-name">' + SiteCrm.escape(p.name) + '</p>'
-      + '<span class="tag">' + SiteCrm.escape(KIND[p.kind] || p.kind) + '</span></div>'
+      + '<span class="tag">' + SiteCrm.escape(p.kindLabel || p.kind) + '</span></div>'
       + (p.badge ? '<span class="badge">' + SiteCrm.escape(p.badge) + '</span>' : '')
       + '</div>'
       + '<div class="amount"><span class="now">' + SiteCrm.escape(p.price) + '</span>'
       + (p.compareAt ? '<span class="was">' + SiteCrm.escape(p.compareAt) + '</span>' : '')
       + '</div>'
-      + '<div class="per">' + (p.action === 'renewal' ? '续订价' : '实付价格') + '</div>'
+      + '<div class="per">' + SiteCrm.escape(p.priceNote || '') + '</div>'
       + '<ul class="spec">' + specs + '</ul>'
       + '<div class="plan-cta">' + cta
       + (!p.buyable && p.reason
@@ -95,7 +94,7 @@
         ? '<span class="was">' + SiteCrm.escape(plan.compareAt) + '</span>' : '')
       + '</div>'
       + '<div class="paydlg-per">'
-      + (plan.action === 'renewal' ? '续订价' : '实付价格') + '</div>'
+      + SiteCrm.escape(plan.priceNote || '') + '</div>'
       + '<div class="paydlg-label">选择支付方式</div>'
       + '<div class="paydlg-methods">'
       + (options.length

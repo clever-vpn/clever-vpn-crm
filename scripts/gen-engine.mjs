@@ -10,7 +10,7 @@
  * 同一条规则在 `clever-vpn-site-studio` 的 `src/site/engine.generated.ts` 里，
  * 那边的副本由 `scripts/sync-render.mjs` 从**本仓**逐字节复制并算同一个哈希。
  *
- * 规范：`site-template.md` §9.1 / 契约 `site-studio-crm.md` §4.2。
+ * 规范：`site-template.md` §9.1 / 契约 `site-studio.md` §4.2。
  */
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";

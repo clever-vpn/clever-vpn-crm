@@ -2,7 +2,7 @@
  *
  * 设计口径（`clever-vpn-docs/docs/design/ui-rules.md`）：
  *   一屏一件事 / 一个主按钮 / 解释进 `?` / 说人话
- * 契约（`clever-vpn-docs/docs/contracts/site-crm.md`）：
+ * 契约（`clever-vpn-docs/docs/contracts/clients.md`）：
  *   静态数据发布时烘焙，动态数据脚本取；零租户 JS；可编辑单元带 `data-eid`
  *
  * 租户可配的只有两件：**主色**（`--brand`）和**主题**（`light` / `dark`）。

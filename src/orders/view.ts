@@ -20,7 +20,8 @@ export interface OrderListView {
   title: string;
   /** 应付（`¥15.00`；0 元单说明来源） */
   amount_text: string;
-  status: string;
+  /** 客户端只看到 4 个：pending / paid / closed / refunded */
+  status: "pending" | "paid" | "closed" | "refunded";
   /** 用户可读的状态句 */
   status_text: string;
   /** 前端小标签 */
@@ -45,6 +46,22 @@ function planTitle(snapshot: string): string {
     /* 坏快照：回落到通用文案，不能让列表整页挂掉 */
   }
   return "订阅套餐";
+}
+
+/** 内部状态（7 个）→ 客户端状态（4 个）。`status_text`/`tag` 仍保留内部细节。 */
+export function clientOrderStatus(status: string): OrderListView["status"] {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "refunded":
+      return "refunded";
+    case "closed":
+    case "expired":
+      return "closed";
+    default:
+      // paid / provisioning / active
+      return "paid";
+  }
 }
 
 export function orderStatusView(
@@ -130,7 +147,7 @@ export function orderListView(
     order_code: row.code,
     title: planTitle(row.plan_snapshot),
     amount_text: row.amount_minor > 0 ? yuan(row.amount_minor) : "0 元（赠送）",
-    status: row.status,
+    status: clientOrderStatus(row.status),
     status_text: state.status_text,
     tag: state.tag,
     tag_tone: state.tag_tone,

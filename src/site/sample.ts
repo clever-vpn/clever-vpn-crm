@@ -8,10 +8,13 @@
  *
  * 所以样例由 CRM **按契约生成**、并明确打上 `sample: true`：
  *
- *   · 形状与 `src/site/sdk.ts` 的 `planView()` 一致 —— 模板照着它写就能上线，
- *     不会出现"样例里叫 `price`，真接口叫 `price_minor`"这种坑；
+ *   · 形状与真接口一致（视图模型的字段与 `SiteCrm.plans()` / `me()` 一致）；
  *   · 数字是样例，不是任何租户的真实价格；客户端看到 `sample` 就该显示"示例数据"；
  *   · **付费动作在预览里一律拒绝**（`bootMode`），样例只用于渲染。
+ *
+ * ⚠️ 这里的两份数据必须与真接口同形：`SAMPLE_PLANS_RAW` 是 `/plans` 的**原始返回**，
+ * `sampleDataOf()` 是 SDK 映射后的**视图模型**。`test/site-sdk-sample.test.ts` 在沙箱里
+ * 跑真 SDK，比"预览看到的价格卡" == "线上同样数据渲染出的价格卡"。
  */
 
 /** `planView()` 的字段顺序即模板里常用的顺序，别随手改 */
@@ -19,17 +22,17 @@ export interface SamplePlan {
   id: string;
   name: string;
   kind: string;
+  kindLabel: string;
   price: string;
   compareAt: string | null;
   badge: string | null;
   specs: string[];
   cta: string;
+  priceNote: string;
   action: string;
   buyable: boolean;
   reason: string | null;
-  /** 给人看的支付方式名（`planView().methods`） */
-  methods: string[];
-  /** 带 id 的同款（`planView().method_options`）：下单要回传的是这个 id */
+  /** 带 id 的支付方式：下单要回传的是这个 id */
   method_options: { id: string; label: string }[];
 }
 
@@ -38,22 +41,34 @@ export interface SampleData {
   sample: true;
   plans: SamplePlan[];
   me: {
-    user: { id: string; email: string; created_at: string } | null;
+    user: { id: number; uuid: string; email: string; name: string | null } | null;
     subscription: {
       status: string;
+      reason: string | null;
+      status_text: string;
+      tag: string | null;
+      tag_tone: string | null;
+      kind: string;
       plan_id: string;
       expires_at: string;
-      devices: number;
       licence_limit: number;
+      unlimited: boolean;
+      remaining_gb: number | null;
+      next_reset_at: string | null;
     } | null;
-    referral: { code: string; invited: number; rewarded: number } | null;
+    referral: { code: string; invited: number; reward_days: number; reward_gb: number } | null;
   };
   orders: {
-    code: string;
-    plan_id: string;
-    amount: string;
+    order_code: string;
+    title: string;
+    amount_text: string;
     status: string;
+    status_text: string;
+    tag: string;
+    tag_tone: string;
+    next_poll_after_ms: number | null;
     created_at: string;
+    paid_at: string | null;
   }[];
 }
 
@@ -67,16 +82,17 @@ export const sampleDataOf = (now = new Date()): SampleData => {
       {
         id: "sample-monthly",
         name: "按月",
-        kind: "subscription",
-        price: "US$12.00",
+        kind: "period",
+        kindLabel: "按时长",
+        price: "¥12.00",
         compareAt: null,
         badge: null,
-        specs: ["30 天有效期", "3 台设备"],
+        specs: ["每月 100 GB", "30 天有效期", "3 台设备"],
         cta: "立即购买",
-        action: "purchase",
+        priceNote: "实付价格",
+        action: "buy",
         buyable: true,
         reason: null,
-        methods: ["支付宝", "银行卡"],
         method_options: [
           { id: "alipay", label: "支付宝" },
           { id: "card", label: "银行卡" },
@@ -85,16 +101,17 @@ export const sampleDataOf = (now = new Date()): SampleData => {
       {
         id: "sample-yearly",
         name: "年付",
-        kind: "subscription",
-        price: "US$120.00",
-        compareAt: "US$144.00",
+        kind: "period",
+        kindLabel: "按时长",
+        price: "¥120.00",
+        compareAt: "¥144.00",
         badge: "省 17%",
-        specs: ["365 天有效期", "5 台设备"],
+        specs: ["每月 100 GB", "365 天有效期", "5 台设备"],
         cta: "立即购买",
-        action: "purchase",
+        priceNote: "实付价格",
+        action: "buy",
         buyable: true,
         reason: null,
-        methods: ["支付宝", "微信", "银行卡"],
         method_options: [
           { id: "alipay", label: "支付宝" },
           { id: "wechat", label: "微信" },
@@ -103,30 +120,47 @@ export const sampleDataOf = (now = new Date()): SampleData => {
       },
     ],
     me: {
-      user: { id: "sample-user", email: "sample@example.com", created_at: day(-120) },
+      user: { id: 1, uuid: "00000000-0000-4000-8000-000000000000", email: "sample@example.com", name: "样例用户" },
       subscription: {
         status: "active",
+        reason: null,
+        status_text: "生效中，每月 22 日重置",
+        tag: "已订阅",
+        tag_tone: "success",
+        kind: "period",
         plan_id: "sample-yearly",
         expires_at: day(200),
-        devices: 2,
         licence_limit: 5,
+        unlimited: false,
+        remaining_gb: 88.5,
+        next_reset_at: day(10),
       },
-      referral: { code: "SAMPLE01", invited: 1, rewarded: 1 },
+      referral: { code: "SAMPLE01", invited: 1, reward_days: 7, reward_gb: 0 },
     },
     orders: [
       {
-        code: "SAMPLE-ORDER-1",
-        plan_id: "sample-yearly",
-        amount: "$120.00",
+        order_code: "SAMPLE-ORDER-1",
+        title: "年付",
+        amount_text: "¥120.00",
         status: "paid",
+        status_text: "已生效",
+        tag: "已完成",
+        tag_tone: "success",
+        next_poll_after_ms: null,
         created_at: day(-120),
+        paid_at: day(-120),
       },
       {
-        code: "SAMPLE-ORDER-2",
-        plan_id: "sample-monthly",
-        amount: "$12.00",
+        order_code: "SAMPLE-ORDER-2",
+        title: "按月",
+        amount_text: "¥12.00",
         status: "refunded",
+        status_text: "已退款",
+        tag: "已退款",
+        tag_tone: "warn",
+        next_poll_after_ms: null,
         created_at: day(-400),
+        paid_at: day(-400),
       },
     ],
   };
@@ -139,49 +173,64 @@ export const sampleDataOf = (now = new Date()): SampleData => {
  * 贴 DOM 用的视图模型）。而预览里跑的是**真 SDK**，它拿到 `/plans` 后自己会再过一遍
  * `planView()` —— 喂视图模型进去只会得到一堆 `undefined`。
  *
- * 所以预览宿主把这份原始返回当成 `/plans` 的响应，SDK 原样映射一遍：
- * "预览看到的价格卡" = "线上拿到同样数据时渲染出的价格卡"，中间没有第二套实现。
- * 两份样例是否对得上，由 `test/site-sdk-sample.test.ts` 在沙箱里跑真 SDK 比出来
- * —— 不靠人记得同步改。
+ * 所以预览宿主把这份原始返回当成 `/plans` 的响应，SDK 原样映射一遍。
  */
 export const SAMPLE_PLANS_RAW = [
   {
     plan_id: "sample-monthly",
     name: "按月",
-    kind: "subscription",
+    kind: "period",
+    kind_label: "按时长",
+    specs: ["每月 100 GB", "30 天有效期", "3 台设备"],
     price_minor: 1200,
     display_price_minor: 1200,
-    currency: "USD",
     compare_at_price_minor: null,
-    promo_badge: null,
-    validity_days: 30,
+    currency: "CNY",
     licence_limit: 3,
-    action: "purchase",
+    term_days: 30,
+    monthly_quota_gb: 100,
+    traffic_gb: null,
+    validity_days: null,
+    promo_badge: null,
+    action: "buy",
     buyable: true,
     reason: null,
+    next_expires_at: null,
+    cta: "立即购买",
+    price_note: "实付价格",
     payment_methods: [
       { id: "alipay", label: "支付宝" },
       { id: "card", label: "银行卡" },
     ],
+    store_product_id: {},
   },
   {
     plan_id: "sample-yearly",
     name: "年付",
-    kind: "subscription",
+    kind: "period",
+    kind_label: "按时长",
+    specs: ["每月 100 GB", "365 天有效期", "5 台设备"],
     price_minor: 14400,
     display_price_minor: 12000,
-    currency: "USD",
     compare_at_price_minor: 14400,
-    promo_badge: "省 17%",
-    validity_days: 365,
+    currency: "CNY",
     licence_limit: 5,
-    action: "purchase",
+    term_days: 365,
+    monthly_quota_gb: 100,
+    traffic_gb: null,
+    validity_days: null,
+    promo_badge: "省 17%",
+    action: "buy",
     buyable: true,
     reason: null,
+    next_expires_at: null,
+    cta: "立即购买",
+    price_note: "实付价格",
     payment_methods: [
       { id: "alipay", label: "支付宝" },
       { id: "wechat", label: "微信" },
       { id: "card", label: "银行卡" },
     ],
+    store_product_id: {},
   },
 ] as const;

@@ -33,7 +33,7 @@ function call(path: string, init: { token?: string } = {}) {
 
 interface PlanView {
   plan_id: string;
-  payment_methods: { id: string; label: string; icon_url: string | null }[] | null;
+  payment_methods: { id: string; label: string;  }[] | null;
 }
 
 async function seedGateway(opts: {

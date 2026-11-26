@@ -296,7 +296,7 @@ export function siteMeta(): SiteMeta {
     contract: SITE_CONTRACT,
     engine: ENGINE_ID,
     // 与 `/_crm/sdk.js` 同一个常量：租户排障时"这个站跑的是哪版 SDK"一眼可查；
-    // studio 预览用它证明"预览与线上是同一份 SDK"（site-crm.md §3.1）。
+    // studio 预览用它证明"预览与线上是同一份 SDK"（clients.md §5）。
     sdk_version: SDK_VERSION,
     capabilities: siteCapabilities(),
     palettes: [...PALETTES],

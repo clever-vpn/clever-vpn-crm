@@ -63,7 +63,7 @@ const body = `/**
  * 由 \`npm run seed:gen\` 生成（\`scripts/gen-seed.mjs\`），**别手改**。
  *
  * 唯一来源是仓库里的 \`site-template/\` —— 种子是**代码**，不是数据（契约
- * \`site-studio-crm.md\` §0.1.2）：它随部署走，没有版本号，只在"CRM 里还没有该租户
+ * \`site-studio.md\` §0.1.2）：它随部署走，没有版本号，只在"CRM 里还没有该租户
  * 源包"时被读一次。
  *
  * 文本文件进 \`SEED_FILES\`，二进制进 \`SEED_BINARY\`（base64）。

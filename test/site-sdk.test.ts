@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { RETURN_HTML, SDK_JS, SDK_VERSION } from "../src/site/sdk";
 
-/** 契约 §4.3 的方法表；增删都要先改 `docs/contracts/site-crm.md` */
+/** 契约 §4.3 的方法表；增删都要先改 `docs/contracts/clients.md` */
 const METHODS = [
   "version",
   "escape",
@@ -131,8 +131,8 @@ describe("SiteCrm SDK", () => {
                   action: "buy",
                   buyable: true,
                   payment_methods: [
-                    { id: "alipay", label: "支付宝", icon_url: null },
-                    { id: "wechat", label: "微信支付", icon_url: null },
+                    { id: "alipay", label: "支付宝" },
+                    { id: "wechat", label: "微信支付" },
                   ],
                 },
               ]),
@@ -143,7 +143,6 @@ describe("SiteCrm SDK", () => {
       string,
       unknown
     >[];
-    expect(plans[0]!.methods).toEqual(["支付宝", "微信支付"]);
     // 选择器要用 id 回传 `payment_method`，所以两个都要给
     expect(plans[0]!.method_options).toEqual([
       { id: "alipay", label: "支付宝" },
@@ -162,8 +161,8 @@ describe("SiteCrm SDK", () => {
       action: "buy",
       buyable: true,
       payment_methods: [
-        { id: "alipay", label: "支付宝", icon_url: null },
-        { id: "wechat", label: "微信支付", icon_url: null },
+        { id: "alipay", label: "支付宝" },
+        { id: "wechat", label: "微信支付" },
       ],
     };
     const { sdk } = load({
@@ -181,7 +180,7 @@ describe("SiteCrm SDK", () => {
           status: 200,
           text: () =>
             Promise.resolve(
-              JSON.stringify({ code: "ORD1", pay_url: "https://pay.test/1" }),
+              JSON.stringify({ order_code: "ORD1", pay_url: "https://pay.test/1" }),
             ),
         });
       },
@@ -202,7 +201,7 @@ describe("SiteCrm SDK", () => {
       currency: "CNY",
       action: "buy",
       buyable: true,
-      payment_methods: [{ id: "alipay", label: "支付宝", icon_url: null }],
+      payment_methods: [{ id: "alipay", label: "支付宝" }],
     };
     const { sdk } = load({
       token: "t0ken",
@@ -248,7 +247,7 @@ describe("SiteCrm SDK", () => {
       string,
       unknown
     >[];
-    expect(plans[0]!.methods).toEqual([]);
+    expect(plans[0]!.method_options).toEqual([]);
     expect(plans[0]!.action).toBe("login_required");
   });
 

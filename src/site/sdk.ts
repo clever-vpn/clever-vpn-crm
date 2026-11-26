@@ -1,5 +1,5 @@
 /**
- * 平台 SDK：`window.SiteCrm`（契约 `contracts/site-crm.md` §4.3 / §6）
+ * 平台 SDK：`window.SiteCrm`（契约 `contracts/clients.md` §4.3 / §6）
  *
  * 定位：**唯一碰凭证的代码**。页面只调函数，不碰 token、不自己拼金额。
  *
@@ -12,20 +12,11 @@
  * 数据 —— 想调接口就只有走 SDK。这样"凭证能力"不会散到每份模板里。
  */
 
-const CTA: Record<string, string> = {
-  buy: "立即购买",
-  renewal: "续订",
-  upgrade: "升级到这个套餐",
-  login_required: "登录后订阅",
-  blocked: "暂不可购买",
-};
-
 /**
- * 只增不改：1.1.0 给 `plans()` 的每一项加了 `methods`（这档在网页上能用哪些
- * 支付方式），并在未登录时把 `checkout()` 的错误码从 `no_payment_method` 改成
- * `unauthorized`。两者都不删字段、不改签名。
+ * 2.0.0：展示字段（`cta`/`kindLabel`/`specs`）改由 CRM 给，SDK 只透传；
+ * `methods` 删除（用 `method_options`）；`me()` 改为 `/me` + `/subscription` 组合。
  */
-export const SDK_VERSION = "1.2.0";
+export const SDK_VERSION = "2.0.0";
 
 /**
  * 内嵌到 `/_crm/sdk.js`；不依赖构建步骤，字符串原样送出。
@@ -41,7 +32,6 @@ export const SDK_JS = `(function () {
   var API = BASE + "/api/app/v1";
   if (!BASE && window.console) { console.warn("[crm] CRM_API_BASE 未配置"); }
   var TOKEN_KEY = "crm_token";
-  var CTA = ${JSON.stringify(CTA)};
   var authCbs = [];
 
   function token() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
@@ -101,46 +91,25 @@ export const SDK_JS = `(function () {
       return (minor / 100).toFixed(2) + " " + (currency || "");
     }
   }
-  function specs(p) {
-    var out = [];
-    if (p.kind === "period") {
-      out.push(p.monthly_quota_gb == null ? "每月不限量" : "每月 " + p.monthly_quota_gb + " GB");
-    } else if (p.kind === "traffic") {
-      out.push(p.traffic_gb == null ? "不限量" : "共 " + p.traffic_gb + " GB");
-    } else if (p.kind === "addon") {
-      out.push(p.traffic_gb == null ? "加量包" : "加 " + p.traffic_gb + " GB");
-    }
-    var days = p.validity_days == null ? p.term_days : p.validity_days;
-    if (typeof days === "number") { out.push(days + " 天有效期"); }
-    if (typeof p.licence_limit === "number") { out.push(p.licence_limit + " 台设备"); }
-    if (p.action === "renewal" && p.next_expires_at) {
-      out.push("续订后有效期至 " + String(p.next_expires_at).slice(0, 10));
-    }
-    return out;
-  }
   function planView(p) {
     var price = typeof p.display_price_minor === "number" ? p.display_price_minor : p.price_minor;
     return {
       id: p.plan_id,
       name: p.name,
       kind: p.kind,
+      // 类型标签、规格行、按钮文案都由 CRM 给；SDK 不映射、不拼
+      kindLabel: p.kind_label || p.kind,
       price: money(price, p.currency),
       compareAt: typeof p.compare_at_price_minor === "number"
         ? money(p.compare_at_price_minor, p.currency) : null,
       badge: p.promo_badge || null,
-      specs: specs(p),
-      cta: CTA[p.action] || "立即购买",
+      specs: Array.isArray(p.specs) ? p.specs : [],
+      cta: p.cta || "",
+      priceNote: p.price_note || "",
       action: p.action,
       buyable: p.buyable !== false,
       reason: p.reason || null,
-      // 这一档在网页上能用哪些支付方式（支付宝 / 微信…）。必须显式露出来：
-      // 用户点购买之前就要知道能用什么付，点完才发现只有一种方式，等于骗人。
-      // 未登录 / 私有网关不在名单里时后端给 null，前端就不显示这一段。
-      methods: (p.payment_methods || []).map(function (m) {
-        return m.label || m.id;
-      }),
-      // 同样的东西但带 id：页面要用它做「选支付方式」按钮，id 是下单时要回传的
-        // 那个值（methods 只是给人看的名字，别拿它拼请求）。
+      // 带 id 的支付方式：下单要回传的是这个 id（label 只给人看）
       method_options: (p.payment_methods || []).map(function (m) {
         return { id: m.id, label: m.label || m.id };
       })
@@ -182,7 +151,7 @@ export const SDK_JS = `(function () {
       var body = { email: email, code: code };
       if (ref) { body.referral_code = ref; }
       return api("POST", "/auth/verify", body).then(function (d) {
-        var t = d && (d.session_token || d.token);
+        var t = d && d.session_token;
         if (t) { setToken(t); }
         return d || {};
       });
@@ -196,9 +165,13 @@ export const SDK_JS = `(function () {
     },
     me: function () {
       if (!token()) { return Promise.resolve(null); }
-      // /me 已经含 user / subscription / referral，不用再打一刀
-      return api("GET", "/me").then(function (me) {
-        return me;
+      // 两个端点：/me 是身份+邀请，/subscription 是权益；SDK 组合成页面熟悉的形状。
+      // 激活码不是给页面看的：返回前删掉（约定，不是服务端分支）。
+      return Promise.all([api("GET", "/me"), api("GET", "/subscription")]).then(function (r) {
+        var me = r[0] || {};
+        var sub = r[1] || null;
+        if (sub) { delete sub.code; }
+        return { user: me.user || null, referral: me.referral || null, subscription: sub };
       }, function (e) {
         if (e && (e.status === 401 || e.code === "http_401" || e.code === "unauthorized")) {
           setToken("");
@@ -208,7 +181,7 @@ export const SDK_JS = `(function () {
       });
     },
     orders: function (opts) {
-      var q = "?pagination[limit]=" + ((opts && opts.limit) || 20);
+      var q = "?limit=" + ((opts && opts.limit) || 20);
       if (opts && opts.cursor) { q += "&cursor=" + encodeURIComponent(opts.cursor); }
       return api("GET", "/orders" + q).then(function (d) { return (d && d.items) || []; });
     },
@@ -260,24 +233,23 @@ export const SDK_JS = `(function () {
           if (q && q.action === "blocked") {
             throw crmError("not_purchasable", (q && q.reason) || "当前不可购买");
           }
-          var expected = q && typeof q.payable_minor === "number" ? q.payable_minor : undefined;
-          var order = {
-            plan_id: planId,
-            payment_method: chosen,
-            origin: "web",
-            // 付完回**站点的**保底页（不是 CRM 域名）；order=<code> 由服务端拼
-            // 路径是产物里的静态文件：/_crm/return.html（发布时写入 R2）
-            return_url: location.origin + "/_crm/return.html"
-          };
+          var expected = q && typeof q.payable_minor === "number" ? q.payable_minor : null;
+          // 只传三样：套餐、支付方式、可选优惠码。回跳地址由服务端按 Origin 推导。
+          var order = { plan_id: planId, payment_method: chosen };
           if (promo) { order.promo_code = promo; }
-          if (typeof expected === "number") { order.expected_payable_minor = expected; }
-          return api("POST", "/orders", order);
+          return api("POST", "/orders", order).then(function (o) {
+            // 服务端会重算价；与刚才报价不一致就别把人送去收银台
+            if (expected !== null && o && typeof o.amount_minor === "number" && o.amount_minor !== expected) {
+              throw crmError("price_changed", "价格有更新，请重新确认后再支付");
+            }
+            return o;
+          });
         });
       }).then(function (o) {
         if (!o || !o.pay_url) { throw crmError("no_pay_url", "没有拿到支付地址，请稍后重试"); }
         var how = openExternal(o.pay_url);
         if (how === "none") { throw crmError("open_failed", "打不开支付页，请复制链接手动打开"); }
-        return { orderCode: o.code, payUrl: o.pay_url, opened: how };
+        return { orderCode: o.order_code, payUrl: o.pay_url, opened: how };
       });
     },
     payStatus: function (orderCode) {

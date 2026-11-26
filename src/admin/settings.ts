@@ -10,6 +10,7 @@
  */
 import { noticeSettings, saveNoticeSettings, sentToday, DEFAULT_MAIL_DAILY_QUOTA, DEFAULT_MAIL_SOFT_RATIO } from "../notices/store";
 import { mailReady } from "../mail";
+import { getOrCreateCrmId } from "../settings";
 
 import type { Env } from "../env";
 
@@ -36,6 +37,8 @@ async function view(env: Env): Promise<Record<string, unknown>> {
   const cfg = await noticeSettings(env);
   const used = await sentToday(env);
   return {
+    // 实例 UUID：后台展示给租户，复制进 app.json.crm.id（clients.md §7.1）
+    crm_id: await getOrCreateCrmId(env),
     mail: {
       /** 账号每天能发多少（我们自己声明，缺省 5000） */
       daily_quota: cfg.dailyQuota,

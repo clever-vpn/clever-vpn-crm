@@ -34,7 +34,6 @@
     "CF_API_BASE": "https://api.clever-vpn.org",
     // 由 CI/部署脚本注入；本地开发可保持 dev
     "CRM_CODE_VERSION": "dev",
-    "CRM_CONTRACT_VERSION": "19",
     // 官网（独立静态站，可以完全不同域名）。留空 = 根路径只显示一句部署提示
     "SITE_URL": "https://www.example.com"
     // 跨域调用 /api/app/v1 **不需要**配置 origin 白名单（见 docs/admin.md）

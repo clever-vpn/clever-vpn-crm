@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-24
 
-> 权威契约在 [`clever-vpn-docs` `app-crm.md` §2.4.7 / §2.4.8](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/crm/clients.md)。
+> 权威契约在 [`clever-vpn-docs` `clients.md` §2.4.7 / §2.4.8](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/crm/clients.md)。
 > 本文只讲**本仓库怎么实现**，不复制契约正文。
 > 实体定义（客户 / 订单 / 订阅 / 退款）见 [`domain.md`](domain.md)。
 
@@ -34,7 +34,7 @@ Last updated: 2026-10-24
 | 不能买 | `POST /orders` 命中 → `403 trial_plan_not_for_sale` |
 | 不进 `/plans` | hidden ⇒ 正式列表天然没有它 |
 | 怎么开 | 新客户注册成功时 `startTrial()` 自动开通（0 元 `source='signup'` 订单 → 订阅 → cf-api 客户） |
-| App 怎么知道 | `GET /trial`（免登录）：`{available, plan_name, days, quota_gb, unlimited, licence_limit, text}` |
+| App 怎么知道 | `GET /meta`（免登录）的 `trial_text`：一句展示文案，不含业务判断 |
 
 ⚠️ `licence_limit` 必须与正式套餐一致：设备数变了，cf-api 会删旧建新并换激活码，
 用户要重新登录客户端。
@@ -88,7 +88,7 @@ $$\text{残值} = \text{实付价} \times \text{剩余比例}, \qquad \text{应�
 实现：`src/plans/quote.ts`（纯函数，单测在 `test/plans.test.ts`）。
 App 只读 `/plans[].action`（`buy` / `renewal` / `upgrade` / `blocked` / `login_required`）
 与 `payable_minor` 渲染按钮；升级的应付必须点开走 `POST /quote`（列表不带残值），
-**App 不做任何计算**。契约正文在 `clever-vpn-docs` `app-crm.md` §2.4.7 / §2.4.8。
+**App 不做任何计算**。契约正文在 `clever-vpn-docs` `clients.md` §2.4.7 / §2.4.8。
 
 ## 4. 数据模型
 

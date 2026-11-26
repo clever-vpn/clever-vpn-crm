@@ -7,9 +7,9 @@ Last updated: 2026-11-26
 - [`clever-vpn-docs/docs/contracts/services/cf-api/crm.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/cf-api/crm.md)
   —— 认证、`customers` 字段与可写性、激活码语义、错误码、限流、缺口清单。
 - [`clever-vpn-docs/docs/contracts/services/crm/clients.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/crm/clients.md)
-  —— App 是 CRM 的终端客户端：注册/付费/取码都在 App 内（`/api/app/v1`，✅），许可仍只由 cf-api 签发。
+  —— 终端客户端（App + Site）与 CRM 的协议：注册/付费/取码（`/api/app/v1`，✅），许可仍只由 cf-api 签发。
 - [`clever-vpn-docs/docs/contracts/README.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/README.md)
-  —— 状态图例与版本策略（`contract: 1`，只加不删）。
+  —— 状态图例与版本策略（API 路径版本：路径内只加不改）。
 
 本仓库**不复制契约正文**：两处维护必然漂移。这里只记录"实现侧须知"。
 
@@ -17,23 +17,23 @@ Last updated: 2026-11-26
 
 | 项 | 值 |
 |---|---|
-| 契约版本 | `CRM_CONTRACT_VERSION`（当前 `19`，对齐 `app-crm.md` v19），由 `GET /__version` 回显 |
-| 客户端 | **两个壳（App + 品牌官网）调同一批 `/api/app/v1`**；App 用 `Bearer`，官网用 httpOnly Cookie |
-| App 端接口 | `/api/app/v1/*`（✅ 登录/套餐/报价/下单/订阅/邀请/礼包/时间线已实现）；契约见 `app-crm.md`，`app_contract: 19` |
-| 用户视角视图 | **全部「CRM 出文案、客户端只渲染」**：`GET /me/timeline`（权益变更，白名单 new/renewal/upgrade/addon/gift/adjust；`settle`/`hold` 不进）、`GET /orders`（列表带 `title`/`amount_text`/`status_text`/`next_poll_after_ms`，`cursor` 翻页）、`GET /me/gifts`（**货架**：`items[].state` = available/sold_out/claimed/ended + `status_text`/`rewards_text`/`remaining`/`claim_action`，`?promotion_id=` 深链）+ `POST /me/gifts/{promotion_id}/claim`（`ok`/`state`/`result_text`）、`GET /subscription`（含 `next_reset_at`） |
-| 客服 / 官网 | `GET /support` 免登录；官网**持有登录态**（同一个 `/auth` + `session_token`），已删游客结账 `checkout_token` |
-| 兑换码 | `POST /api/app/v1/redeem`（v16）：登录后输码换礼包权益；失败一律 `200 + ok:false + reason`，猜码过频 `429`；见 [promotion.md](promotion.md) §1 |
-| 促销 | 三类物件：优惠券（金额）+ 礼包（权益）+ 邀请（关系），见 [promotion.md](promotion.md)；✅ v15 已实现（`/plans` 角标、`/quote` 折扣、`/auth/verify` 邀请码、`/me.referral`、支付成功才核销、礼包发放 / 人群六值 / 冷却 / 到期挽回定时任务） |
+| 契约版本 | 终端 API 的版本 = 路径 `/api/app/v1`（只加不改）；`GET /__version` 只回 `crm_version`，不参与协商；`/meta.crm_id` 是实例 UUID（构建期门禁用） |
+| 客户端 | **终端客户端（App + Site）调同一批 `/api/app/v1`**；只用 `Authorization: Bearer`，不用 Cookie |
+| 终端接口 | `/api/app/v1/*`（✅ 登录/套餐/报价/下单/订阅/邀请/礼包/时间线已实现）；契约见 `clients`（`clients.md`），版本由路径承载 |
+| 用户视角视图 | **全部「CRM 出文案/形式、客户端只渲染」**：`GET /me/timeline`（`title`/`delta_text`/`tone`；`settle`/`hold` 不进）、`GET /orders`（`title`/`amount_text`/`status_text`/`tag`/`tag_tone`/`next_poll_after_ms`）、`GET /me/gifts`（`state`/`status_text`/`rewards_text`/`claimable`/`claim_action`/`empty_text`）、`POST /me/gifts/{id}/claim`（`ok`/`state`/`result_text`）、`GET /subscription`（`status`/`reason`/`status_text`/`tag`/`tag_tone`/`next_reset_at`/`code`） |
+| 站点 / 官网 | Site 与 App 共用同一批端点（Bearer + localStorage）；没有 `GET /support`，客服地址由 `app.json.links.support` 构建期固定 |
+| 兑换码 | `POST /api/app/v1/redeem`：登录后输码换礼包权益；失败一律 `200 + ok:false + state + result_text`，猜码过频 `429`（统一信封）；与礼包/奖励卡领取同形 |
+| 促销 | 三类物件：优惠券（金额）+ 礼包（权益）+ 邀请（关系），见 [promotion.md](promotion.md)；✅ 已实现（`/plans` 角标、`/quote` 折扣、`/auth/verify` 邀请码、`/me.referral`、支付成功才核销、礼包发放 / 人群六值 / 冷却 / 到期挽回定时任务） |
 | 套餐 | **`kind` 三选一**（`period` / `traffic` / `addon`），见 [plans.md](plans.md)；**销售策略全在 CRM**，App 只渲染 |
 | 币种 | **单币种**，初始化时设定（默认 `CNY`），之后不可改；金额一律用最小单位整数（分） |
 | 平台基址 | `CF_API_BASE`，默认 `https://api.clever-vpn.org` |
 | 租户 Token | 存本租户 D1 的 `cf_api` 单行（`token_enc`，AES-GCM 密文）；后台「设置 → cf-api 对接」维护。**不是** Worker secret，禁止落日志 |
 | 可用的平台资源 | **`customers`（读写）+ `lines`（只读，字段白名单，不暴露 `upstream`）** |
-| 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
+| 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**不是秘密，但不得展示/记录/进 URL**；`/subscription` 恒返回，App 只用于取许可，Site 由 SDK 丢弃 |
 | 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |
 | 换套餐 | 删旧客户 → 用**同一 `auth_id`** 建新客户（得到新 `code`）；流量余量/已用额度不继承。**已实现**：`licence_limit` 变化时才删旧建新（它是计费依据，平台不允许改） |
 | 落账 | `src/platform/provision.ts`：订阅快照 → 控制参数；**流量单位是字节**（`1 GiB = 1024³`），`quota` 恒 `NULL`（月度重置归 CRM）。**按动作分档**（`domain.md` I8）：新购/升级全量、续订 period 只写 `expire_date`、续订 traffic / 加量包只写 `traffic_balance`；动作存 `orders.provision_action`，cron 重试用同一种写法。失败停在 `orders.status='provisioning'`（✅） |
-| 平台客户被删 | 小概率运维事故（cf-api 没有 undelete）。**只认 404**：用户重登时 `/auth/verify` 自检，发现客户不在了就按当前订阅**全量重建**并直接下发新码（登录绝不因此失败）；后台另有 `POST /api/admin/customers/:id/provision`「重新落账」。超时 / 429 / 5xx **不重建**。重建必然换码 ⇒ 设备要重新取许可 |
+| 平台客户被删 | 小概率运维事故（cf-api 没有 undelete）。**只认 404**：用户重登时 `/auth/verify` 自检，发现客户不在了就按当前订阅**全量重建**（登录绝不因此失败）；新码由随后的 `/subscription` 取；后台另有 `POST /api/admin/customers/:id/provision`「重新落账」。超时 / 429 / 5xx **不重建**。重建必然换码 ⇒ 设备要重新取许可 |
 | 线路权益 | 套餐 `line_ids` → 落账写 `customers.line_ids`（`[]` ⇒ `null` = 全部线路）。cf-api 在 `key-lines` / `app-licences` 强制（`crm-api.md` §5.2.1）。后台可对单个客户覆盖（`POST /api/admin/customers/:id/lines`），写订阅快照 |
 | 支付方式 | App 只认 **`payment_method`**（`alipay` / `wechat` / `paypal` / `stripe`）；服务商与网关都在 CRM 内部，**不进任何 App 响应**（见 [payments.md](payments.md)） |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
@@ -54,12 +54,12 @@ Last updated: 2026-11-26
    的例外，默认 5 分钟按 `_updated_at` 增量拉取。
 4. **不可写字段**：`PATCH` 对白名单外字段**静默丢弃**（仍返回 200）⇒ 成功判据是
    HTTP 状态 + 返回行，不是"字段变了"。
-5. **激活码对终端用户不可见**：只经 `/api/app/v1/subscription` 交给已登录的 App；
-   不得出现在订单页/邮件/短信/客服模板里，日志只允许出现掩码尾号。
-6. **登录态 = 两把 token**：登录成功时 `verify` 响应必须携带 `platform` 快照（= 激活码，用户不可见）；
+5. **激活码不是秘密，但不得展示**：`/api/app/v1/subscription` 对任何会话都返回；
+   不得出现在界面/订单页/邮件/短信/客服模板里，日志只允许出现掩码尾号。
+6. **登录只回身份**：`verify` 只返回 `{session_token, user}`；权益与激活码由 `GET /subscription` 取（App 登录后立即拉一次）。
    无密码（邮箱验证码）、单个不透明 `session_token`（无硬过期，以撤销为准）。
-   登录不得因 cf-api 故障而失败；退出登录清本地两把 token，**不**冻结客户。
-   报文与时序以 `app-crm.md` §2.6 为准，此处不复述。
+   登录不依赖 cf-api；退出登录清本地 token 与本地 code 副本，**不**冻结客户。
+   报文与时序以 `clients` 契约为准，此处不复述。
 7. **控制参数由租户/CRM 设定**：平台不根据套餐/订单推断任何参数。具体值怎么得出
    （算法或人工）是 CRM 内部实现；写入走 `POST`/`PATCH`，平台只负责按值判定。
 

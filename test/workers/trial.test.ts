@@ -2,7 +2,7 @@
  * 免费试用（套餐 → 订阅 → cf-api 客户，不走支付网关）
  *
  * 要钉住的：
- *   1. 没配试用套餐时 `GET /trial` 返回 `available:false`，注册也不会凭空多出订阅；
+ *   1. 没配试用套餐时 `/meta.trial_text` 为 `null`，注册也不会凭空多出订阅；
  *   2. 配好之后注册**自动开通**：一行订阅 + 一张 0 元 `source='signup'` 订单 + cf-api 客户；
  *   3. 状态文案由 CRM 组织（"免费试用 · 还剩 N 天"），App 只显示；
  *   4. 试用套餐**不能下单**（403），否则就是绕开注册的 0 元购买入口；
@@ -128,11 +128,11 @@ beforeAll(async () => {
   adminCookie = res.headers.get("set-cookie")?.split(";")[0] ?? "";
 });
 
-describe("GET /trial（免登录）", () => {
+describe("GET /meta 的 trial_text（免登录）", () => {
   it("还没配试用套餐 ⇒ text:null，注册也不会凭空多出订阅", async () => {
-    const res = await appCall("/api/app/v1/trial", "");
+    const res = await appCall("/api/app/v1/meta", "");
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { text: string | null }).text).toBeNull();
+    expect(((await res.json()) as { trial_text: string | null }).trial_text).toBeNull();
 
     const token = await login(LATE_USER);
     const sub = await appCall("/api/app/v1/subscription", token);
@@ -156,10 +156,10 @@ describe("GET /trial（免登录）", () => {
     });
 
     // 契约 §2.4.9：只有一句广告词，与"谁在看"无关
-    const info = (await (await appCall("/api/app/v1/trial", "")).json()) as {
-      text: string | null;
+    const info = (await (await appCall("/api/app/v1/meta", "")).json()) as {
+      trial_text: string | null;
     };
-    expect(info.text).toBe("注册即送 7 天免费试用（10GB）");
+    expect(info.trial_text).toBe("注册即送 7 天免费试用（10GB）");
     const row = await env.DB.prepare(`SELECT price_minor, visibility FROM plans WHERE id = 'trial_7d'`)
       .first<{ price_minor: number; visibility: string }>();
     expect(row).toEqual({ price_minor: 0, visibility: "hidden" });
@@ -284,10 +284,10 @@ describe("注册自动开通", () => {
     const token = await login(TRIAL_USER);
     const plans = (await (await appCall("/api/app/v1/plans", token)).json()) as {
       plan_id: string;
-      promo_price_minor: number | null;
+      display_price_minor: number;
     }[];
     const paid = plans.find((p) => p.plan_id === "paid_30d");
-    expect(paid?.promo_price_minor).toBe(750);
+    expect(paid?.display_price_minor).toBe(750);
   });
 
   it("试用到期：同一个接口给出「试用已结束」的文案与标签", async () => {

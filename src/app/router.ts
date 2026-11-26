@@ -1,28 +1,29 @@
 /**
- * App 端接口 `/api/app/v1/*` —— 契约见 `clever-vpn-docs` `app-crm.md`（contract 13）
+ * 终端客户端接口 `/api/app/v1/*` —— 契约见 `clever-vpn-docs` `clients`（`/api/app/v1`，只加不改）
  *
- * 这是**唯一对终端用户开放**的接口面，**App 与品牌官网共用**（官网用 httpOnly Cookie）。
+ * App 与 Site 共用；只用 `Authorization: Bearer`，不用 Cookie。
  *
  * 当前实现的端点：
- *   GET  /meta                 版本协商 + 能力位
+ *   GET  /meta                 公开配置（crm_version / currency / turnstile / trial_text）
  *   POST /auth/send-code       发验证码（非 production 直接回显 code，方便本地联调）
- *   POST /auth/verify          验证码换 session_token（不存在则建号；可选 referral_code）
+ *   POST /auth/verify          验证码换 session_token（不存在则建号；只回身份）
  *   POST /auth/logout
- *   GET  /me                   用户 + 订阅快照 + 邀请面板
- *   GET  /subscription         订阅状态（status + reason + status_text）
+ *   GET  /me                   用户 + 邀请面板
+ *   GET  /subscription         权益（含激活码；唯一权威）
  *   GET  /me/timeline         权益变更时间线（用户视角，cursor 分页）
  *   GET  /me/gifts                 我的礼包**货架**（可领 / 抢完 / 已领 / 已结束）
  *   POST /me/gifts/{promotion_id}/claim  领一个礼包（条件插入，抢不到会说清原因）
- *   GET  /plans                可售套餐（免登录；每项只带一个 `action` + 促销展示位）
+ *   GET  /plans                可售套餐（免登录；卡片视图模型全部由服务端拼好）
  *   POST /quote                报价（唯一的应付金额来源；可带 promo_code）
- *   POST /orders               审计式创建一笔待支付订单（可带 promo_code / origin）
+ *   POST /orders               审计式创建一笔待支付订单（可带 promo_code / return_url）
  *   GET  /orders               我的订单列表（官网收据用）
  *   GET  /orders/{order_code}  订单详情（App/官网轮询用）
+ *   POST /orders/iap           商店凭据（Apple / Google）
+ *   POST /redeem               兑换码（与领取同形）
  *
- * **这里没有一行价格/资格计算**：可买性与报价都来自 `src/plans/*` 的纯函数，
+ * **展示归 CRM**：文案、标签、配色键、按钮态、规格行都由这里拼好；客户端只渲染。
+ * 这里没有一行价格/资格计算：可买性与报价都来自 `src/plans/*` 的纯函数，
  * 促销折扣来自 `src/promotions/*`，同一个函数给后台预览用，保证"后台预览 == App 看到"。
- *
- * 未实现（下一步）：`/orders/iap`（Apple / Google 内购）。
  */
 
 import { randomToken, sha256Hex } from "../admin/crypto";
@@ -38,7 +39,7 @@ import { currentOfSubscription, quotePurchase } from "../plans/quote";
 import { statusOf } from "../plans/subscription";
 import { claimGiftFor, claimRewardCard, listGiftShelf } from "../promotions/gift";
 import { listTimeline } from "../subscriptions/timeline";
-import { orderListView } from "../orders/view";
+import { clientOrderStatus, orderListView } from "../orders/view";
 import { bindReferral, referralPanel } from "../promotions/referral";
 import { redeemGiftCode } from "../promotions/redeem";
 import { planPromos, resolvePromotion } from "../promotions/service";
@@ -46,23 +47,17 @@ import { customerSubscription, ensureTrafficFresh } from "../subscriptions/store
 import { repairPlatformIfMissing } from "../platform/provision";
 import { startTrial, trialInfo } from "../subscriptions/trial";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
+import { getOrCreateCrmId } from "../settings";
 
 import type { Env } from "../env";
 import type { Plan, PlanRow } from "../plans/model";
 import type { CurrentSubscription } from "../plans/quote";
 import type { Subscription } from "../plans/subscription";
 
-const APP_CONTRACT = 19;
-/** 报价有效期：超过这个时间，App 必须重新 `POST /quote`（契约 §2.4.8） */
-const QUOTE_TTL_SECONDS = 900;
 /**
- * 官网用的会话 Cookie。
- * App 走 `Authorization: Bearer`（原生安全存储），官网走 httpOnly Cookie——
- * **同一个 `session_token`，只是传输形态不同**（`app-crm.md` §2.2）。
+ * 官网用的会话 Cookie 已删除（契约：只用 Bearer）。
+ * 会话不做硬过期（契约 §2.6），这里只在活跃度上留痕。
  */
-const SESSION_COOKIE = "cv_session";
-const SESSION_COOKIE_MAX_AGE = 30 * 24 * 3600;
-/** 会话不做硬过期（契约 §2.6），这里只在活跃度上留痕 */
 const SESSION_TOUCH_MS = 5 * 60 * 1000;
 
 /** 用户能看懂的支付方式名（聚合商/网关名字永远不出现，`docs/payments.md` §1.1） */
@@ -118,12 +113,11 @@ const err = (status: number, code: string, message?: string): Response =>
 // 这是**浏览器规矩，不是安全措施** —— curl 能伪造一切，任何参数都能被任意构造，
 // 所以这里不判断"信任哪个站"，也不区分 origin：谁来都一样。
 //
-// 唯一的红线是**永远不加 `Access-Control-Allow-Credentials`**（`*` 与它本就互斥）：
-// 跨源请求拿不到 Cookie，也存不下跨源响应的 Set-Cookie。
+// 唯一的红线是**永远不加 `Access-Control-Allow-Credentials`**：这里没有 Cookie 认证，
+// 开了只会扩大攻击面。
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, content-type, idempotency-key, x-crm-request",
+  "Access-Control-Allow-Headers": "authorization, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Max-Age": "600",
 };
@@ -180,30 +174,8 @@ function bearerToken(request: Request): string {
   return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 }
 
-/** 从 Cookie 取 token（官网） */
-function cookieToken(request: Request): string {
-  const raw = request.headers.get("Cookie") ?? "";
-  for (const part of raw.split(";")) {
-    const idx = part.indexOf("=");
-    if (idx < 0) continue;
-    if (part.slice(0, idx).trim() !== SESSION_COOKIE) continue;
-    return decodeURIComponent(part.slice(idx + 1).trim());
-  }
-  return "";
-}
-
-/** 登录 / 登出时下发的 Set-Cookie；本地 http 不加 Secure（否则浏览器不存） */
-function sessionCookie(env: Env, token: string | null): string {
-  const secure = env.ENVIRONMENT === "production" ? "; Secure" : "";
-  const base = `Path=/; HttpOnly; SameSite=Lax${secure}`;
-  return token
-    ? `${SESSION_COOKIE}=${encodeURIComponent(token)}; ${base}; Max-Age=${SESSION_COOKIE_MAX_AGE}`
-    : `${SESSION_COOKIE}=; ${base}; Max-Age=0`;
-}
-
 async function resolveSession(env: Env, request: Request): Promise<CustomerRow | null> {
-  // 先 Bearer（App），没有再看 Cookie（官网）；命中后走完全相同的校验
-  const token = bearerToken(request) || cookieToken(request);
+  const token = bearerToken(request);
   if (!token) return null;
   const id = await sha256Hex(token);
   const session = await env.DB.prepare(
@@ -293,6 +265,59 @@ function subscriptionTag(
 }
 
 /**
+ * 卡片视图模型 —— **展示归 CRM**（契约 §0）。
+ *
+ * 这些文案与规格行原来在 SDK/模板里拼；改一句"每月 100 GB"就要发一次 App，
+ * 成本远高于改这里。客户端只渲染。
+ */
+const CTA: Record<string, string> = {
+  buy: "立即购买",
+  renewal: "续订",
+  upgrade: "升级到这个套餐",
+  login_required: "登录后订阅",
+  blocked: "暂不可购买",
+};
+
+const KIND_LABEL: Record<string, string> = {
+  period: "按时长",
+  traffic: "按流量",
+  addon: "加量包",
+};
+
+/** 卡片价格下方那句说明；随 action 变，也由 CRM 给（改文案不发版） */
+const PRICE_NOTE: Record<string, string> = {
+  buy: "实付价格",
+  renewal: "续订价",
+  upgrade: "升级按标价",
+  login_required: "登录后查看实付价",
+  blocked: "不可购买",
+};
+
+function specLines(plan: Plan, renewalAt: string | null): string[] {
+  const out: string[] = [];
+  if (plan.kind === "period") {
+    out.push(plan.monthly_quota_gb === null ? "每月不限量" : `每月 ${plan.monthly_quota_gb} GB`);
+  } else if (plan.kind === "traffic") {
+    out.push(plan.traffic_gb === null ? "不限量" : `共 ${plan.traffic_gb} GB`);
+  } else {
+    out.push(plan.traffic_gb === null ? "加量包" : `加 ${plan.traffic_gb} GB`);
+  }
+  const days = plan.validity_days ?? plan.term_days;
+  if (typeof days === "number") out.push(`${days} 天有效期`);
+  out.push(`${plan.licence_limit} 台设备`);
+  if (renewalAt) out.push(`续订后有效期至 ${renewalAt.slice(0, 10)}`);
+  return out;
+}
+
+/** `/plans` 的客户端投影：去掉只给后台/落账用的字段，补上卡片视图模型 */
+function clientPlan(plan: Plan): Record<string, unknown> {
+  const base = planForClient(plan);
+  delete base.line_ids;
+  delete base.speed;
+  return { ...base, kind_label: KIND_LABEL[plan.kind] ?? plan.kind };
+}
+
+/**
  * 领取接口返回的 `remaining_gb`（契约 §2.9.8 ②）：
  * 成功才查，失败给 null —— 复用 `subscriptionView` 的口径，不另算一份。
  */
@@ -309,7 +334,21 @@ async function remainingAfterClaim(
 
 function subscriptionView(sub: Subscription | null): Record<string, unknown> {
   if (!sub) {
-    return { status: "none", reason: null, status_text: "还没有订阅", tag: null, tag_tone: null };
+    // 形状恒定：没有订阅也把字段给全（null），客户端不用按分支拼
+    return {
+      status: "none",
+      reason: null,
+      status_text: "还没有订阅",
+      tag: null,
+      tag_tone: null,
+      kind: null,
+      plan_id: null,
+      expires_at: null,
+      licence_limit: null,
+      unlimited: false,
+      remaining_gb: null,
+      code: null,
+    };
   }
   const unlimited = sub.kind === "period" && sub.period_quota_gb === null;
   const base = {
@@ -329,7 +368,6 @@ function subscriptionView(sub: Subscription | null): Record<string, unknown> {
       : sub.kind === "traffic"
         ? sub.traffic_remaining_gb
         : (sub.traffic_remaining_gb ?? (sub.period_quota_gb ?? 0) + (sub.period_extra_gb ?? 0)),
-    line_ids: sub.line_ids,
   };
 
   // 已付款但 cf-api 还没建好客户 ⇒ 还没有码。App 应显示"正在开通"而不是"无订阅"
@@ -341,6 +379,8 @@ function subscriptionView(sub: Subscription | null): Record<string, unknown> {
       tag: "开通中",
       tag_tone: "info",
       ...base,
+      // 还没拿到码也是 null，不是缺字段
+      code: null,
     };
   }
 
@@ -356,7 +396,7 @@ function subscriptionView(sub: Subscription | null): Record<string, unknown> {
     tag,
     tag_tone,
     ...base,
-    // 激活码只给 App 自己用：不展示、不写日志（app-crm.md §2.3）
+    // 激活码不是秘密：任何会话都返回；但两端都不得展示/记录/进 URL（契约 §5）
     code: sub.activation_code,
   };
 }
@@ -378,10 +418,8 @@ export async function handleAppApi(request: Request, env: Env): Promise<Response
   const hook = await handleWebhooks(env, request);
   if (hook) return hook;
 
-  // 不校验 Origin / Referer：会话 Cookie 是 **host-only + HttpOnly + SameSite=Lax**，
-  // 跨站请求带不上它，跨源响应的 `Set-Cookie` 也会被浏览器丢弃 ⇒ 跨源 Cookie 认证
-  // 根本不可能发生。App / 官网一律走 `Authorization: Bearer`（浏览器不会自动附加）。
-  // 若将来改成 `SameSite=None` 或给 Cookie 加 `Domain=`，这个前提就没了 —— 那时再补。
+  // 不用 Cookie，所以不校验 Origin / Referer、没有 CSRF 面。
+  // App / Site 一律走 `Authorization: Bearer`（浏览器不会自动附加）。
 
   const withCors = (res: Response): Response => {
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
@@ -394,22 +432,17 @@ export async function handleAppApi(request: Request, env: Env): Promise<Response
 async function route(request: Request, env: Env, path: string, method: string): Promise<Response> {
   // ── 元信息（免登录）──
   if (method === "GET" && path === "/meta") {
+    // 公开配置。没有版本协商：`/api/app/v1` 的路径就是版本。
+    const trial = await trialInfo(env);
     return json({
-      app_contract: APP_CONTRACT,
       crm_version: env.CRM_CODE_VERSION ?? "dev",
+      // 实例 UUID：构建期比对 app.json.crm.id 用（clients.md §7.1）
+      crm_id: await getOrCreateCrmId(env),
       currency: "CNY",
-      // email_code = 这台 CRM 能不能发验证码（开发环境恒为 true，因为直接回显）
-      features: [
-        ...(emailCodeAvailable(env) ? ["passwordless", "email_code"] : []),
-        "plan_kinds",
-        "upgrade_quote",
-        // 促销两层（app-crm.md §2.9）：有这两个才渲染划线价/角标与邀请面板
-        "promotions",
-        "referral",
-      ],
-      min_app: "2.0.0",
-      // 有 site key 才渲染 Turnstile 挂件；App 发码时要带上 turnstile_token
+      // 有 site key 才渲染 Turnstile 挂件；发码时要带上 turnstile_token
       turnstile_site_key: turnstileEnabled(env) ? (env.TURNSTILE_SITE_KEY ?? null) : null,
+      // 非 null ⇒ 注册页可以念"注册即送…"；怎么开、开什么由 CRM 决定
+      trial_text: trial.text,
     });
   }
 
@@ -454,7 +487,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const existing = await findCustomer(env, email);
     const customerId = existing?.id ?? (await createCustomer(env, email));
 
-    // 邀请码：**选填、只在建号那一刻生效、永不报错**（app-crm.md §2.9.3）。
+    // 邀请码：**选填、只在建号那一刻生效、永不报错**（clients.md §4.5）。
     // 失败也只是少一条归因，绝不能把注册挡下来。
     if (!existing) {
       await bindReferral(env, { customerId, code: body.referral_code }).catch(() => false);
@@ -480,66 +513,41 @@ async function route(request: Request, env: Env, path: string, method: string): 
         customerId,
         nowIso,
         nowIso,
-        typeof body.appId === "string" ? body.appId : null,
+        typeof body.app_id === "string" ? body.app_id : null,
         request.headers.get("CF-Connecting-IP"),
         request.headers.get("User-Agent"),
       )
       .run();
 
     /**
-     * 登录顺带做一次"平台客户还在不在"的自检：cf-api 客户被误删是**小概率**事件，
-     * 恢复手段就是重登一次（发现 404 就按当前订阅全量重建，本次直接返回新码）。
-     * 只有 404 才重建；平台超时/5xx 一律不动，且**绝不**让登录失败。
+     * 登录只回身份（契约：认证与授权分开）。权益与激活码由 App 登录后调
+     * `GET /subscription` 取；这里只顺手做一次"平台客户还在不在"的自检，
+     * 失败**绝不**让登录失败。
      */
-    const sub = await repairPlatformIfMissing(env, await loadFreshSubscription(env, customerId));
-    const view = subscriptionView(sub);
-    // 平台快照：**只有拿到 code 才算有**。provisioning 时 App 应显示"正在开通"（§2.6）
-    const platform = sub?.activation_code
-      ? {
-          token: sub.activation_code,
-          status: view.status,
-          reason: view.reason,
-          status_text: view.status_text,
-          expires_at: sub.expires_at,
-          licence_limit: sub.licence_limit,
-        }
-      : null;
-    return json(
-      {
-        session_token: token,
-        user: {
-          id: customerId,
-          uuid: userRow?.uuid ?? "",
-          email,
-          name: existing?.display_name ?? null,
-        },
-        platform,
-        platform_status: sub ? (sub.activation_code ? view.status : "provisioning") : "none",
+    await repairPlatformIfMissing(env, await loadFreshSubscription(env, customerId)).catch(() => null);
+    return json({
+      session_token: token,
+      user: {
+        id: customerId,
+        uuid: userRow?.uuid ?? "",
+        email,
+        name: existing?.display_name ?? null,
       },
-      200,
-      // 官网直接拿到登录态；App 忽略这个头（它用 Bearer）
-      { "Set-Cookie": sessionCookie(env, token) },
-    );
+    });
   }
 
   // ── 退出 ──
   if (method === "POST" && path === "/auth/logout") {
-    // Bearer 优先，其次 Cookie：两端都能登出
-    const token = bearerToken(request) || cookieToken(request);
+    const token = bearerToken(request);
     if (token) {
       await env.DB.prepare(`UPDATE app_sessions SET revoked_at = ? WHERE id = ?`)
         .bind(new Date().toISOString(), await sha256Hex(token))
         .run();
     }
-    return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(env, null) });
+    return json({ ok: true });
   }
 
   // ── 套餐列表（免登录：商品与标价公开，动作与金额属于某个人）──
-  // ── 免费试用：注册页拿它决定是否显示"注册即送 N 天"（免登录）──
-  //    只回展示材料，**不含任何业务判断** —— 试用怎么开、开什么，全由 CRM 决定。
-  if (method === "GET" && path === "/trial") {
-    return json(await trialInfo(env));
-  }
 
   if (method === "GET" && path === "/plans") {
     const viewer = await resolveSession(env, request);
@@ -556,46 +564,46 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const availableMethods = await methodsForViewer(env, viewer?.email ?? null);
 
     const items = plans.map((plan) => {
-      const base = {
-        ...planForClient(plan),
-        payment_methods: paymentMethodsOf(plan, availableMethods),
-      };
       const best = promos.get(plan.id);
       const promoPrice = best?.promo_price_minor ?? null;
       const listPrice = plan.price_minor;
-      const promo = {
-        promo_price_minor: promoPrice,
+      const base = {
+        ...clientPlan(plan),
+        payment_methods: paymentMethodsOf(plan, availableMethods),
         // null = 没有公开活动；文案由 CRM 给（含人群前缀），App 不拼
         promo_badge: best?.badge_label ?? null,
-        // ── 渲染字段（契约 A.1.1）：**前端不需要再做任何价格判断** ──
-        // 直接渲染这个价；`display_price_minor ?? price_minor` 是给老 CRM 的兜底。
+        // 前端只渲染这两个价：display 是现价，compare_at 有值才划线
         display_price_minor: promoPrice ?? listPrice,
-        // 只有活动价**真的更低**才给划线价，否则 100→100 会变成假折扣。
         compare_at_price_minor:
           promoPrice !== null && promoPrice < listPrice ? listPrice : null,
       };
       if (!viewer) {
+        const action = "login_required" as const;
         return {
           ...base,
-          ...promo,
-          action: "login_required" as const,
+          action,
           reason: "登录后购买",
           // 商品本身可下单 —— 只差登录这一步，不能因此把按钮置灰
           buyable: true,
           next_expires_at: null,
+          cta: CTA[action],
+          price_note: PRICE_NOTE[action],
+          specs: specLines(plan, null),
         };
       }
       const quote = quotePurchase(ctx.current, plan, now);
+      const next = quote.action === "renewal" ? quote.expires_at : null;
       return {
         ...base,
-        ...promo,
-        // App 不做任何判断：按 action 渲染 购买 / 续订 / 升级 按钮
         action: quote.action,
         // 只有 `blocked` 才是真的不能下单
         buyable: quote.action !== "blocked",
         reason: quote.reason,
         // 只有续订给“续订后有效期至…”，升级的到期日与应付由 /quote 给
-        next_expires_at: quote.action === "renewal" ? quote.expires_at : null,
+        next_expires_at: next,
+        cta: CTA[quote.action] ?? CTA.buy,
+        price_note: PRICE_NOTE[quote.action] ?? PRICE_NOTE.buy,
+        specs: specLines(plan, next),
       };
     });
     return json(items);
@@ -606,20 +614,17 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
   if (method === "GET" && path === "/me") {
     if (!customer) return err(401, "unauthorized");
-    const sub = await loadFreshSubscription(env, customer.id);
     return json({
-      // 契约 §2.3 ①：`uuid` 是商店账号绑定的唯一合法来源，与 `/auth/verify` 同形
+      // `uuid` 是商店账号绑定的唯一合法来源，与 `/auth/verify` 同形
       user: {
         id: customer.id,
         uuid: customer.uuid,
         email: customer.email,
         name: customer.display_name,
       },
-      subscription: subscriptionView(sub),
-      // 邀请面板：官网与 App 共用（§2.9.3）。不需要邀请功能的客户端忽略即可
+      // 邀请面板：App 与 Site 共用。不需要邀请功能的客户端忽略即可
       referral: await referralPanel(env, customer.id),
       // ⚠️ 这里**不给**礼包红点：红点只有一个来源 `GET /me/gifts.available_count`
-      // （契约 §2.3：它是礼包的属性，放两处等于把同一份资格判定算两遍）
     });
   }
 
@@ -721,8 +726,15 @@ async function route(request: Request, env: Env, path: string, method: string): 
       code: typeof body.code === "string" ? body.code : "",
     });
     if (result.status === 429) {
-      return json(result.body, 429, { "Retry-After": String(result.body.retry_after_s) });
+      return json(
+        { error: result.body.error },
+        429,
+        { "Retry-After": String(result.body.retry_after_s) },
+      );
     }
+    // 与领取同口径：并发占位是 409，活动不存在是 404；其余业务结论走 200
+    if (result.body.state === "busy") return err(409, "claim_busy");
+    if (result.body.state === "not_found") return err(404, "promotion_not_found");
     return json(result.body);
   }
 
@@ -734,7 +746,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const params = new URL(request.url).searchParams;
     const limit = Math.min(
       50,
-      Math.max(1, Number(params.get("pagination[limit]") ?? 20) || 20),
+      Math.max(1, Number(params.get("limit") ?? 20) || 20),
     );
     // 游标翻页（`cursor` = 上一页最后一条的 id）。原来的实现只有一个 limit，
     // 第 21 单以后永远拿不到。
@@ -794,12 +806,10 @@ async function route(request: Request, env: Env, path: string, method: string): 
       }>();
     if (!row) return err(404, "not_found", "订单不存在");
 
-    // 已付款的订单顺带把订阅快照一起给，客户端少一次往返
-    const settled = row.status !== "pending" && row.status !== "expired" && row.status !== "closed";
-    const sub = settled ? await loadFreshSubscription(env, customer.id) : null;
     return json({
       order_code: row.code,
-      status: row.status,
+      // 客户端只看到 4 个状态；细节在 status_text/tag（列表里给）
+      status: clientOrderStatus(row.status),
       amount_minor: row.amount_minor,
       discount_minor: row.discount_minor,
       currency: row.currency,
@@ -807,7 +817,6 @@ async function route(request: Request, env: Env, path: string, method: string): 
       expires_at: row.expires_at,
       paid_at: row.paid_at,
       created_at: row.created_at,
-      ...(settled ? { subscription: subscriptionView(sub) } : {}),
     });
   }
 
@@ -837,25 +846,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
     const base = {
       // 与 /plans[].action 同值域；登录态下不会出现 login_required
       action: quote.action,
-      currency: plan.currency,
-      price_minor: plan.price_minor,
       paid_minor: sub?.paid_minor ?? null,
       residual_minor: quote.residual_minor,
-      expires_at: quote.expires_at,
-      quoted_at: now.toISOString(),
-      quote_ttl_s: QUOTE_TTL_SECONDS,
-      // 促销明细（§2.9.3）：App 只渲染 `discount_label`，不自己拼文案
+      // 促销明细：一个码最多；客户端只渲染 discount_label
       discount_minor: promo.applied?.discount_minor ?? 0,
       discount_label: promo.applied?.label ?? null,
-      applied_promotions: promo.applied
-        ? [
-            {
-              code: promoCode || null,
-              name: promo.applied.promotion.name,
-              discount_minor: promo.applied.discount_minor,
-            },
-          ]
-        : [],
+      promo_code: promo.applied ? (promoCode || null) : null,
     };
 
     const payable = Math.max(
@@ -877,7 +873,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
         payable_minor: payable,
         discount_minor: 0,
         discount_label: null,
-        applied_promotions: [],
+        promo_code: null,
       });
     }
     // 0 元单走不通任何网关：宁可在报价这一步就说清楚
@@ -906,13 +902,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
     });
     if (!result.ok) return err(result.status, result.code, result.message);
 
-    const sub =
-      result.status === "paid" ? await loadFreshSubscription(env, customer.id) : null;
-    return json({
-      order_code: result.orderCode,
-      status: result.status,
-      subscription: sub ? subscriptionView(sub) : null,
-    });
+    return json({ order_code: result.orderCode, status: result.status });
   }
 
   // ── 下单：一次支付尝试（见 docs/payments.md §2）──
@@ -941,9 +931,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
     if (!quote.allowed) return err(409, "not_purchasable", quote.reason ?? "当前不可购买");
 
     // ── 促销：下单时**重新校验**（不信任 /quote 的旧结论），支付成功才核销 ──
-    // 码归一（大写）：响应里的 `applied_promotions[].code` 才是"实际用的那串"
+    // 码归一（大写）：响应里的 `promo_code` 才是"实际用的那串"
     const promoCode = typeof body.promo_code === "string" ? body.promo_code.trim().toUpperCase() : "";
-    const entry = body.origin === "web" || body.origin === "app" ? body.origin : null;
     const promo = await resolvePromotion(env, {
       plan,
       customerId: customer.id,
@@ -958,11 +947,24 @@ async function route(request: Request, env: Env, path: string, method: string): 
     );
     if (payable <= 0) return err(409, "not_purchasable", "优惠已抵扣全部金额，请选择其他套餐");
 
-    // 报价过期 / 改价：差额 ≤1 分忽略（舍入），超出就让 App 重新报价
-    const expected = typeof body.expected_payable_minor === "number" ? body.expected_payable_minor : null;
-    if (expected !== null && Math.abs(expected - payable) > 1) {
-      return err(409, "price_changed", "价格已变化，请重新确认后再支付");
+    // web 不传 return_url：按调用方 Origin 推导站点的保底页；
+    // App 传自定义 scheme（深链），只在 Origin 不是 http(s) 时接受。
+    const rawReturn = typeof body.return_url === "string" ? body.return_url.trim() : "";
+    const callerOrigin = request.headers.get("Origin") ?? "";
+    if (rawReturn && /^https?:\/\//i.test(rawReturn)) {
+      let sameOrigin = false;
+      try {
+        sameOrigin = /^https?:\/\//i.test(callerOrigin)
+          && new URL(rawReturn).origin === callerOrigin.replace(/\/+$/, "");
+      } catch {
+        sameOrigin = false;
+      }
+      if (!sameOrigin) return err(400, "invalid_request", "return_url 必须是本站地址或 App 深链");
     }
+    const returnUrl = rawReturn
+      || (/^https?:\/\//i.test(callerOrigin)
+        ? `${callerOrigin.replace(/\/+$/, "")}/_crm/return.html`
+        : undefined);
 
     const result = await createCharge(env, {
       customerId: customer.id,
@@ -974,10 +976,9 @@ async function route(request: Request, env: Env, path: string, method: string): 
       discountMinor: promo.applied?.discount_minor ?? 0,
       promotionId: promo.applied?.promotion.id ?? null,
       codeId: promo.codeId,
-      entry,
       origin: new URL(request.url).origin,
-      // 站点 SDK 传 `/_crm/return`；不传则回退到本站根（旧行为）
-      returnUrl: typeof body.return_url === "string" ? body.return_url : undefined,
+      // 站点不传：由 Origin 推导；App 传自定义 scheme；都没有就回 CRM 兜底页
+      returnUrl,
       clientIp: clientIp(request),
     });
     if (!result.ok) return err(result.status, result.code, result.message);
@@ -989,7 +990,6 @@ async function route(request: Request, env: Env, path: string, method: string): 
         amount_minor: result.amountMinor,
         currency: result.currency,
         expires_at: result.expiresAt,
-        reused: result.reused,
       },
       201,
     );

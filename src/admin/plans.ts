@@ -2,7 +2,7 @@
  * 管理后台：套餐设计器 `/api/admin/plans*`
  *
  * 这里是**销售策略的唯一写入口**：改价、上下架、换规则都只改这张表，
- * App 不需要发版（`app-crm.md` §0）。
+ * App 不需要发版（`clients.md` §0）。
  *
  * `plans` 是**可变目录**：任何状态都能原地修改（`PATCH`），因为成交事实已经
  * 冻结在 `orders.plan_snapshot` 与 `platform_subscriptions` 的快照列里 ——

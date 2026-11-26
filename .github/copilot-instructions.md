@@ -89,8 +89,9 @@ This repository is an **open-source, self-hostable tenant CRM** on Cloudflare Wo
 - Payments stay out of scope: adapters call the tenant's own payment provider; the CRM records the
   resulting state. Never store card data.
 - Keep `/health` and `/__version` stable — the hosted platform and uptime checks depend on them.
-- Document behavior changes in `docs/` in the same PR; contract changes must bump
-  `CRM_CONTRACT_VERSION` and stay additive.
+- Document behavior changes in `docs/` in the same PR. The terminal API version is the
+  path (`/api/app/v1`); stay additive inside v1 and open `/v2` for breaking changes.
+  There is no `CRM_CONTRACT_VERSION`.
 - Node version follows `.nvmrc` (22); dependencies must run on default GitHub Actions runners.
 - Before finishing any change, run `npm run check` (typecheck + unit tests) and `npm run build`
   (dry-run bundle) — CI runs the same commands, so a local pass means no surprise red PR.

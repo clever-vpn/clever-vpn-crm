@@ -2,9 +2,9 @@
  * 站点设置：**发布时烘焙进产物**，运行时不再回填。
  *
  * 规范：`clever-vpn-docs/docs/standards/site-template.md` §3
- * 契约：`clever-vpn-docs/docs/contracts/services/crm/site.md` §0.1
+ * 契约：`clever-vpn-docs/docs/contracts/services/crm/site-studio.md` §4.2
  *
- * **装"租户事实"**（契约 `contract: 8`）：站点名 / 法务主体 / 首屏标题与副标题 /
+ * **装"租户事实"**（契约 `site_contract: 8`）：站点名 / 法务主体 / 首屏标题与副标题 /
  * 一句话介绍 / 客服邮箱 / 主题与五个颜色令牌。判据见
  * `clever-vpn-docs/docs/standards/site-template.md` §3.2：
  *
@@ -52,7 +52,7 @@ export const THEME_PRESETS = ["light", "dark"] as const;
 export type ThemePreset = (typeof THEME_PRESETS)[number];
 
 /**
- * 已知设置字段 = **数据契约本身**（契约 `site-studio-crm.md` §4.4）。
+ * 已知设置字段 = **数据契约本身**（契约 `site-studio.md` §4.4）。
  *
  * 这份清单**只住在这里**：模板（studio 产出的静态文件包）只引用路径，不声明字段；
  * AI 也不能新增字段 —— 加一个可编辑项是**平台动作**（+`SITE_CONTRACT`、过评审、
@@ -526,7 +526,7 @@ export async function saveSiteSettings(
  *
  * 这里只做两件事：空值兜默认、算派生值（`footer` / `brand` 不存库）。
  *
- * `contract: 8` 的判据是"文件 vs 事实"，所以这棵树装的是**租户关于自己的事实**：
+ * `site_contract: 8` 的判据是"文件 vs 事实"，所以这棵树装的是**租户关于自己的事实**：
  * 叫什么（name）、主体是谁（legal_name）、首屏说什么（hero）、什么颜色（theme）、
  * 怎么联系（contact_email）。结构、排布、一次性文案仍然在模板文件里。
  */

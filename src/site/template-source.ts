@@ -1,5 +1,5 @@
 /**
- * `GET /api/site/template` —— **重建用**的源包（契约 `site-studio-crm.md` §0.1.4）。
+ * `GET /api/site/template` —— **重建用**的源包（契约 `site-studio.md` §0.1.4）。
  *
  * studio 的 DO 是可弃的：租户从 CRM 进来、DO 是空的时，按这张表决定给他哪一份源包：
  *

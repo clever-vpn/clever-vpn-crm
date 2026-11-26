@@ -23,6 +23,7 @@ export default function Settings({
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <InstanceCard />
       <MailCard me={me} />
       <PlatformCard />
       <PasswordCard mailReady={me.mail_ready} />
@@ -674,6 +675,50 @@ function AuditCard() {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 实例 ID：给租户复制进 `app.json.crm.id`。
+ *
+ * 它只用于**出包前**的比对（"这个 App 连的是不是这台 CRM"），
+ * 不要展示给终端用户，也不要在运行时拿它做判定。
+ */
+function InstanceCard() {
+  const [id, setId] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    void api
+      .settings()
+      .then((res) => setId(res.crm_id))
+      .catch(() => undefined);
+  }, []);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* 剪贴板不可用：用户可手动选中 */
+    }
+  }
+
+  return (
+    <div className="card">
+      <h3>实例 ID</h3>
+      <p className="hint">
+        填进 App 的 <code>app.json.crm.id</code>。构建期用它核对"这个 App 连的是不是这台
+        CRM"；不要展示给终端用户，也不要在运行时拿它做判定。
+      </p>
+      <div className="row" style={{ gap: 8, alignItems: "center" }}>
+        <code style={{ flex: "1 1 320px", overflowWrap: "anywhere" }}>{id || "读取中…"}</code>
+        <button type="button" onClick={copy} disabled={!id}>
+          {copied ? "已复制" : "复制"}
+        </button>
+      </div>
     </div>
   );
 }

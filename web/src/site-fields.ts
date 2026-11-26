@@ -1,5 +1,5 @@
 /**
- * 站点设置表单 = **由 CRM 的 `capabilities` 生成**（契约 `site-studio-crm.md` §4.4）。
+ * 站点设置表单 = **由 CRM 的 `capabilities` 生成**（契约 `site-studio.md` §4.4）。
  *
  * 为什么不能手写这张表单：字段清单只有一份，住 `src/site/meta.ts`。后台再手写一遍，
  * 加一个字段就要改两处，而漏改的那处**不会报错** —— 表单照旧渲染，只是少了那一项，
