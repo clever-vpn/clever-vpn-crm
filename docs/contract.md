@@ -1,6 +1,6 @@
 # CRM ⇄ cf-api 契约（指针）
 
-Last updated: 2026-10-25
+Last updated: 2026-11-26
 
 **契约正文不在本仓库。** 权威源：
 
@@ -32,7 +32,8 @@ Last updated: 2026-10-25
 | 激活码 | 就是 `customers.code`（16 位），建客户时自动生成，不可重发/吊销；**用户不可见**，随登录态下发（`platform_token`） |
 | 设备额度 | `customers.licence_limit`：创建时必填 1–3，创建后固定（平台硬校验 ⬜，CRM 需先自行拦截） |
 | 换套餐 | 删旧客户 → 用**同一 `auth_id`** 建新客户（得到新 `code`）；流量余量/已用额度不继承。**已实现**：`licence_limit` 变化时才删旧建新（它是计费依据，平台不允许改） |
-| 落账 | `src/platform/provision.ts`：订阅快照 → 控制参数；**流量单位是字节**（`1 GiB = 1024³`），`quota` 恒 `NULL`（月度重置归 CRM）。失败停在 `orders.status='provisioning'`，cron 重试（✅） |
+| 落账 | `src/platform/provision.ts`：订阅快照 → 控制参数；**流量单位是字节**（`1 GiB = 1024³`），`quota` 恒 `NULL`（月度重置归 CRM）。**按动作分档**（`domain.md` I8）：新购/升级全量、续订 period 只写 `expire_date`、续订 traffic / 加量包只写 `traffic_balance`；动作存 `orders.provision_action`，cron 重试用同一种写法。失败停在 `orders.status='provisioning'`（✅） |
+| 平台客户被删 | 小概率运维事故（cf-api 没有 undelete）。**只认 404**：用户重登时 `/auth/verify` 自检，发现客户不在了就按当前订阅**全量重建**并直接下发新码（登录绝不因此失败）；后台另有 `POST /api/admin/customers/:id/provision`「重新落账」。超时 / 429 / 5xx **不重建**。重建必然换码 ⇒ 设备要重新取许可 |
 | 线路权益 | 套餐 `line_ids` → 落账写 `customers.line_ids`（`[]` ⇒ `null` = 全部线路）。cf-api 在 `key-lines` / `app-licences` 强制（`crm-api.md` §5.2.1）。后台可对单个客户覆盖（`POST /api/admin/customers/:id/lines`），写订阅快照 |
 | 支付方式 | App 只认 **`payment_method`**（`alipay` / `wechat` / `paypal` / `stripe`）；服务商与网关都在 CRM 内部，**不进任何 App 响应**（见 [payments.md](payments.md)） |
 | 设备列表 | 平台侧不可读（`licences` 未开 `apiAccess`，⬜）⇒ 本地记录不能声称与平台一致 |
@@ -41,12 +42,13 @@ Last updated: 2026-10-25
 
 ## CRM 侧必须履行的义务
 
-1. **去重**：平台没有 `request_id`，`email` 也没有唯一约束 ⇒ 建号前先按
-   `filters[email][$eq]` 查；本地对 email 加唯一索引。⬜ 计划把 `auth_id` 做成
-   **非空 + 未删除行唯一**（契约 §7.1，**CRM 必须显式提供**；落地后重复创建返回 409，
-   可直接按 `auth_id` 取回）。
-2. **退避**：平台按租户限流 60 次/60 s，429 无 `Retry-After` ⇒ 令牌桶 + 指数退避，
-   4xx 不重试，401 告警（token 失效）。
+1. **去重**：平台没有 `request_id`，幂等键是 `auth_id = crm:<customer_id>`（**已按
+   `filters[auth_id][$eq]` 查**，不按 email——`customers.email` 无唯一约束，面板手工建的行
+   `auth_id` 是 `auto:<uuid>`，按 email 认回会接管别人的客户）。平台侧 `auth_id`
+   **未删除行唯一**（契约 §7.1 ✅），重复创建返回 `409 auth_id_conflict`，重试路径按
+   `auth_id` 取回即可。
+2. **退避**：平台按租户限流 60 次/60 s，429 无 `Retry-After`。当前实现是"落账失败留在
+   `provisioning` + cron 每小时重试"，**没有**逐次指数退避与令牌桶（⬜）。
 3. **不需要事件**：客户生命周期由本 CRM 管理（创建/删除/改参数都是自己发起），平台的
    `customer_created` / `customer_deleted` 对 CRM 只是回声。轮询仅用于"平台面板被直接操作"
    的例外，默认 5 分钟按 `_updated_at` 增量拉取。

@@ -33,6 +33,11 @@ export interface FakeCfApi {
   customers: Map<number, FakeCustomer>;
   /** 记录每次落账写的控制参数，便于断言"字节而不是 GB" */
   patches: { id: number; body: Record<string, unknown> }[];
+  /**
+   * 测试钩子：让接下来的 N 次请求直接返回 `status`（模拟平台 5xx / 429）。
+   * 用来钉住"平台暂时不可用"与"客户被删"必须区分对待。
+   */
+  failures: { remaining: number; status: number };
   restore: () => void;
 }
 
@@ -50,6 +55,7 @@ export function installFakeCfApi(
 ): FakeCfApi {
   const customers = new Map<number, FakeCustomer>();
   const patches: { id: number; body: Record<string, unknown> }[] = [];
+  const failures = { remaining: 0, status: 500 };
   let idSeq = 4200;
   let codeSeq = 7391048261558200;
 
@@ -58,6 +64,12 @@ export function installFakeCfApi(
   const fake = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (!url.href.startsWith(base)) return realFetch(input as RequestInfo, init);
+
+    // 注入的故障（"平台暂时不可用"）——必须在任何业务分支之前生效
+    if (failures.remaining > 0) {
+      failures.remaining -= 1;
+      return json({ error: "internal error" }, failures.status);
+    }
 
     const method = (init?.method ?? "GET").toUpperCase();
     const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
@@ -140,6 +152,7 @@ export function installFakeCfApi(
     token: "cv_api_test",
     customers,
     patches,
+    failures,
     restore: () => {
       globalThis.fetch = realFetch;
     },

@@ -22,6 +22,7 @@ import {
 import { adjustSubscription } from "../subscriptions/adjust";
 import { setCustomerHold } from "../subscriptions/hold";
 import { setSubscriptionLines } from "../subscriptions/lines";
+import { provisionSubscriptionNow } from "../platform/provision";
 import { pollOrderOnce } from "../payments/poll";
 import { refundOrder } from "../payments/refund";
 
@@ -289,6 +290,35 @@ export async function handleAdminSubscriptions(
     });
     await audit(env, actor, "subscription_created", String(id), { plan: plan.id, paid_minor: paidMinor });
     return json({ subscription: { id, ...draft }, plan: planForClient(plan) }, 201);
+  }
+
+  // ── 重新落账这一条订阅（平台客户被误删 / id 丢失 / 手工开通没落账）──
+  //    按当前订阅**全量**写（`new`）：这是运维事故的补救，宁可多给（本周期满额）
+  //    也不能修完还是不能用。cf-api 没有 undelete ⇒ 真被删过就必然换码。
+  const provisionOne = /^\/customers\/(\d+)\/provision$/.exec(path ?? "");
+  if (method === "POST" && provisionOne) {
+    const customerId = Number(provisionOne[1]);
+    const sub = await customerSubscription(env, customerId);
+    if (!sub) return fail(404, "no_subscription", "这个客户还没有订阅");
+    try {
+      const provisioned = await provisionSubscriptionNow(env, sub, "new");
+      await audit(env, actor, "subscription_provisioned", String(customerId), {
+        old_platform_customer_id: sub.platform_customer_id,
+        platform_customer_id: provisioned.platformCustomerId,
+      });
+      return json({
+        ok: true,
+        platform_customer_id: provisioned.platformCustomerId,
+        activation_code: provisioned.code,
+        // `true` = 原来绑过平台客户、现在换成了新的（码换了 ⇒ 用户的设备要重新取许可）
+        replaced:
+          Boolean(sub.platform_customer_id) &&
+          sub.platform_customer_id !== provisioned.platformCustomerId,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return fail(502, "platform_failed", `落账失败：${message}`);
+    }
   }
 
   // ── **直接调整权益**（特殊补偿通道）──

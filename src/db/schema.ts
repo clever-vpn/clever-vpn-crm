@@ -572,6 +572,14 @@ export const orders = sqliteTable(
     provisioned_at: text("provisioned_at"),
     provision_attempts: integer("provision_attempts").notNull().default(0),
     provision_error: text("provision_error"),
+    /**
+     * 这一单落账时该用哪种写法：`new` | `renewal` | `upgrade` | `addon`。
+     *
+     * 为什么必须存：cron 重试时只看得到订单，而"续订只写到期日、加量只写余额"必须与
+     * 第一次落账给出的写法一致——否则重试会把平台余额写回满额（见 `platform/provision.ts`
+     * 的 `patchParams`）。`NULL`（存量单）= 按 `new` 处理，与旧行为一致。
+     */
+    provision_action: text("provision_action"),
     note: text("note"),
     /** 后台操作人（自助下单为空） */
     operator: text("operator"),
