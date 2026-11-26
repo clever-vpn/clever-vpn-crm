@@ -7,7 +7,14 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { GIGA, authIdOf, controlParams, trafficBytes } from "../src/platform/provision";
+import {
+  GIGA,
+  asProvisionAction,
+  authIdOf,
+  controlParams,
+  patchParams,
+  trafficBytes,
+} from "../src/platform/provision";
 
 import type { Subscription } from "../src/plans/subscription";
 
@@ -114,5 +121,40 @@ describe("authIdOf：幂等键跨换档不变", () => {
   it("只由 customer_id 决定", () => {
     expect(authIdOf(7)).toBe("crm:7");
     expect(authIdOf(7)).toBe(authIdOf(7));
+  });
+});
+
+describe("patchParams：已存在的客户只写这次真变了的字段", () => {
+  it("period 续订：只发 expire_date（碰了余额就是把已用的还回去）", () => {
+    const patch = patchParams(sub(), "renewal");
+    expect(Object.keys(patch)).toEqual(["expire_date"]);
+    expect(patch.expire_date).toBe("2026-10-31");
+  });
+
+  it("traffic 续订：到期日 + 余额（remaining 已由调用方回源并 +gb）", () => {
+    const patch = patchParams(
+      sub({ kind: "traffic", period_quota_gb: null, traffic_total_gb: 200, traffic_remaining_gb: 70 }),
+      "renewal",
+    );
+    expect(patch).toMatchObject({ traffic_balance: 70 * GIGA });
+    expect(patch).toHaveProperty("expire_date");
+  });
+
+  it("加量包：只发余额，不动到期日", () => {
+    const patch = patchParams(sub({ period_extra_gb: 50, traffic_remaining_gb: 90 }), "addon");
+    expect(patch).toEqual({ traffic_balance: 90 * GIGA });
+  });
+
+  it("新购 / 升级：全量（新周期的满额是对的）", () => {
+    expect(patchParams(sub(), "new")).toEqual(controlParams(sub()));
+    expect(patchParams(sub(), "upgrade")).toEqual(controlParams(sub()));
+  });
+
+  it("重试时必须能认出动作；未知值退回 new", () => {
+    expect(asProvisionAction("renewal")).toBe("renewal");
+    expect(asProvisionAction("addon")).toBe("addon");
+    expect(asProvisionAction(null)).toBe("new");
+    expect(asProvisionAction("")).toBe("new");
+    expect(asProvisionAction("whatever")).toBe("new");
   });
 });

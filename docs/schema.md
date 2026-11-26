@@ -1,6 +1,6 @@
 # 表结构（Drizzle / D1）
 
-Last updated: 2026-10-30
+Last updated: 2026-11-26
 
 > 设计依据：[`domain.md`](domain.md)（六条不变量）。改表先改那边，再改本文件，最后改 schema。
 > 实现：`src/db/schema.ts`；生产迁移：`migrations/`；开发链：`migrations-dev/`（gitignore）。
@@ -103,7 +103,7 @@ CRM 尚未正式发布，历史上有 19 个递增迁移（`0000_baseline` + 18 
 
 | 表 | 用途 | 关键列 |
 |---|---|---|
-| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`/`currency`（CRM 账本）、`provider_amount_minor`/`provider_currency`/`fx_rate`（实际扣款与汇率快照）、`source`(purchase/gift/manual/test/mock)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`next_poll_at`/`poll_attempts`、`return_poll_at`（回跳页查询冷却）、`status`、`refunded_minor`、`voided_at`、`provision_*` |
+| `orders` | **订单 = 一次支付尝试**（见 [`payments.md`](payments.md) §2） | `code` unique、`plan_snapshot`（JSON 快照）、`amount_minor`/`currency`（CRM 账本）、`provider_amount_minor`/`provider_currency`/`fx_rate`（实际扣款与汇率快照）、`source`(purchase/gift/manual/test/mock)、`payment_method`、`gateway_id`、`provider_order_no` unique、`provider_trade_no`、`pay_url`、`expires_at`、`raw_create`/`raw_notify`、`next_poll_at`/`poll_attempts`、`return_poll_at`（回跳页查询冷却）、`status`、`refunded_minor`、`voided_at`、`provision_action`（落账写法）、`provision_*` |
 | `refunds` | 退款**明细**（可多次部分退） | `order_id`、`amount_minor`、`mode`、`operator`、`channel_refund_id`、`status` |
 | `adjustments` | 管理员**调整**（非售卖） | `field`、`before_value`、`after_value`、`reason`、`operator`、`platform_applied_at` |
 | `payment_gateways` | **支付网关配置**（一条 = 一份能收钱的凭据） | `driver`(epay_v1/generic_json_v1/stripe/paypal/manual)、`paypal_env`（sandbox/live；仅 PayPal，新建默认 sandbox；旧 null 按 sandbox）、`methods`、`channel_codes`（账户通道号，实例值）、`mapping`（协议类型）、`priority`、`status`(draft/live/disabled/deleted)、`currency`（网关币种）、`fx_rate`（1 网关币种 = X CNY）、`secret_enc`（API 密钥）、`webhook_enc`（Stripe signing secret / PayPal webhook id）、`test_amount_minor`、`test_create_ok_at`/`test_query_ok_at`/`test_callback_ok_at`、`test_require_callback`、`tested_config_hash`、`last_test_order_id` |
@@ -204,7 +204,8 @@ npx wrangler d1 execute clever-vpn-crm --remote --command \
 - **`orders.plan_snapshot` 用 JSON 而不是子表**：快照只读、不需要 JOIN、字段会随业务演进，
   子表反而要跟着改 DDL。
 - **`orders.refunded_minor` 是缓存和**：真相在 `refunds` 明细；两者不一致时以明细重算。
-- **`platform_subscriptions.params_version`**：D1 没有行锁，靠"读版本 → 写前比对"
-  避免结算与后台改动互相覆盖（domain.md I3）。
-- **`customers` 与 cf-api 是弱引用**：`cf_customer_id` 可能为空（尚未绑定），
-  不做外键约束（D1 跨库无外键）。
+- **`orders.provision_action`（`new|renewal|upgrade|addon`）**：落账写哪些字段由它决定
+  （`domain.md` I8）。它必须随订单持久化——cron 重试只看得到订单，重试用了另一种写法就会
+  把平台余额写成满额。存量单为 `NULL`，按 `new` 处理。
+- **`customers` 与 cf-api 是弱引用**：`platform_subscriptions.platform_customer_id` 可能为空
+  （尚未落账），不做外键约束（D1 跨库无外键）。平台侧被删后由登录自检 / 后台按钮重建。

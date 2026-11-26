@@ -269,7 +269,9 @@ export function renewSubscription(
   }
   // traffic：整包叠加，到期日取更晚者
   next.traffic_total_gb = (sub.traffic_total_gb ?? 0) + (plan.traffic_gb ?? 0);
-  next.traffic_remaining_gb = (sub.traffic_remaining_gb ?? 0) + (plan.traffic_gb ?? 0);
+  // 基数是平台真实剩余（调用方已 `freshenTraffic`）；从未同步过时退化为整包容量，
+  // 不能按 0 算 —— 那会把用户整包的剩余吞掉。
+  next.traffic_remaining_gb = (sub.traffic_remaining_gb ?? sub.traffic_total_gb ?? 0) + (plan.traffic_gb ?? 0);
   const added = plan.validity_days === null ? null : new Date(base + plan.validity_days * DAY_MS).toISOString();
   const candidates = [sub.expires_at, added].filter((v): v is string => v !== null);
   next.expires_at = candidates.length ? candidates.sort().at(-1)! : null;

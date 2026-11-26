@@ -175,11 +175,24 @@ export async function settlePaidOrder(
         ? await freshenTraffic(env, before, { now })
         : before;
       if (!freshened) throw new Error("读不到平台余额，加量包暂不能落账");
+      // `traffic_remaining_gb === null`（平台上就是不限量 / 从未写过）时不能加：
+      // 落账会把 null 写回去，等于给了一个不限量的客户（cf-api 的 null = 不计费）。
+      if (freshened.platform_customer_id && freshened.traffic_remaining_gb === null) {
+        throw new Error("平台没有这条订阅的余额（可能是不限量），加量包暂不能落账");
+      }
       next = renewSubscription(freshened, plan, { paidMinor: paid, now });
     } else if (before && !isOver(before, now) && before.plan_id === plan.id) {
       // 续订：同一个套餐再来一份，全款，到期日顺延
       action = "renewal";
-      next = renewSubscription(before, plan, { paidMinor: paid, now });
+      // traffic 套餐续订 = "余额 + gb"，基数必须是平台真实剩余（同加量包的规矩）；
+      // period 续订只延时间、不碰余额，不需要回源。
+      let base = before;
+      if (before.kind === "traffic" && before.platform_customer_id) {
+        const freshened = await freshenTraffic(env, before, { now });
+        if (!freshened) throw new Error("读不到平台余额，续订暂不能落账");
+        base = freshened;
+      }
+      next = renewSubscription(base, plan, { paidMinor: paid, now });
     } else if (before && !isOver(before, now)) {
       // 升级：换成别的套餐（可跨 kind），旧残值已在报价里抵扣
       action = "upgrade";
@@ -208,10 +221,11 @@ export async function settlePaidOrder(
       detail: { order_id: order.id, order_code: order.code, plan_id: plan.id, kind: plan.kind },
     });
     await env.DB.prepare(
-      // 先记关联，再落账：落账失败时订单停在 provisioning，cron 只重做这一步
-      `UPDATE orders SET subscription_id = ?, updated_at = ? WHERE id = ?`,
+      // 先记关联，再落账：落账失败时订单停在 provisioning，cron 只重做这一步。
+      // `provision_action` 必须一起存：重试时必须用**同一种写法**（见 provision.ts）。
+      `UPDATE orders SET subscription_id = ?, provision_action = ?, updated_at = ? WHERE id = ?`,
     )
-      .bind(subscriptionId, now.toISOString(), order.id)
+      .bind(subscriptionId, action, now.toISOString(), order.id)
       .run();
 
     // ── 促销核销 + 邀请奖励（都**必须**在钱到账之后）──
@@ -223,7 +237,7 @@ export async function settlePaidOrder(
       console.error(`[promo] 核销/发奖失败 order=${order.code}: ${e instanceof Error ? e.message : e}`);
     }
 
-    await provisionOrder(env, order.id);
+    await provisionOrder(env, order.id, action);
 
     // 礼包**不在这里发**：拉取模型下礼包是货架上的一条活动，
     // 由用户自己来领（`GET /me/gifts` → `POST /me/gifts/{id}/claim`）。

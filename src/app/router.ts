@@ -43,6 +43,7 @@ import { bindReferral, referralPanel } from "../promotions/referral";
 import { redeemGiftCode } from "../promotions/redeem";
 import { planPromos, resolvePromotion } from "../promotions/service";
 import { customerSubscription, ensureTrafficFresh } from "../subscriptions/store";
+import { repairPlatformIfMissing } from "../platform/provision";
 import { startTrial, trialInfo } from "../subscriptions/trial";
 import { clientIp, turnstileEnabled, verifyTurnstile } from "../turnstile";
 
@@ -485,7 +486,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
       )
       .run();
 
-    const sub = await loadFreshSubscription(env, customerId);
+    /**
+     * 登录顺带做一次"平台客户还在不在"的自检：cf-api 客户被误删是**小概率**事件，
+     * 恢复手段就是重登一次（发现 404 就按当前订阅全量重建，本次直接返回新码）。
+     * 只有 404 才重建；平台超时/5xx 一律不动，且**绝不**让登录失败。
+     */
+    const sub = await repairPlatformIfMissing(env, await loadFreshSubscription(env, customerId));
     const view = subscriptionView(sub);
     // 平台快照：**只有拿到 code 才算有**。provisioning 时 App 应显示"正在开通"（§2.6）
     const platform = sub?.activation_code
