@@ -22,6 +22,10 @@ export interface OrderListView {
   amount_text: string;
   /** 客户端只看到 4 个：pending / paid / closed / refunded */
   status: "pending" | "paid" | "closed" | "refunded";
+  /** @deprecated 旧站点 SDK 1.2.0 的账户页自己解析它；重发后删 */
+  plan_snapshot: string;
+  /** @deprecated 同上（旧账户页用 `amount_minor` 自己格式化） */
+  amount_minor: number;
   /** 用户可读的状态句 */
   status_text: string;
   /** 前端小标签 */
@@ -145,6 +149,9 @@ export function orderListView(
   const state = orderStatusView(row.status, { ageMinutes });
   return {
     order_code: row.code,
+    // 兼容旧站点 SDK 1.2.0；新账户页用 title / amount_text
+    plan_snapshot: row.plan_snapshot,
+    amount_minor: row.amount_minor,
     title: planTitle(row.plan_snapshot),
     amount_text: row.amount_minor > 0 ? yuan(row.amount_minor) : "0 元（赠送）",
     status: clientOrderStatus(row.status),

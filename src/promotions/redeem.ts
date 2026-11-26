@@ -35,6 +35,12 @@ export interface RedeemResult {
   title: string | null;
   /** 直接给用户看的一句话（成功/失败都有） */
   result_text: string;
+  /** @deprecated 旧站点 SDK 1.2.0 的兑换弹窗读 `promotion_name`；重发后删 */
+  promotion_name?: string;
+  /** @deprecated 旧站点 0 元开户提示读 `opened`；重发后删 */
+  opened?: boolean;
+  /** @deprecated 旧站点失败态读 `reason`；重发后删 */
+  reason?: string;
   /** 实际到账的权益；失败时为 0 */
   applied: GiftRewards;
   /** 兑换后的有效期；永久为 null */
@@ -54,6 +60,8 @@ const fail = (reason: string, state: RedeemState = "invalid_code"): RedeemOutcom
     state,
     title: null,
     result_text: reason,
+    // @deprecated 旧站点 SDK 1.2.0
+    reason,
     applied: EMPTY_REWARDS,
     expires_at: null,
     remaining_gb: null,
@@ -197,6 +205,9 @@ export async function redeemGiftCode(
       state: "granted",
       title: promo.name,
       result_text: `${head}，可以在「我的订阅」里看到`,
+      // @deprecated 旧站点 SDK 1.2.0
+      promotion_name: promo.name,
+      opened: !hadSub,
       applied: grant.applied,
       expires_at: view.expires_at,
       remaining_gb: view.remaining_gb,
