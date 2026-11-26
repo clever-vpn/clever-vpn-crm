@@ -614,6 +614,12 @@ async function route(request: Request, env: Env, path: string, method: string): 
 
   if (method === "GET" && path === "/me") {
     if (!customer) return err(401, "unauthorized");
+    // ⚠️ 兼容位（@deprecated）：线上站点产物里的旧 SDK（1.2.0）`me()` 只打 `/me`
+    // 并直接读 `me.subscription`；新版 SDK 2.0.0 自己组合 `/me`+`/subscription`，
+    // 会忽略这个字段。**所有站点重发一次后删**（判据：`/_crm/sdk.js` 是 2.0.0）。
+    const { code: _code, ...subscription } = subscriptionView(
+      await loadFreshSubscription(env, customer.id),
+    );
     return json({
       // `uuid` 是商店账号绑定的唯一合法来源，与 `/auth/verify` 同形
       user: {
@@ -622,6 +628,7 @@ async function route(request: Request, env: Env, path: string, method: string): 
         email: customer.email,
         name: customer.display_name,
       },
+      subscription,
       // 邀请面板：App 与 Site 共用。不需要邀请功能的客户端忽略即可
       referral: await referralPanel(env, customer.id),
       // ⚠️ 这里**不给**礼包红点：红点只有一个来源 `GET /me/gifts.available_count`
@@ -986,6 +993,8 @@ async function route(request: Request, env: Env, path: string, method: string): 
     return json(
       {
         order_code: result.orderCode,
+        // @deprecated：旧站点 SDK 1.2.0 的 checkout() 读的是 `o.code`；重发后删
+        code: result.orderCode,
         pay_url: result.payUrl,
         amount_minor: result.amountMinor,
         currency: result.currency,

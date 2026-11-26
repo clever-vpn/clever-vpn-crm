@@ -89,10 +89,14 @@ describe("契约：顶层键 = 文档字段", () => {
     expect(body).not.toHaveProperty("min_app");
   });
 
-  it("/me 只有 user + referral（不含订阅）", async () => {
-    const body = (await (await call("/api/app/v1/me", { token: TOKEN })).json()) as object;
-    expect(sorted(body)).toEqual(["referral", "user"]);
-    expect(body).not.toHaveProperty("subscription");
+  it("/me = user + referral；subscription 是旧 SDK 兼容位且不含 code", async () => {
+    const body = (await (await call("/api/app/v1/me", { token: TOKEN })).json()) as {
+      subscription: Record<string, unknown>;
+    } & object;
+    expect(sorted(body)).toEqual(["referral", "subscription", "user"]);
+    // 旧站点 SDK 1.2.0 的 me() 只打 /me；2.0.0 会自己组合 /subscription
+    expect(body.subscription).toHaveProperty("status");
+    expect(body.subscription).not.toHaveProperty("code");
   });
 
   it("/subscription 字段不含 platform / addon_gb / line_ids", async () => {
@@ -184,6 +188,7 @@ describe("契约：顶层键 = 文档字段", () => {
     const order = (await created.json()) as { order_code: string };
     expect(sorted(order)).toEqual([
       "amount_minor",
+      "code",
       "currency",
       "expires_at",
       "order_code",
@@ -196,11 +201,13 @@ describe("契约：顶层键 = 文档字段", () => {
     };
     expect(sorted(list)).toEqual(["items", "next_cursor"]);
     expect(sorted(list.items[0]!)).toEqual([
+      "amount_minor",
       "amount_text",
       "created_at",
       "next_poll_after_ms",
       "order_code",
       "paid_at",
+      "plan_snapshot",
       "status",
       "status_text",
       "tag",
@@ -236,12 +243,14 @@ describe("契约：顶层键 = 文档字段", () => {
       "applied",
       "expires_at",
       "ok",
+      "reason",
       "remaining_gb",
       "result_text",
       "state",
       "title",
     ]);
-    expect(redeem).not.toHaveProperty("reason");
+    // 失败态带旧 SDK 的 `reason` 兼容位；`promotion_name` 只在成功时有
+    expect(typeof (redeem as Record<string, unknown>).reason).toBe("string");
     expect(redeem).not.toHaveProperty("promotion_name");
   });
 
