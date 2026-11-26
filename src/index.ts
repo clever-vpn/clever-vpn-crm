@@ -5,7 +5,7 @@
  *   /*               → 管理后台 SPA（assets）。CRM 是独立域名，**入口就是 `/`**，
  *                      不该让人记 `/admin`（`/admin/*` 只留 302 兼容书签）。
  *   /api/admin/*     → 管理后台 API（Cookie 会话）
- *   /api/app/v1/*    → App / 静态站共用的接口（Bearer 或 Cookie）
+ *   /api/app/v1/*    → 终端客户端（App / Site）共用的接口（Bearer）
  *
  * **官网不在这个 Worker 里**。静态站（首页 / 定价 / 我的 …）完全独立部署，
  * 可以是任何域名，通过 `Authorization: Bearer <session_token>` 调 `/api/app/v1/*`。
@@ -25,7 +25,7 @@ import { siteMeta } from "./site/meta";
 import { buildScope, readSiteSettings, saveSiteSettings } from "./site/settings";
 import { siteSourceOf } from "./site/template-source";
 import { deliverSite, type DeliveryInput } from "./site/deliver";
-import { SAMPLE_PLANS_RAW, sampleDataOf } from "./site/sample";
+import { sampleDataOf } from "./site/sample";
 import { ALLOWED_EXT } from "./site/bake";
 import { latestRelease, publishSite, reprintSite } from "./site/publish";
 import { SITE_LIMITS } from "./site/limits";
@@ -126,7 +126,6 @@ export default {
     if (url.pathname === "/__version") {
       return json({
         code: env.CRM_CODE_VERSION ?? "dev",
-        contract: env.CRM_CONTRACT_VERSION ?? "1",
         mode: modeOf(rawEnv),
         tenant: scoped.tenantId || null,
         config: { ok: config.ok, problems: config.problems, dbs: config.dbs },
@@ -315,26 +314,6 @@ export default {
         const access = await verifySiteAccess(request, env, scoped.tenantId);
         if (!access) return json({ error: "site_access_invalid" }, 401);
         return json(sampleDataOf());
-      }
-
-      /**
-       * 预览宿主用的**接口同形样例**（契约 `site-crm.md` §3.1 `contract: 6`）。
-       *
-       * studio 预览跑的是**真 SDK**（`/_crm/sdk.js` 与线上同一份），所以它需要
-       * `/api/app/v1/plans` 的**原始**返回，而不是 `sample-data` 那份视图模型 ——
-       * SDK 会自己再映射一遍。预览把这里当上游，于是"预览看到的价格卡"就是"线上
-       * 拿到同样数据渲染的价格卡"，中间没有第二套实现。
-       */
-      if (url.pathname.startsWith("/api/site/sample-api/")) {
-        if (request.method !== "GET") return json({ error: "method_not_allowed" }, 405);
-        const access = await verifySiteAccess(request, env, scoped.tenantId);
-        if (!access) return json({ error: "site_access_invalid" }, 401);
-        const kind = url.pathname.slice("/api/site/sample-api/".length);
-        const sample = sampleDataOf();
-        if (kind === "plans") return json(SAMPLE_PLANS_RAW);
-        if (kind === "me") return json(sample.me);
-        if (kind === "orders") return json({ items: sample.orders });
-        return json({ error: "unknown_sample", message: "样例只有 plans / me / orders" }, 404);
       }
 
       /**

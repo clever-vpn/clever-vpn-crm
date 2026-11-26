@@ -48,6 +48,8 @@ async function call<T>(
  * 剩下的留给验证码 —— App 是无密码登录，礼包邮件吃干净配额 = 登录挂掉。
  */
 export interface AdminSettings {
+  /** 实例 UUID：构建期比对 app.json.crm.id（clients.md §7.1） */
+  crm_id: string;
   mail: {
     daily_quota: number;
     soft_ratio: number;
@@ -104,7 +106,7 @@ export interface PlanChannel {
   methods?: string[];
 }
 
-/** 与 `app-crm.md` §2.4.7 的 Plan 结构一致；后台额外带 status 等字段 */
+/** 与 `clients.md` §2.4.7 的 Plan 结构一致；后台额外带 status 等字段 */
 export interface PlanView {
   plan_id: string;
   name: string;
@@ -152,7 +154,7 @@ export interface PlanDraft {
   sort_order: number;
 }
 
-/** 换购报价（`app-crm.md` §2.4.8） */
+/** 换购报价（`clients.md` §2.4.8） */
 export interface Quote {
   allowed: boolean;
   reason: string | null;
@@ -191,7 +193,7 @@ export interface SiteStateView {
   sourceFrom: string;
   /**
    * 线上正在服务的**产物**（`art/<sha>/`）。设计与产物是两件事：保存设置只换产物、
-   * 不换版本号（契约 `site-studio-crm.md` §0.1.3）。
+   * 不换版本号（契约 `site-studio.md` §0.1.3）。
    */
   live?: SiteLive | null;
   /** 最近若干版，最新在前 */
@@ -371,7 +373,7 @@ export const api = {
   loginEmailVerify: (email: string, code: string) =>
     call<{ ok?: true; totp_required?: boolean }>("POST", "/login/email/verify", { email, code }),
   logout: () => call<{ ok: true }>("POST", "/logout"),
-  /** 站点：状态 / 发布 / 回滚（产物在 R2，指针在 KV，见 contracts/site-studio-crm.md §6） */
+  /** 站点：状态 / 发布 / 回滚（产物在 R2，指针在 KV，见 contracts/site-studio.md §6） */
   site: () => call<SiteStateView>("GET", "/site"),
   sitePublish: () => call<SitePublishResult>("POST", "/site/publish", {}),
   /**

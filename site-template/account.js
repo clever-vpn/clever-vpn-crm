@@ -11,15 +11,8 @@
       ? '<div class="' + kind + '">' + SiteCrm.escape(text) + '</div>' : '';
   }
   var fmtDate = function (iso) { return iso ? String(iso).slice(0, 10) : '—'; };
-  function yuan(minor) {
-    return typeof minor === 'number' ? '¥' + (minor / 100).toFixed(2) : '—';
-  }
-  var STATUS = {
-    active: ['ok', '可用'],
-    inactive: ['warn', '不可用'],
-    provisioning: ['warn', '开通中'],
-    none: ['warn', '未订阅']
-  };
+  // 语义 tone → CSS 类：这是**呈现映射**，不是业务文案
+  var TONE = { success: 'ok', info: 'ok', warn: 'warn', muted: '', neutral: '' };
 
   function rows(dl, pairs) {
     dl.innerHTML = pairs.map(function (kv) {
@@ -29,13 +22,12 @@
 
   function renderMe(me) {
     var s = (me && me.subscription) || {};
-    var tag = STATUS[s.status] || ['warn', s.status || '—'];
-    $('state-tag').className = 'tag ' + tag[0];
-    $('state-tag').textContent = tag[1];
+    $('state-tag').className = 'tag ' + (TONE[s.tag_tone] || '');
+    $('state-tag').textContent = s.tag || '—';
 
     var pairs = [
       ['账号', (me && me.user && me.user.email) || '—'],
-      ['状态', s.status === 'provisioning' ? '正在开通…' : (s.status_text || '—')],
+      ['状态', s.status_text || '—'],
       ['套餐', s.plan_id || '—'],
       ['到期', fmtDate(s.expires_at)],
       ['剩余额度', s.unlimited ? '不限量'
@@ -61,13 +53,6 @@
     ]);
   }
 
-  function planName(o) {
-    try {
-      var v = JSON.parse(o.plan_snapshot || '{}');
-      return v.name || '—';
-    } catch (e) { return '—'; }
-  }
-
   function renderOrders(items) {
     var body = $('orders');
     if (!items || !items.length) {
@@ -76,10 +61,10 @@
     }
     body.innerHTML = items.map(function (o) {
       return '<tr>'
-        + '<td class="mono">' + SiteCrm.escape(o.code || o.order_code || '—') + '</td>'
-        + '<td>' + SiteCrm.escape(planName(o)) + '</td>'
-        + '<td class="num">' + yuan(o.amount_minor) + '</td>'
-        + '<td>' + SiteCrm.escape(o.status || '—') + '</td>'
+        + '<td class="mono">' + SiteCrm.escape(o.order_code || '—') + '</td>'
+        + '<td>' + SiteCrm.escape(o.title || '—') + '</td>'
+        + '<td class="num">' + SiteCrm.escape(o.amount_text || '—') + '</td>'
+        + '<td>' + SiteCrm.escape(o.status_text || '—') + '</td>'
         + '<td>' + fmtDate(o.created_at) + '</td>'
         + '</tr>';
     }).join('');
@@ -110,21 +95,13 @@
     $('redeem-btn').disabled = true;
     box.innerHTML = '<div class="hint">正在兑换…</div>';
     SiteCrm.redeem(code).then(function (d) {
-      // 业务性失败是 200 + ok:false + reason，不是异常
+      // 与领取同形：业务结论是 200 + ok:false + state + result_text
       if (!d || d.ok !== true) {
         box.innerHTML = '<div class="err">'
-          + SiteCrm.escape((d && d.reason) || '兑换失败') + '</div>';
+          + SiteCrm.escape((d && d.result_text) || '兑换失败') + '</div>';
         return;
       }
-      var bits = [];
-      var a = d.applied || {};
-      if (a.days) { bits.push('+' + a.days + ' 天'); }
-      if (a.gb) { bits.push('+' + a.gb + ' GB'); }
-      if (a.reset_month) { bits.push('重置本月已用'); }
-      var head = d.opened ? '已开通体验套餐' : '「' + (d.promotion_name || '兑换码') + '」已到账';
-      var detail = bits.length ? '：' + bits.join(' + ') : '';
-      var tail = d.expires_at ? '，有效期至 ' + fmtDate(d.expires_at) : '';
-      box.innerHTML = '<div class="ok">' + SiteCrm.escape(head + detail + tail) + '</div>';
+      box.innerHTML = '<div class="ok">' + SiteCrm.escape(d.result_text || '兑换成功') + '</div>';
       $('redeem-code').value = '';
       load();   // 权益变了，上面那张卡立刻刷新
     }).catch(function (e) {

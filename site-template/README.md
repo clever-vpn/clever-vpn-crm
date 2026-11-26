@@ -107,9 +107,10 @@ R2、GitHub Pages、自家服务器都行），通过 HTTP 调 CRM 的接口。
    **还没接**（设了不会变），接线是下一步。
 3. **可编辑单元必须带锚点**：`data-eid="<页>.<区块>.<字段>"`，如
    `home.hero.title`。studio 靠它定位，不能靠"猜哪段文字"。
-4. **不含业务规则**：能不能买只读 `buyable`，价格只渲染 `display_price_minor`，
-   划线只看 `compare_at_price_minor`，按钮文案只按 `action` 查表。**别在自己这边
-   比较促销价、别自建 `BUYABLE` 集合、别自己算应付。**
+4. **不含业务规则**：能不能买只读 `buyable`，价格只渲染 `price`（来自
+   `display_price_minor`），划线只看 `compareAt`，按钮文案直接用 `cta`，规格行直接用
+   `specs`，类型标签用 `kindLabel`。**别自己比较促销价、别自建 `action` → 文案表、
+   别自己算应付。**
 5. **零租户 JS**：页面里的脚本是平台资产（渲染 + 调接口），租户不往里写东西。
 6. **一个主按钮**：一屏只有一个实心按钮，其余用文字链接或 `ghost`。
 

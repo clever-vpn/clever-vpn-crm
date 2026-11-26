@@ -119,24 +119,31 @@ describe("契约 v11：/plans 只给一个 action", () => {
     const items = (await res.json()) as {
       plan_id: string;
       action: string;
-      price_minor: number;
-      promo_price_minor: number | null;
+      display_price_minor: number;
+      compare_at_price_minor: number | null;
     }[];
     const plan = items.find((p) => p.plan_id === "pay_plan_30d");
     expect(plan?.action).toBe("buy");
-    // 应付 = promo_price_minor ?? price_minor
-    expect(plan?.promo_price_minor ?? plan?.price_minor).toBe(1500);
+    expect(plan?.display_price_minor).toBe(1500);
+    expect(plan?.compare_at_price_minor).toBeNull();
   });
 
-  it("expected_payable_minor 与报价不符 → 409 price_changed", async () => {
+  it("下单返回 amount_minor，客户端据此与报价比对", async () => {
+    const quoted = await call("/api/app/v1/quote", {
+      method: "POST",
+      token: TOKEN,
+      body: { plan_id: "pay_plan_30d" },
+    });
+    const quote = (await quoted.json()) as { payable_minor: number };
     const res = await call("/api/app/v1/orders", {
       method: "POST",
-      token: OTHER_TOKEN,
-      body: { plan_id: "pay_plan_30d", payment_method: "alipay", expected_payable_minor: 1 },
+      token: TOKEN,
+      body: { plan_id: "pay_plan_30d", payment_method: "alipay" },
     });
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("price_changed");
+    expect(res.status).toBe(201);
+    const order = (await res.json()) as { amount_minor: number };
+    // 服务端重算；客户端把这两个数比一下就能发现"价格变了"
+    expect(order.amount_minor).toBe(quote.payable_minor);
   });
 });
 
@@ -153,10 +160,8 @@ describe("mock 支付全链路", () => {
       order_code: string;
       pay_url: string;
       amount_minor: number;
-      reused: boolean;
     };
     expect(order.amount_minor).toBe(1500);
-    expect(order.reused).toBe(false);
     expect(order.pay_url).toContain("/pay/mock/");
 
     // 2. 演示页
@@ -269,8 +274,7 @@ describe("mock 支付全链路", () => {
       body: { plan_id: "pay_plan_30d", payment_method: "alipay" },
     });
     const oa = (await a.json()) as { order_code: string };
-    const ob = (await b.json()) as { order_code: string; reused: boolean };
-    expect(ob.reused).toBe(true);
+    const ob = (await b.json()) as { order_code: string };
     expect(ob.order_code).toBe(oa.order_code);
   });
 
@@ -625,16 +629,10 @@ describe("升级：换成别的套餐（残值抵扣）", () => {
       action: string;
       payable_minor: number;
       residual_minor: number;
-      price_minor: number;
-      quote_ttl_s: number;
-      quoted_at: string;
     };
     expect(quote.action).toBe("upgrade");
-    expect(quote.price_minor).toBe(4000);
     expect(quote.payable_minor).toBeGreaterThan(0);
     expect(quote.payable_minor).toBeLessThan(4000); // 抵掉了残值
-    expect(quote.quote_ttl_s).toBe(900);
-    expect(Date.parse(quote.quoted_at)).toBeGreaterThan(0);
 
     const ordered = await call("/api/app/v1/orders", {
       method: "POST",
@@ -642,7 +640,6 @@ describe("升级：换成别的套餐（残值抵扣）", () => {
       body: {
         plan_id: UPGRADE_PLAN,
         payment_method: "alipay",
-        expected_payable_minor: quote.payable_minor,
       },
     });
     expect(ordered.status).toBe(201);

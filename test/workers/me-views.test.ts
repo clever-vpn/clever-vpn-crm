@@ -217,7 +217,7 @@ describe("GET /orders（列表）", () => {
     const order = body.items.find((i) => i.order_code === orderCode)!;
     expect(order.title).toBe("月付 · 10 元");
     expect(order.amount_text).toBe("¥10.00");
-    expect(order.status).toBe("active");
+    expect(order.status).toBe("paid");
     expect(order.status_text).toBe("已生效");
     // 已生效 ⇒ 不用再轮询
     expect(order.next_poll_after_ms).toBeNull();

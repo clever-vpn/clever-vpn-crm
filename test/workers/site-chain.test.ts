@@ -1,7 +1,7 @@
 /**
  * **完整一条链**：管理员点「打开设计器」→ 拿到 `sacc_…` → 用它对 CRM 干活。
  *
- * 契约 `site-studio-crm.md` §4.5 + `studio-identity.md` §2.1.1。
+ * 契约 `site-studio.md` §4.5 + `studio-identity.md` §2.1.1。
  *
  * 这条链分处两个仓，靠一个**手写错就崩**的格式串起来（HMAC + base64url + 租户比对），
  * 单测各测一半很容易"两边都绿、合起来 401"。所以这里在**同一个 Worker 里**跑一遍

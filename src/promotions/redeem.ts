@@ -5,16 +5,18 @@
  *
  *   1. **码是分发方式，不是新物件**：直接复用 `promotions.code`（全表唯一），
  *      不建批次表。一码一渠道 = 建多个活动，核销数天然分开。
- *   2. **失败一律给整句理由**（`ok:false` + `reason`），与 `/quote` 的 `allowed:false`
+ *   2. **失败一律给整句理由**（`ok:false` + `state` + `result_text`），与领取同形；
  *      同口径 —— 码错了不是系统错误，不该让客户端当异常处理。
  *   3. **必须防撞库**：共享码是公开的，`A-Z0-9` 6 位可被穷举。同一客户每小时
  *      失败 5 次就锁。计数落在 `audit_log`（现成的表），不新增结构。
  */
 import { lookupCode, normalizeCode } from "./codes";
 import { claimGiftFor } from "./gift";
+import { EMPTY_REWARDS } from "./model";
 import { customerSubscription } from "../subscriptions/store";
 
 import type { Env } from "../env";
+import type { GiftClaimState } from "./gift";
 import type { GiftRewards } from "./model";
 
 /** 同一客户每小时的失败上限（超过 ⇒ 429） */
@@ -22,27 +24,41 @@ export const MAX_FAILED_ATTEMPTS = 5;
 /** 码长下限：太短的码等于送（可穷举） */
 export const MIN_CODE_LENGTH = 6;
 
-/** 兑换结论。`ok:false` 一律 HTTP 200，只有限流才是 429。 */
+/** 兑换结论的状态：与礼包领取同一套词，外加一个"码本身不成立"。 */
+export type RedeemState = GiftClaimState | "invalid_code";
+
+/** 兑换结论。业务失败一律 HTTP 200；只有限流是 429。与 `/me/gifts/{id}/claim` 同形。 */
 export interface RedeemResult {
   ok: boolean;
-  /** 兑换成功：礼包名（给客户端做"已到账：某某"的文案） */
-  promotion_name?: string;
-  applied?: GiftRewards;
-  /** true = 本次用载体套餐新开户（客户原本没有订阅） */
-  opened?: boolean;
+  state: RedeemState;
+  /** 礼包名；`invalid_code` 时为 null */
+  title: string | null;
+  /** 直接给用户看的一句话（成功/失败都有） */
+  result_text: string;
+  /** 实际到账的权益；失败时为 0 */
+  applied: GiftRewards;
   /** 兑换后的有效期；永久为 null */
-  expires_at?: string | null;
+  expires_at: string | null;
   /** 兑换后的剩余流量（GB）；不限量 / 无订阅为 null */
-  remaining_gb?: number | null;
-  /** 失败原因（整句中文） */
-  reason?: string;
+  remaining_gb: number | null;
 }
 
 export type RedeemOutcome =
   | { status: 200; body: RedeemResult }
-  | { status: 429; body: { error: "too_many_attempts"; message: string; retry_after_s: number } };
+  | { status: 429; body: { error: { code: "too_many_attempts"; message: string }; retry_after_s: number } };
 
-const fail = (reason: string): RedeemOutcome => ({ status: 200, body: { ok: false, reason } });
+const fail = (reason: string, state: RedeemState = "invalid_code"): RedeemOutcome => ({
+  status: 200,
+  body: {
+    ok: false,
+    state,
+    title: null,
+    result_text: reason,
+    applied: EMPTY_REWARDS,
+    expires_at: null,
+    remaining_gb: null,
+  },
+});
 
 /** 码归一：去空格 + 大写（粘贴常带空格/小写）。实现在 `./codes.ts`，这里转出。 */
 export const normalizePromoCode = normalizeCode;
@@ -75,7 +91,8 @@ async function recordSuccess(env: Env, customerId: number, code: string, now: Da
   await env.DB.prepare(
     `INSERT INTO audit_log (at, actor, action, target, detail) VALUES (?, ?, 'redeem_ok', ?, ?)`,
   )
-    .bind(now.toISOString(), `customer:${customerId}`, `customer:${customerId}`, JSON.stringify({ code }))
+    // 只记前 3 位：完整码等同于一份可用的权益凭证，不进日志
+    .bind(now.toISOString(), `customer:${customerId}`, `customer:${customerId}`, JSON.stringify({ code_prefix: code.slice(0, 3) }))
     .run();
 }
 
@@ -122,8 +139,7 @@ export async function redeemGiftCode(
     return {
       status: 429,
       body: {
-        error: "too_many_attempts",
-        message: "试得太频繁了，请 1 小时后再试",
+        error: { code: "too_many_attempts", message: "试得太频繁了，请 1 小时后再试" },
         retry_after_s: 3600,
       },
     };
@@ -166,19 +182,22 @@ export async function redeemGiftCode(
     now,
     codeId: hit.codeId,
   });
-  if (grant.state === "not_found") return fail("兑换码不对，或者这个活动已经结束了");
-  if (grant.state !== "granted") return fail(grant.message);
+  if (grant.state === "not_found") return fail("兑换码不对，或者这个活动已经结束了", "invalid_code");
+  if (grant.state !== "granted") return fail(grant.message, grant.state);
 
   await recordSuccess(env, opts.customerId, code, now);
   const view = await snapshot(env, opts.customerId);
+  const head = hadSub
+    ? `「${promo.name}」已到账`
+    : `「${promo.name}」已到账，并为你开通了体验套餐`;
   return {
     status: 200,
     body: {
       ok: true,
-      promotion_name: promo.name,
+      state: "granted",
+      title: promo.name,
+      result_text: `${head}，可以在「我的订阅」里看到`,
       applied: grant.applied,
-      // 原本没有订阅、这次用载体套餐开的户（前端据此多说一句"已为你开通体验套餐"）
-      opened: !hadSub,
       expires_at: view.expires_at,
       remaining_gb: view.remaining_gb,
     },

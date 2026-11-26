@@ -1,7 +1,7 @@
 /**
  * studio 调 `/api/site/*` 的凭据 —— **CRM 签、studio 只存不用想**。
  *
- * 契约：`clever-vpn-docs/docs/contracts/site-studio-crm.md` §4.5
+ * 契约：`clever-vpn-docs/docs/contracts/site-studio.md` §4.5
  *
  * ## 为什么是这么一枚 token，而不是别的东西
  *

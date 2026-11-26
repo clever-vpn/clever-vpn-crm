@@ -269,7 +269,7 @@ POST /api/admin/subscriptions/adjust
 | 何时开通 | 新客户**注册成功**时自动开通（`/auth/verify` 建号后） |
 | 走网关吗 | 不走。但**要走同一条发放链路**：0 元 `source='signup'` 订单 → 建订阅 → 建 cf-api 客户（失败停在 `provisioning`，由 `retryProvisioning` 重试） |
 | 幂等 | 一个客户只有一行订阅；`source='signup'` 的订单只可能有一张 ⇒ 重复调用不会双开 |
-| App 侧 | 只调 `GET /trial` 拿展示材料（含 CRM 组织好的一句 `text`），不判断业务 |
+| App 侧 | 只读 `/meta.trial_text` 拿展示材料（CRM 组织好的一句），不判断业务 |
 | 文案 | 由 CRM 组织：`免费试用 · 还剩 3 天` / `试用已于 10-06 结束 · 升级后可继续使用` |
 | 转正 | 试用订阅 `paid_minor = 0` ⇒ 残值 0 ⇒ 升级按**全价**；试用套餐是 hidden，所以不会出现"续订试用" |
 

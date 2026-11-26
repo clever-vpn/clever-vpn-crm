@@ -50,7 +50,11 @@ function boot(options: { token?: string } = {}) {
     calls.push(String(url));
     const path = String(url).replace("https://crm.test/api/app/v1", "");
     if (path.startsWith("/plans")) return json(SAMPLE_PLANS_RAW);
-    if (path === "/me") return json(sample.me);
+    if (path === "/me") return json({ user: sample.me.user, referral: sample.me.referral });
+    if (path === "/subscription") {
+      // 真接口会带 code；SDK 的 me() 返回前删掉，样例是"删过之后"的形状
+      return json({ ...sample.me.subscription, code: "SAMPLE-CODE-0000" });
+    }
     if (path.startsWith("/orders?")) return json({ items: sample.orders });
     return json({ error: { code: "not_found", message: "没有这个接口" } }, 404);
   };

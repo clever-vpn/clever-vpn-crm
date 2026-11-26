@@ -1,7 +1,7 @@
 /**
  * 套餐模型 —— CRM 的**唯一销售资产**
  *
- * 设计原则（见 `clever-vpn-docs` `app-crm.md` §2.4.7 / §2.4.8）：
+ * 设计原则（见 `clever-vpn-docs` `clients.md` §2.4.7 / §2.4.8）：
  *   1. 只有 `kind` 一个开关，只有三种值：`period` / `traffic` / `addon`。
  *      不允许租户自由拼"时长 × 流量 × …"，否则"这单怎么算"就成了客服问题。
  *   2. App 里**没有**任何销售规则：可买性、价格、升级补多少，全部由这里算出。
@@ -394,7 +394,7 @@ export function rowToPlan(row: PlanRow): Plan {
   };
 }
 
-/** 对外（App / 后台展示）的形状：与 `app-crm.md` §2.4.7 的 Plan 结构一致 */
+/** 对外（App / 后台展示）的形状：与 `clients.md` §2.4.7 的 Plan 结构一致 */
 /**
  * 支付方式的展示名：**用户看到的品牌词**（不是网关名、不是渠道码）。
  */
@@ -409,7 +409,6 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
 export interface PaymentMethodView {
   id: string;
   label: string;
-  icon_url: string | null;
 }
 
 /**
@@ -427,7 +426,7 @@ export function paymentMethodsOf(
   if (!web) return null;
   const ids = [...new Set((web.methods ?? []).filter((m) => available.has(m)))];
   if (!ids.length) return null;
-  return ids.map((id) => ({ id, label: PAYMENT_METHOD_LABELS[id] ?? id, icon_url: null }));
+  return ids.map((id) => ({ id, label: PAYMENT_METHOD_LABELS[id] ?? id }));
 }
 
 export function planForClient(plan: Plan): Record<string, unknown> {

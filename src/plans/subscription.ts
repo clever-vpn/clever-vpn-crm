@@ -32,7 +32,7 @@ export type SubscriptionKind = "period" | "traffic" | "addon";
 export type Hold = "none" | "frozen" | "revoked";
 
 /**
- * 能不能用（`app-crm.md` §2.3）：**状态只有两个**，原因单独给。
+ * 能不能用（`clients.md` §2.3）：**状态只有两个**，原因单独给。
  *
  * 把“到期 / 用完 / 冻结”塞进 status，会让每加一个停用原因就多一个值，
  * App 的放行判断就得跟着改。这里只留“可用 / 不可用”，原因放 `reason`，

@@ -54,8 +54,17 @@ function admin(path: string, body: unknown) {
 
 interface VerifyBody {
   session_token: string;
-  platform: { token: string } | null;
-  platform_status: string;
+}
+
+/** 登录只回身份；权益与激活码要走 /subscription */
+async function subscriptionOf(token: string): Promise<{ status: string; code: string | null }> {
+  const res = await worker.default.fetch(
+    new Request(`${BASE}/api/app/v1/subscription`, {
+      headers: { authorization: `Bearer ${token}` },
+    }),
+  );
+  expect(res.status).toBe(200);
+  return (await res.json()) as { status: string; code: string | null };
 }
 
 /** 走真实的"发码 → 验证"两步（非 production 会回显验证码） */
@@ -178,7 +187,6 @@ describe("平台客户被误删 → 重登即恢复", () => {
   it("重登拿到新码，且新客户是「完整权益」而不是空壳", async () => {
     // 1) 注册（登录即建号）
     const first = await login(REPAIR_EMAIL);
-    expect(first.platform).toBeNull(); // 没买过 = 没有平台快照
 
     const customerId = (await env.DB.prepare(`SELECT id FROM customers WHERE email = ?`)
       .bind(REPAIR_EMAIL)
@@ -209,13 +217,14 @@ describe("平台客户被误删 → 重登即恢复", () => {
 
     // 4) 用户重新登录 → 自动重建
     const again = await login(REPAIR_EMAIL);
-    expect(again.platform).not.toBeNull();
-    expect(again.platform!.token).not.toBe(oldCode);
-    expect(again.platform_status).toBe("active");
+    const view = await subscriptionOf(again.session_token);
+    expect(view.code).not.toBeNull();
+    expect(view.code).not.toBe(oldCode);
+    expect(view.status).toBe("active");
 
     const after = (await subOf(customerId))!;
     expect(after.platform_customer_id).not.toBe(oldPlatformId);
-    expect(after.activation_code).toBe(again.platform!.token);
+    expect(after.activation_code).toBe(view.code);
 
     // 5) 新客户按当前订阅**全量**恢复：不是"建了个空壳"（cf-api 里空参数 = 永久不限量）
     const rebuilt = cf.customers.get(after.platform_customer_id!)!;
@@ -233,7 +242,8 @@ describe("平台客户被误删 → 重登即恢复", () => {
     fakeCustomer(601, `crm:${customerId}`, { deleted: true });
 
     const body = await login(REVOKED_EMAIL);
-    expect(body.platform_status).toBe("inactive");
+    const view = await subscriptionOf(body.session_token);
+    expect(view.status).toBe("inactive");
 
     const after = (await subOf(customerId))!;
     expect(after.platform_customer_id).not.toBe(601);

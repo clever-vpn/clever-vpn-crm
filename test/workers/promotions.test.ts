@@ -1,8 +1,8 @@
 /**
  * 集成测试：促销两层（优惠码 / 邀请码）跑在真 D1 + 真路由上
  *
- * 要钉住的行为（契约 `app-crm.md` §2.9）：
- *   - `/plans` 的 `price_minor` / `promo_price_minor` / `promo_badge` 是**公开**信息；个人应付只给登录用户
+ * 要钉住的行为（契约 `clients.md` §2.9）：
+ *   - `/plans` 的 `display_price_minor` / `compare_at_price_minor` / `promo_badge` 是**公开**信息；个人应付只给登录用户
  *   - `/quote` 是唯一金额来源：带码折扣、错码拒绝（200 + action:"blocked"，不是 5xx）
  *   - `/orders` 下单时**重新校验**，金额按促销后收，并把 `promotion_id` 落单
  *   - **支付成功才核销**：`redemptions` 只在回调里写，重放不重复
@@ -319,8 +319,8 @@ describe("后台建活动", () => {
 describe("/plans 的促销展示位", () => {
   type PlanItem = {
     plan_id: string;
-    price_minor: number;
-    promo_price_minor: number | null;
+    display_price_minor: number;
+    compare_at_price_minor: number | null;
     promo_badge: string | null;
     action: string;
   };
@@ -332,10 +332,10 @@ describe("/plans 的促销展示位", () => {
     expect(plan?.action).toBe("login_required");
     // 匿名不知道访客是不是新客 ⇒ 按"该人群最优情形"算，条件写进前缀
     expect(plan?.promo_badge).toBe("限新用户 · 首单立减 3 元");
-    expect(plan?.promo_price_minor).toBe(1200);
+    expect(plan?.display_price_minor).toBe(1200);
+    expect(plan?.compare_at_price_minor).toBe(1500);
     // 应付 = 卡片价；列表不再给第二个数字
     expect(plan).not.toHaveProperty("payable_minor");
-    expect((plan?.promo_price_minor ?? plan?.price_minor)).toBe(1200);
   });
 
   it("登录后：新客看到的活动价就是实付", async () => {
@@ -345,7 +345,7 @@ describe("/plans 的促销展示位", () => {
     const plan = items.find((p) => p.plan_id === "promo_30d");
     expect(plan?.action).toBe("buy");
     // 1500 − 300：定价页写的价就是实付，与 /quote 必须一模一样
-    expect(plan?.promo_price_minor).toBe(1200);
+    expect(plan?.display_price_minor).toBe(1200);
     const q = (await (await appCall("/api/app/v1/quote", token, {
       method: "POST",
       body: { plan_id: "promo_30d" },
@@ -441,16 +441,14 @@ describe("/quote：唯一的金额来源", () => {
       action: string;
       payable_minor: number;
       discount_minor: number;
-      discount_label: string;
-      applied_promotions: { code: string | null; label: string }[];
-      price_minor: number;
+      discount_label: string | null;
+      promo_code: string | null;
     };
     expect(q.action).not.toBe("blocked");
-    expect(q.price_minor).toBe(1500);
     expect(q.discount_minor).toBe(300);
     expect(q.payable_minor).toBe(1200);
     expect(q.discount_label).toContain("−¥3.00");
-    expect(q.applied_promotions[0]?.code).toBe("NEW300");
+    expect(q.promo_code).toBe("NEW300");
   });
 
   it("错码：200 + action=blocked + 整句理由（不是 5xx）", async () => {
@@ -491,7 +489,7 @@ describe("/quote：唯一的金额来源", () => {
 });
 
 describe("/orders + 支付回调", () => {
-  it("按促销后金额收钱，订单落 promotion_id / discount_minor / entry", async () => {
+  it("按促销后金额收钱，订单落 promotion_id / discount_minor", async () => {
     const token = await login(PAYER);
     const order = await payOrder(token, "promo_30d", "NEW300");
     expect(order.amount_minor).toBe(1200);
@@ -504,7 +502,8 @@ describe("/orders + 支付回调", () => {
     expect(row?.amount_minor).toBe(1200);
     expect(row?.discount_minor).toBe(300);
     expect(row?.promotion_id).toBeGreaterThan(0);
-    expect(row?.entry).toBe("web");
+    // `origin` 已从契约删除，订单的 entry 列不再由客户端填
+    expect(row?.entry).toBeNull();
     expect(row?.status).toBe("active");
   });
 
@@ -554,12 +553,12 @@ describe("/orders + 支付回调", () => {
       status: string;
       amount_minor: number;
       discount_minor: number;
-      subscription?: { status: string };
     };
     expect(body.order_code).toBe(code);
     expect(body.status).not.toBe("pending");
-    // 已付款的单顺带带回订阅快照，客户端少一次往返
-    expect(body.subscription).toBeTruthy();
+    // 订阅不再嵌在订单里；需要就单独取（一个对象一个来源）
+    const sub = await appCall("/api/app/v1/subscription", token);
+    expect(((await sub.json()) as { status: string }).status).toBe("active");
 
     // 别人的单查不到（不允许拿单号枚举）
     const otherToken = await login("promo-other@test.com");
@@ -708,16 +707,14 @@ describe("邀请码（关系层）", () => {
 
   it("邀请**不参与结算**：被邀请人的报价里没有它", async () => {
     // 这条是 §2.9.3 的直接推论：折扣只能来自券。邀请活动上即便配了 benefit_value，
-    // 也不该进 /quote 的 applied_promotions。
+    // 也不该进 /quote 的 promo_code。
     const token = await login("promo-invitee-quote@test.com", undefined);
     const res = await appCall("/api/app/v1/quote", token, {
       method: "POST",
       body: { plan_id: "promo_30d" },
     });
-    const q = (await res.json()) as {
-      applied_promotions: { name: string }[];
-    };
-    expect(q.applied_promotions.map((p) => p.name)).not.toContain("邀请好友");
+    const q = (await res.json()) as { promo_code: string | null };
+    expect(q.promo_code).toBeNull();
   });
 });
 
@@ -1186,13 +1183,15 @@ describe("兑换码", () => {
     expect(ok.status).toBe(200);
     const body = (await ok.json()) as {
       ok: boolean;
-      promotion_name: string;
-      opened: boolean;
+      state: string;
+      title: string | null;
+      result_text: string;
       applied: { days: number; gb: number };
     };
     expect(body.ok).toBe(true);
-    expect(body.promotion_name).toBe("国庆福利");
-    expect(body.opened).toBe(false);
+    expect(body.state).toBe("granted");
+    expect(body.title).toBe("国庆福利");
+    expect(body.result_text).toContain("已到账");
     expect(body.applied.days).toBe(3);
 
     const after = await env.DB.prepare(
@@ -1214,16 +1213,16 @@ describe("兑换码", () => {
     // 同一人再兑一次 ⇒ 每人次数用完（默认 1），仍然是 200 + reason
     const again = await redeem(token, "GUOQING7");
     expect(again.status).toBe(200);
-    const againBody = (await again.json()) as { ok: boolean; reason: string };
+    const againBody = (await again.json()) as { ok: boolean; result_text: string };
     expect(againBody.ok).toBe(false);
-    expect(againBody.reason).toBeTruthy();
+    expect(againBody.result_text).toBeTruthy();
 
     // 不存在的码：200 + reason（不是 404/500），且**不泄露**"码不存在"与"已结束"的区别
     const bad = await redeem(token, "NOSUCHCODE");
     expect(bad.status).toBe(200);
-    const badBody = (await bad.json()) as { ok: boolean; reason: string };
+    const badBody = (await bad.json()) as { ok: boolean; result_text: string };
     expect(badBody.ok).toBe(false);
-    expect(badBody.reason).toContain("兑换码");
+    expect(badBody.result_text).toContain("兑换码");
   });
 
   it("新客没有订阅：领不了，明确让他先有套餐，且不生成订阅/订单", async () => {
@@ -1245,9 +1244,9 @@ describe("兑换码", () => {
 
     const res = await redeem(token, "TRY7DAYS");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; reason: string };
+    const body = (await res.json()) as { ok: boolean; result_text: string };
     expect(body.ok).toBe(false);
-    expect(body.reason).toContain("套餐");
+    expect(body.result_text).toContain("套餐");
 
     // 关键：**什么都没发生** —— 没有订阅、没有订单
     const sub = await env.DB.prepare(
@@ -1277,9 +1276,9 @@ describe("兑换码", () => {
 
     const res = await redeem(token, "NOPLAN99");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; reason: string };
+    const body = (await res.json()) as { ok: boolean; result_text: string };
     expect(body.ok).toBe(false);
-    expect(body.reason).toContain("套餐");
+    expect(body.result_text).toContain("套餐");
 
     const rows = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM redemptions WHERE customer_id = ?`,
@@ -1298,8 +1297,8 @@ describe("兑换码", () => {
     const blocked = await redeem(token, "WRONG9XX");
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get("Retry-After")).toBeTruthy();
-    const body = (await blocked.json()) as { error: string };
-    expect(body.error).toBe("too_many_attempts");
+    const body = (await blocked.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("too_many_attempts");
   });
 
   it("未登录：401（不暴露码是否存在）", async () => {
@@ -1366,9 +1365,9 @@ describe("批次码", () => {
     await grantSub(BATCH_B);
     const reuse = await appCall("/api/app/v1/redeem", b, { method: "POST", body: { code: codes[0]!.code } });
     expect(reuse.status).toBe(200);
-    const reused = (await reuse.json()) as { ok: boolean; reason: string };
+    const reused = (await reuse.json()) as { ok: boolean; result_text: string };
     expect(reused.ok).toBe(false);
-    expect(reused.reason).toContain("领完");
+    expect(reused.result_text).toContain("领完");
 
     // 用第二个码就应该成功
     const ok2 = await appCall("/api/app/v1/redeem", b, { method: "POST", body: { code: codes[1]!.code } });

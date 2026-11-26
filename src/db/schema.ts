@@ -651,7 +651,7 @@ export const adjustments = sqliteTable(
 );
 
 // ─────────────────────────────────────────────────────────────
-// 促销（`docs/promotion.md`，对外承诺见 `app-crm.md` §2.9）
+// 促销（`docs/promotion.md`，对外承诺见 `clients.md` §2.9）
 // ─────────────────────────────────────────────────────────────
 
 /**
@@ -674,7 +674,7 @@ export const promotions = sqliteTable(
     auto_apply: integer("auto_apply").notNull().default(0),
     /** 后台可见名称，不下发给用户 */
     name: text("name").notNull(),
-    /** coupon（改金额） | gift（改权益） | referral（关系）—— 见 `app-crm.md` §2.9 */
+    /** coupon（改金额） | gift（改权益） | referral（关系）—— 见 `clients.md` §2.9 */
     kind: text("kind").notNull().default("coupon"),
     /**
      * coupon 才有：amount（分） | percent（1–100，表示减掉的百分比）。
@@ -788,7 +788,7 @@ export const referrals = sqliteTable(
 );
 
 /**
- * 推荐奖励卡 = **推荐人还没领的那份奖励**（契约 `app-crm.md` §2.9.9）。
+ * 推荐奖励卡 = **推荐人还没领的那份奖励**（契约 `clients.md` §2.9.9）。
  *
  * v23 之前推荐人奖励是"好友付首单 ⇒ 立刻改推荐人的订阅"，两个问题：
  *   1. 推荐人根本不知道发生了什么（权益悄悄变了）；
@@ -1050,7 +1050,7 @@ export type PromotionCodeRow = typeof promotionCodes.$inferSelect;
 
 /**
  * **发布记录**（append-only，每次发布一行）。**版本号以这张表为准**，KV 里的指针只是
- * "现在服务哪一版"（契约 `site-studio-crm.md` §0.1.3）。
+ * "现在服务哪一版"（契约 `site-studio.md` §0.1.3）。
  *
  * 一次发布 = 一份源包 + 用它渲染出来的产物。两张 sha 都记在这里，于是：
  *
@@ -1114,7 +1114,7 @@ export const sitePointerLog = sqliteTable(
 
 /**
  * 站点品牌设置（一行一个租户）。**发布时**把这些值烘焙进产物，运行时不再回填
- * （`clever-vpn-docs/docs/contracts/site-crm.md` §0.1）。
+ * （`clever-vpn-docs/docs/contracts/clients.md` §0.1）。
  *
  * 为什么单开一张表而不是塞进 settings 的 key-value：
  * 这些字段有明确语义与校验（主色必须是 #rrggbb、名称有长度上限），混进通用 KV
@@ -1212,6 +1212,6 @@ export const cfApi = sqliteTable("cf_api", {
 });
 
 // ─────────────────────────────────────────────────────────────
-// 站点模板版本（studio ⇄ CRM 交付，契约 `site-studio-crm.md` §5 / §7 / §9）
+// 站点模板版本（studio ⇄ CRM 交付，契约 `site-studio.md` §5 / §7 / §9）
 // ─────────────────────────────────────────────────────────────
 

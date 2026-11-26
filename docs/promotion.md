@@ -1,6 +1,6 @@
 # 促销（promotion / gift / referral）
 
-> 对外承诺见 `clever-vpn-docs` `app-crm.md` **§2.9**（contract `15`）。
+> 对外承诺见 `clever-vpn-docs` `clients.md` **§4.5**（`/api/app/v1`）。
 > 本文是**内部设计依据与决策记录**：为什么是这三类、为什么砍掉其他玩法。
 > 实现状态：**P1 ✅**（优惠券 + 邀请码）、**P2 ✅**（礼包 / 人群 / 冷却）；
 > **P3 未做**（一码一人的批次 / CSV 导出、营销报表）。
@@ -280,7 +280,7 @@ $$\text{payable} = \max\left(0,\ \text{promo}(\text{price\_minor}) - \text{resid
 
 ## 6. 实现顺序与契约字段
 
-契约字段位已在 `app-crm.md` v12 定下，**App 与官网一次写完，后续上活动不发版**：
+契约字段位已在 `clients.md` 定下，**App 与官网一次写完，后续上活动不发版**：
 
 | 层 | 字段 | 用途 |
 |---|---|---|

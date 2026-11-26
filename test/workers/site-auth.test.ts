@@ -1,19 +1,12 @@
 /**
- * 集成测试：品牌官网的登录态（契约 §2.8）
+ * 集成测试：终端会话只用 Bearer（契约 `clients` §6）
  *
- * 官网与 App 用同一批 `/api/app/v1` 接口、同一份权益数据，区别只在**认证载体**：
- *   - App（原生壳）：`Authorization: Bearer <token>`
- *   - 官网（浏览器）：`Cookie: cv_session=<token>`，HttpOnly，服务端 Set-Cookie
- *
- * **CSRF 不做 Origin 校验**（2026-11-07 起）：会话 Cookie 是 host-only +
- * `HttpOnly` + `SameSite=Lax` —— 跨站请求带不上它，跨源响应的 `Set-Cookie` 也会被
- * 浏览器丢弃，所以"跨源 Cookie 认证"根本不可能发生。老的白名单只让**站点读不到数据**
- * （站点与 CRM 不同源），已删除。下面的用例断言"Origin 不再影响任何结果"。
+ * App 与 Site 是同一批 `/api/app/v1` 接口、同一份权益数据；凭证只有一种：
+ * `Authorization: Bearer <session_token>`。CRM **不再下发 Cookie**，
+ * 所以没有 CSRF 面、也不校验 Origin。
  */
 import { exports as rawExports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
-
-import { env } from "./apply-migrations";
 
 const BASE = "https://crm.test";
 const EMAIL = "site-user@test.com";
@@ -62,88 +55,69 @@ async function login(): Promise<string> {
     origin: BASE,
   });
   expect(verified.status).toBe(200);
+  // 契约：登录只回身份，不再 Set-Cookie
+  expect(verified.headers.get("set-cookie")).toBeNull();
 
-  const setCookie = verified.headers.get("set-cookie") ?? "";
-  expect(setCookie).toContain("cv_session=");
-  expect(setCookie).toMatch(/HttpOnly/i);
-  expect(setCookie).toMatch(/SameSite=Lax/i);
-  // 本地/测试是 http，加 Secure 浏览器就不回传了（生产才加）
-  expect(setCookie).not.toMatch(/Secure/i);
-
-  const token = /cv_session=([^;]+)/.exec(setCookie)?.[1];
-  expect(token).toBeTruthy();
-  return token as string;
+  const body = (await verified.json()) as { session_token?: string; platform?: unknown };
+  expect(body.session_token).toBeTruthy();
+  // 登录响应不携带平台快照（权益走 /subscription）
+  expect(body.platform).toBeUndefined();
+  return body.session_token as string;
 }
 
 beforeAll(() => {
-  // 这些用例只关心认证与同源校验，不需要平台落账；
-  // 因此不装假 cf-api —— 订阅停在 provisioning 也正是契约行为。
+  // 这些用例只关心认证与 Origin：不需要平台落账
 });
 
-describe("官网登录态", () => {
-  it("verify 下发 HttpOnly Cookie，且拿到的就是可用会话", async () => {
+describe("终端会话（Bearer）", () => {
+  it("verify 返回 session_token，且拿到的就是可用会话", async () => {
     const token = await login();
-
-    const me = await call("/api/app/v1/me", { cookie: token });
+    const me = await call("/api/app/v1/me", { token });
     expect(me.status).toBe(200);
     const payload = (await me.json()) as { user: { email: string } };
     expect(payload.user.email).toBe(EMAIL);
   });
 
-  it("Cookie 与 Bearer 拿到同一份 /me", async () => {
-    const token = await login();
-
-    const viaCookie = (await (await call("/api/app/v1/me", { cookie: token })).json()) as unknown;
-    const viaBearer = (await (await call("/api/app/v1/me", { token })).json()) as unknown;
-    expect(viaCookie).toEqual(viaBearer);
-  });
-
-  it("Cookie 写操作：Origin 不再影响结果（跨站与同源完全一致）", async () => {
+  it("Origin 不影响结果：跨站与同源完全一致", async () => {
     const token = await login();
     const body = { plan_id: "dev_period_100g" };
 
     const crossSite = await call("/api/app/v1/quote", {
       method: "POST",
       body,
-      cookie: token,
+      token,
       origin: "https://evil.example",
     });
     const sameSite = await call("/api/app/v1/quote", {
       method: "POST",
       body,
-      cookie: token,
+      token,
       origin: BASE,
     });
 
-    // 拦人靠会话 + SameSite=Lax，不靠 Origin：老实现这里会是 403
+    // 这条只证明"Origin 不参与判定"：两边结果一致，且不是被 Origin 拦下的 403
     expect(crossSite.status).not.toBe(403);
-    expect(sameSite.status).toBe(crossSite.status);
+    expect(crossSite.status).toBe(sameSite.status);
   });
 
-  it("Bearer 请求不受 Origin 限制（原生壳）", async () => {
+  it("Cookie 不再认证（只剩 Bearer）", async () => {
     const token = await login();
-
-    const res = await call("/api/app/v1/quote", {
-      method: "POST",
-      body: { plan_id: "dev_period_100g" },
-      token,
-      origin: "capacitor://localhost",
-    });
-    expect(res.status).not.toBe(403);
+    const res = await call("/api/app/v1/me", { cookie: token });
+    expect(res.status).toBe(401);
   });
 
-  it("Cookie 登出后旧 token 失效", async () => {
+  it("登出后旧 token 失效", async () => {
     const token = await login();
-    expect((await call("/api/app/v1/me", { cookie: token })).status).toBe(200);
+    expect((await call("/api/app/v1/me", { token })).status).toBe(200);
 
     const logout = await call("/api/app/v1/auth/logout", {
       method: "POST",
-      cookie: token,
+      token,
       origin: BASE,
     });
     expect(logout.status).toBe(200);
-    expect(logout.headers.get("set-cookie") ?? "").toContain("cv_session=");
+    expect(logout.headers.get("set-cookie")).toBeNull();
 
-    expect((await call("/api/app/v1/me", { cookie: token })).status).toBe(401);
+    expect((await call("/api/app/v1/me", { token })).status).toBe(401);
   });
 });

@@ -1,7 +1,7 @@
 /**
  * 站点体积上限：**唯一口径 = 整版字节**（文本 + 素材一起算）。
  *
- * 契约 `site-studio-crm.md` §4.4 / 标准 `site-template.md` §3：这是**契约常量**，
+ * 契约 `site-studio.md` §4.4 / 标准 `site-template.md` §3：这是**契约常量**，
  * 由 `/api/site/meta` 的 `limits` 对外发布，studio 与 CRM 都读这一份。
  *
  * 为什么是"整版"：原来两边的数不是一个口径 —— studio 的 8 MB 只数文本、CRM 的

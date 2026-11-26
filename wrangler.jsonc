@@ -73,7 +73,6 @@
     "STUDIO_APP_URL": "",
     "CF_API_BASE": "https://api.clever-vpn.org",
     "CRM_CODE_VERSION": "dev",
-    "CRM_CONTRACT_VERSION": "19",
     // 非 production ⇒ 验证码直接回显给客户端（本地联调）；部署时由 CI 覆盖
     "ENVIRONMENT": "development",
     // 官网（独立静态站）地址。留空则根路径显示一句部署提示。

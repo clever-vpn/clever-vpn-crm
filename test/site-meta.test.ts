@@ -1,7 +1,7 @@
 /**
  * `GET /api/site/meta` —— 平台数据契约的对外形态。
  *
- * 契约 `site-studio-crm.md` v8 §4.4 / 标准 `site-template.md` §3：
+ * 契约 `site-studio.md` v8 §4.4 / 标准 `site-template.md` §3：
  * **字段清单只有一份，归 CRM**；模板只引用，AI 不能新增字段。
  *
  * 这里锁三件事，每一件坏了都会让"预览与发布不一致"：
@@ -88,7 +88,7 @@ describe("capabilities：模板能引用什么", () => {
 describe("响应体", () => {
   it("六件东西：契约 + 引擎 + SDK + 能力清单 + 体积上限 + 配色建议", () => {
     // `sdk_version` 是 contract 6 加的：租户排障要看"这个站跑的是哪版 SDK"，
-    // studio 预览也用它证明"预览与线上同一份 SDK"（site-crm.md §3.1）。
+    // studio 预览也用它证明"预览与线上同一份 SDK"（clients.md §5）。
     // `limits` / `palettes` 是 contract 8 / 15 加的（site-studio.md §4.4）。
     expect(Object.keys(siteMeta()).sort()).toEqual([
       "capabilities",

@@ -460,12 +460,12 @@ describe("paymentMethodsOf：Stripe / PayPal 的品牌标签", () => {
       sales_channels: [{ channel: "web_checkout", methods: ["alipay", "stripe", "paypal"] }],
     });
     expect(paymentMethodsOf(plan, new Set(["alipay", "stripe", "paypal"]))).toEqual([
-      { id: "alipay", label: "支付宝", icon_url: null },
-      { id: "stripe", label: "Stripe", icon_url: null },
-      { id: "paypal", label: "PayPal", icon_url: null },
+      { id: "alipay", label: "支付宝" },
+      { id: "stripe", label: "Stripe" },
+      { id: "paypal", label: "PayPal" },
     ]);
     expect(paymentMethodsOf(plan, new Set(["alipay"]))).toEqual([
-      { id: "alipay", label: "支付宝", icon_url: null },
+      { id: "alipay", label: "支付宝" },
     ]);
   });
 });
