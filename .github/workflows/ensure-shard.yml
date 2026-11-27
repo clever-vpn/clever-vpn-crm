@@ -105,6 +105,9 @@ jobs:
           HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
           CRM_ROOT: ${{ vars.CRM_ROOT }}
           SITE_URL: ${{ vars.SITE_URL }}
+          # 两个 studio 入口都要带：漏一个就是"后台那个按钮 500"
+          STUDIO_SITE_URL: ${{ vars.STUDIO_SITE_URL }}
+          STUDIO_APP_URL: ${{ vars.STUDIO_APP_URL }}
         run: node scripts/render-shard-config.mjs --manifest manifest.json
 
       - run: npm ci

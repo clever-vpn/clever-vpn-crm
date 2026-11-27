@@ -102,6 +102,7 @@ jobs:
       WORKER: clever-vpn-crm-saas-shard-${{ matrix.shard }}
       HOSTS_KV_ID: ${{ vars.HOSTS_KV_ID }}
       STUDIO_SITE_URL: ${{ vars.STUDIO_SITE_URL }}
+      STUDIO_APP_URL: ${{ vars.STUDIO_APP_URL }}
       SITES_ROOT: ${{ vars.SITES_ROOT }}
       CRM_CODE_VERSION: ${{ needs.resolve.outputs.release_tag }}
       SITE_URL: ${{ vars.SITE_URL }}
