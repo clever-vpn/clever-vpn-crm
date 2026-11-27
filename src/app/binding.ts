@@ -1,15 +1,17 @@
 /**
- * App 的**仓库绑定**：CRM 只存一个 `owner/name`（2026-11-27 简化）。
+ * App 的**仓库绑定**：CRM 存一份**仓库列表**（2026-11-27：一个仓库 = 一个 App = 一份草稿）。
  *
  * 契约：`clever-vpn-docs/docs/contracts/services/crm/app-studio.md` §3.2 / §4.0。
  *
- * 为什么只存一个键：绑定回答的是"这个租户的成果仓是哪一间"，重复绑定即覆盖。
- * **不存 installation id 作为依赖**（它会因卸载重装漂移）：studio 按 `repo` 反查，
- * CRM 存的那份只用于展示 / 排障。
+ * 为什么是列表：一个租户可以有多间仓库（多个 App），打开设计器时要先"选哪一间"。
+ * 绑定就是把一间加进列表（重复绑定 = 更新那一条的时间），**不是覆盖别的**。
+ *
+ * 为什么只存 `repo` 与两个时间戳：
+ *   · `installation id` 会因卸载重装漂移 —— studio 按 repo 反查，这里不存依赖；
+ *   · 分支 / 版本 / 发布状态都在 studio 或 GitHub 上，CRM 不复制。
  *
  * 为什么写入口径这么窄：`POST /api/studio/app-bind` 是 CRM 唯一接受 studio 写入的地方，
- * 凭据是 `aacc_…`（只对这个端点有效，见 `app/access.ts`）。它只写两个键，不碰任何
- * 计费 / 订阅 / 站点数据。
+ * 凭据是 `aacc_…`（只对这个端点有效，见 `app/access.ts`）。
  */
 
 import { getSetting, setSetting } from "../settings";
@@ -20,31 +22,107 @@ import type { Env } from "../env";
 /** `owner/name`：与 studio 侧的 `REPO_RE` 同一张（两边各有一份，避免跨仓依赖） */
 const REPO_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 
-export interface AppBinding {
-  repo: string | null;
-  boundAt: string | null;
+const KEY = "app.repos";
+
+export interface BoundRepo {
+  repo: string;
+  /** 第一次绑定的时间 */
+  bound_at: string;
+  /** 最近一次用它打开设计器的时间（排序用） */
+  last_used_at: string | null;
 }
 
-/** 读绑定（没绑过就都是 null） */
-export async function readAppBinding(env: Env): Promise<AppBinding> {
-  const repo = String((await getSetting(env, "app.repo")) ?? "").trim();
-  const boundAt = String((await getSetting(env, "app.bound_at")) ?? "").trim();
-  return { repo: repo || null, boundAt: boundAt || null };
+/** 按"最近使用，其次最近绑定"排序（页面直接用这个顺序） */
+const sortByRecent = (list: BoundRepo[]): BoundRepo[] =>
+  [...list].sort((a, b) => {
+    const at = Date.parse(a.last_used_at ?? a.bound_at ?? "") || 0;
+    const bt = Date.parse(b.last_used_at ?? b.bound_at ?? "") || 0;
+    return bt - at;
+  });
+
+/** 读列表。兼容早期的单仓键 `app.repo`（读一次，之后自然被新写覆盖）。 */
+export async function readAppRepos(env: Env): Promise<BoundRepo[]> {
+  const raw = await getSetting(env, KEY);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        const list = parsed
+          .map((item) => {
+            const row = item as Partial<BoundRepo>;
+            const repo = String(row?.repo ?? "").trim();
+            if (!REPO_RE.test(repo)) return null;
+            return {
+              repo,
+              bound_at: String(row?.bound_at ?? ""),
+              last_used_at: row?.last_used_at ? String(row.last_used_at) : null,
+            } satisfies BoundRepo;
+          })
+          .filter((x): x is BoundRepo => x !== null);
+        return sortByRecent(list);
+      }
+    } catch {
+      /* 坏值当没有，下一次写入会覆盖 */
+    }
+  }
+
+  const legacy = String((await getSetting(env, "app.repo")) ?? "").trim();
+  if (REPO_RE.test(legacy)) {
+    const boundAt = String((await getSetting(env, "app.bound_at")) ?? "").trim();
+    return [{ repo: legacy, bound_at: boundAt, last_used_at: null }];
+  }
+  return [];
 }
 
-/** 写绑定（覆盖式）。`installationId` 只作展示，studio 不依赖它。 */
-export async function saveAppBinding(
+async function write(env: Env, list: BoundRepo[]): Promise<void> {
+  await setSetting(env, KEY, JSON.stringify(sortByRecent(list)));
+}
+
+/** 加一间（重复 = 更新 bound_at，保留 last_used_at） */
+export async function bindAppRepo(
   env: Env,
   input: { repo: string; installationId: number | null },
   now: Date = new Date(),
-): Promise<AppBinding> {
+): Promise<BoundRepo> {
   const repo = input.repo.trim();
-  await setSetting(env, "app.repo", repo);
-  await setSetting(env, "app.bound_at", now.toISOString());
-  if (input.installationId && Number.isFinite(input.installationId)) {
-    await setSetting(env, "app.installation_id", String(input.installationId));
+  const list = await readAppRepos(env);
+  const existing = list.find((item) => item.repo.toLowerCase() === repo.toLowerCase());
+  const at = now.toISOString();
+
+  const next: BoundRepo = existing
+    ? { ...existing, repo, bound_at: at }
+    : { repo, bound_at: at, last_used_at: null };
+
+  await write(env, [...list.filter((item) => item !== existing), next]);
+  // `installation id` 只作展示：不验证、不依赖，也不会进任何票据。
+  if (input.installationId && Number.isInteger(input.installationId) && input.installationId > 0) {
+    await setSetting(env, `app.installation.${repo}`, String(input.installationId));
   }
-  return { repo, boundAt: now.toISOString() };
+  return next;
+}
+
+/** 记一次"用这间打开了设计器"（页面按这个排序） */
+export async function markAppRepoUsed(env: Env, repo: string, now: Date = new Date()): Promise<void> {
+  const list = await readAppRepos(env);
+  const index = list.findIndex((item) => item.repo.toLowerCase() === repo.toLowerCase());
+  if (index < 0) return;
+  list[index] = { ...list[index]!, last_used_at: now.toISOString() };
+  await write(env, list);
+}
+
+/** 从列表里移除一间（只动面板，不动 GitHub） */
+export async function removeAppRepo(env: Env, repo: string): Promise<boolean> {
+  const list = await readAppRepos(env);
+  const next = list.filter((item) => item.repo.toLowerCase() !== repo.toLowerCase());
+  if (next.length === list.length) return false;
+  await write(env, next);
+  return true;
+}
+
+/** 这间是不是已经绑定过（门票只允许打开列表里的仓库） */
+export async function isAppRepoBound(env: Env, repo: string): Promise<boolean> {
+  const list = await readAppRepos(env);
+  return list.some((item) => item.repo.toLowerCase() === repo.toLowerCase());
 }
 
 const json = (body: unknown, status = 200): Response =>
@@ -54,10 +132,9 @@ const json = (body: unknown, status = 200): Response =>
   });
 
 /**
- * `POST /api/studio/app-bind` —— studio 绑定成功后把 `repo` 写回面板。
+ * `POST /api/studio/app-bind` —— studio 绑定成功后把一间仓库加进列表。
  *
  * 鉴权只有一种：`Authorization: Bearer aacc_…`（CRM 入场时签的，14 天）。
- * `tenant` 必须是本次请求解析出的那个租户（在 `verifyAppAccess` 里比对）。
  */
 export async function handleAppBind(
   request: Request,
@@ -79,16 +156,12 @@ export async function handleAppBind(
 
   const repo = String(body?.repo ?? "").trim();
   if (!REPO_RE.test(repo)) {
-    return json(
-      { error: "invalid_repo", message: "仓库必须是 owner/name（例如 acme/my-vpn）" },
-      400,
-    );
+    return json({ error: "invalid_repo", message: "仓库必须是 owner/name（例如 acme/my-vpn）" }, 400);
   }
 
-  // installation_id 只在它是正整数时才记（其它一律当没给）
   const raw = Number(body?.installation_id ?? 0);
   const installationId = Number.isInteger(raw) && raw > 0 ? raw : null;
 
-  const saved = await saveAppBinding(env, { repo, installationId }, now);
-  return json({ ok: true, repo: saved.repo, bound_at: saved.boundAt });
+  const saved = await bindAppRepo(env, { repo, installationId }, now);
+  return json({ ok: true, repo: saved.repo, bound_at: saved.bound_at });
 }

@@ -137,7 +137,7 @@ describe("出示给 studio 的东西", () => {
     expect(body.site_token).toBeUndefined();
   });
 
-  it("app-studio 带 crm_token（aacc_，只用于写回绑定）", async () => {
+  it("app-studio 带 crm_token；不带 repo 时就是「连接新的仓库」", async () => {
     await seedToken();
     const { impl, calls } = studioFetch({ url: `${APP}/#t=tkt_x`, expires_at: null, tenant: "42" });
     vi.spyOn(globalThis, "fetch").mockImplementation(impl);
@@ -145,24 +145,52 @@ describe("出示给 studio 的东西", () => {
     await handleStudioTicket(requestOf({ aud: "app-studio" }), envOf(), "42", { user_id: 1 }, true);
     const body = JSON.parse(String(calls[0]!.init.body)) as Record<string, unknown>;
     expect(String(body.crm_token)).toMatch(/^aacc_/);
-    expect(body.repo).toBeUndefined(); // 还没绑定
+    expect(body.repo).toBeUndefined();
   });
 
-  it("app-studio 已绑定时把 app.repo 一起带上（studio 不用反查 CRM）", async () => {
+  it("app-studio 指定一个已绑定的仓库 ⇒ 带上它并记一次使用", async () => {
     await seedToken();
+    const now = new Date().toISOString();
     await env.DB.prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES ('app.repo', 'acme/my-vpn', ?)
+      `INSERT INTO settings (key, value, updated_at) VALUES ('app.repos', ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     )
-      .bind(new Date().toISOString())
+      .bind(JSON.stringify([{ repo: "acme/my-vpn", bound_at: now, last_used_at: null }]), now)
       .run();
     const { impl, calls } = studioFetch({ url: `${APP}/#t=tkt_x`, expires_at: null, tenant: "42" });
     vi.spyOn(globalThis, "fetch").mockImplementation(impl);
 
-    await handleStudioTicket(requestOf({ aud: "app-studio" }), envOf(), "42", { user_id: 1 }, true);
+    const res = await handleStudioTicket(
+      requestOf({ aud: "app-studio", repo: "acme/my-vpn" }),
+      envOf(),
+      "42",
+      { user_id: 1 },
+      true,
+    );
+    expect(res.status).toBe(200);
     const body = JSON.parse(String(calls[0]!.init.body)) as Record<string, unknown>;
     expect(body.repo).toBe("acme/my-vpn");
-    expect(String(body.crm_token)).toMatch(/^aacc_/);
+
+    const raw = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'app.repos'`)
+      .first<{ value: string }>();
+    const list = JSON.parse(String(raw?.value)) as { repo: string; last_used_at: string | null }[];
+    expect(list[0]?.repo).toBe("acme/my-vpn");
+    expect(list[0]?.last_used_at).toBeTruthy();
+  });
+
+  it("app-studio 指定一间没绑定的仓库 ⇒ 409，且不发请求", async () => {
+    await seedToken();
+    const spy = vi.spyOn(globalThis, "fetch");
+    const res = await handleStudioTicket(
+      requestOf({ aud: "app-studio", repo: "acme/unknown" }),
+      envOf(),
+      "42",
+      { user_id: 1 },
+      true,
+    );
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("app_repo_unbound");
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("回给前端的是 studio 给的 URL + 本次解析出的 tenant（客户端塞的不算数）", async () => {

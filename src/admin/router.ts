@@ -28,6 +28,7 @@ import { handleAdminPromotions } from "./promotions";
 import { handleAdminSettings } from "./settings";
 import { handleAdminPlatform } from "./platform";
 import { handleAdminSite } from "./site";
+import { handleAdminApp } from "./app";
 import { handleAdminDomains } from "./domains";
 import { handleAdminSubscriptions } from "./subscriptions";
 import { emailCodeAvailable, mailReady, sendMail } from "../mail";
@@ -526,6 +527,10 @@ export async function handleAdminApi(
   // ── 站点：发布 / 回滚 / 状态（产物在 R2，指针在 KV，见 contracts/site-studio.md §6）──
   const siteResponse = await handleAdminSite(request, env, tenantId, admin.email);
   if (siteResponse) return siteResponse;
+
+  // ── App：设计器入口页要的仓库列表（绑定与开设计器都不在这里）──
+  const appResponse = await handleAdminApp(request, env);
+  if (appResponse) return appResponse;
 
   // ── 自定义域名（品牌网站 / 后台）：托管模式走 cf-api，自部署只回说明 ──
   const domainsResponse = await handleAdminDomains(request, env, admin.email);

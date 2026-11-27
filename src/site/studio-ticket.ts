@@ -22,7 +22,7 @@
 
 import { issueSiteAccess } from "./access";
 import { issueAppAccess } from "../app/access";
-import { readAppBinding } from "../app/binding";
+import { isAppRepoBound, markAppRepoUsed } from "../app/binding";
 import { platformCreds } from "../platform/creds";
 
 import type { Env } from "../env";
@@ -198,16 +198,38 @@ export async function handleStudioTicket(
   if (!csrfOk) return json({ error: "csrf_rejected" }, 403);
   if (!session) return json({ error: "unauthorized" }, 401);
 
-  let aud: unknown;
+  let payload: { aud?: unknown; repo?: unknown };
   try {
-    aud = ((await request.json()) as { aud?: unknown })?.aud;
+    payload = (await request.json()) as typeof payload;
   } catch {
     return json(
       { error: "studio_aud_unknown", message: 'body 必须是 JSON：{"aud":"site-studio"}' },
       400,
     );
   }
+  const aud = payload?.aud;
   if (!isAud(aud)) return json({ error: "studio_aud_unknown" }, 400);
+
+  /**
+   * app 侧：用**哪一间仓库**打开设计器。
+   *
+   * 不带 = "连接新的仓库"（studio 引导绑定）；带了必须是已绑定的那一间 ——
+   * 否则面板就能让人用任意 repo 字样去开设计器，列表也就失去意义了。
+   */
+  let repo = "";
+  if (aud === "app-studio") {
+    const wanted = String(payload?.repo ?? "").trim();
+    if (wanted) {
+      if (!(await isAppRepoBound(env, wanted))) {
+        return json(
+          { error: "app_repo_unbound", message: `这间仓库还没绑定：${wanted}` },
+          409,
+        );
+      }
+      repo = wanted;
+      await markAppRepoUsed(env, repo);
+    }
+  }
 
   // 租户自己的 cf-api 凭据：本流程**唯一**的凭据，只在内存里过一遍
   const creds = await platformCreds(env);
@@ -228,8 +250,7 @@ export async function handleStudioTicket(
   // 而不必持有租户的全权 API token（见 `site/access.ts`）
   const siteToken = aud === "site-studio" ? await issueSiteAccess(env, tenantId) : null;
 
-  // app 侧：带上已绑定的仓库（可能还没绑）+ 一枚"只能写 app.repo"的借据
-  const appBinding = aud === "app-studio" ? await readAppBinding(env) : null;
+  // app 侧：带上一枚"只能写 app-bind"的借据（repo 已在上面的校验里确定）
   const crmToken = aud === "app-studio" ? await issueAppAccess(env, tenantId) : null;
 
   const result = await requestStudioEntry(env, {
@@ -237,7 +258,7 @@ export async function handleStudioTicket(
     crm: new URL(request.url).origin,
     tenantToken: creds.token,
     ...(siteToken ? { siteToken } : {}),
-    ...(appBinding?.repo ? { repo: appBinding.repo } : {}),
+    ...(repo ? { repo } : {}),
     ...(crmToken ? { crmToken } : {}),
   });
   if (!result.ok) return json({ error: result.code, message: result.message }, result.status);

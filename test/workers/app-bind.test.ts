@@ -50,6 +50,11 @@ const setting = async (key: string): Promise<string | null> =>
   (await env.DB.prepare(`SELECT value FROM settings WHERE key = ?`).bind(key).first<{ value: string }>())
     ?.value ?? null;
 
+const repos = async (): Promise<{ repo: string; bound_at: string }[]> => {
+  const raw = await setting("app.repos");
+  return raw ? (JSON.parse(raw) as { repo: string; bound_at: string }[]) : [];
+};
+
 describe("鉴权", () => {
   it("没带凭据 ⇒ 401 app_access_invalid", async () => {
     const res = await bind({ repo: "acme/my-vpn" }, null);
@@ -71,7 +76,7 @@ describe("鉴权", () => {
 });
 
 describe("写入", () => {
-  it("合法请求 ⇒ 写 app.repo / app.bound_at（installation_id 只作展示）", async () => {
+  it("合法请求 ⇒ 加进列表（installation_id 只作展示）", async () => {
     const before = Date.now();
     const res = await bind({ repo: "acme/my-vpn", installation_id: 123456 });
     expect(res.status).toBe(200);
@@ -79,20 +84,24 @@ describe("写入", () => {
     expect(body.ok).toBe(true);
     expect(body.repo).toBe("acme/my-vpn");
 
-    expect(await setting("app.repo")).toBe("acme/my-vpn");
-    expect(await setting("app.installation_id")).toBe("123456");
-    const boundAt = Date.parse((await setting("app.bound_at")) ?? "");
+    const list = await repos();
+    expect(list.map((r) => r.repo)).toEqual(["acme/my-vpn"]);
+    const boundAt = Date.parse(list[0]!.bound_at);
     expect(boundAt).toBeGreaterThanOrEqual(before - 1000);
     expect(body.bound_at).toBe(new Date(boundAt).toISOString());
+    // installation id 只作展示（按仓库分开存）
+    expect(await setting("app.installation.acme/my-vpn")).toBe("123456");
   });
 
-  it("重复绑定 ⇒ 覆盖（不是追加，也不会留下两条）", async () => {
+  it("多间仓库 ⇒ 追加；重复绑定同一间 ⇒ 更新，不重复", async () => {
     await bind({ repo: "acme/my-vpn" });
     await bind({ repo: "acme/other-vpn" });
-    expect(await setting("app.repo")).toBe("acme/other-vpn");
-    const rows = await env.DB.prepare(`SELECT COUNT(*) AS n FROM settings WHERE key = 'app.repo'`)
-      .first<{ n: number }>();
-    expect(rows?.n).toBe(1);
+    expect((await repos()).map((r) => r.repo).sort()).toEqual(["acme/my-vpn", "acme/other-vpn"]);
+
+    await bind({ repo: "acme/my-vpn" });
+    const list = await repos();
+    expect(list).toHaveLength(2);
+    expect(list.filter((r) => r.repo === "acme/my-vpn")).toHaveLength(1);
   });
 
   it("repo 形状不对 ⇒ 400 且不落库", async () => {
@@ -102,7 +111,7 @@ describe("写入", () => {
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toBe("invalid_repo");
     }
-    expect(await setting("app.repo")).toBeNull();
+    expect(await setting("app.repos")).toBeNull();
   });
 
   it("GET ⇒ 405（只接受 POST）", async () => {
