@@ -84,6 +84,9 @@ const vars = {
   SITES_ROOT: process.env.SITES_ROOT ?? "",
   // 站点设计器入口：租户后台的「打开设计器」按钮靠它（缺了会 500 studio_not_configured）
   STUDIO_SITE_URL: process.env.STUDIO_SITE_URL ?? "",
+  // App 设计器入口：后台「应用」页的「打开」靠它（缺了同样 500 studio_not_configured，
+  // 但报错文案会指向 STUDIO_APP_URL）。两个 studio 各一条，别只带一个。
+  STUDIO_APP_URL: process.env.STUDIO_APP_URL ?? "",
   // 发信人：域名须已在本账号完成 Email Sending 验证（与 cf-api 用同一个）
   EMAIL_FROM: process.env.EMAIL_FROM ?? "noreply@clever-vpn.org",
   // AI 配置助手：走平台共用的 AI Gateway（site-studio 也用这个），厂商 key 在网关 BYOK。
