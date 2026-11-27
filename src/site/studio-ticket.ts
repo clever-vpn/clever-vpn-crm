@@ -21,6 +21,8 @@
  */
 
 import { issueSiteAccess } from "./access";
+import { issueAppAccess } from "../app/access";
+import { readAppBinding } from "../app/binding";
 import { platformCreds } from "../platform/creds";
 
 import type { Env } from "../env";
@@ -67,6 +69,16 @@ export async function requestStudioEntry(
      * 一处可能被记进日志的东西。
      */
     siteToken?: string;
+    /**
+     * app-studio 的**成果仓**（可能为空：第一次进来还没绑定）。
+     * 只是"成果放在哪"，不是身份声明。
+     */
+    repo?: string;
+    /**
+     * app-studio 回写 CRM 用的借据（`app-access`，只作用于 `/api/studio/app-bind`）。
+     * 与 `siteToken` 互斥，各给各的产品。
+     */
+    crmToken?: string;
     fetchImpl?: typeof fetch;
   },
 ): Promise<EntryResult> {
@@ -104,6 +116,8 @@ export async function requestStudioEntry(
         aud: input.aud,
         crm: input.crm.replace(/\/+$/, ""),
         ...(input.siteToken ? { site_token: input.siteToken } : {}),
+        ...(input.repo ? { repo: input.repo } : {}),
+        ...(input.crmToken ? { crm_token: input.crmToken } : {}),
       }),
       signal: AbortSignal.timeout(STUDIO_TIMEOUT_MS),
     });
@@ -214,11 +228,17 @@ export async function handleStudioTicket(
   // 而不必持有租户的全权 API token（见 `site/access.ts`）
   const siteToken = aud === "site-studio" ? await issueSiteAccess(env, tenantId) : null;
 
+  // app 侧：带上已绑定的仓库（可能还没绑）+ 一枚"只能写 app.repo"的借据
+  const appBinding = aud === "app-studio" ? await readAppBinding(env) : null;
+  const crmToken = aud === "app-studio" ? await issueAppAccess(env, tenantId) : null;
+
   const result = await requestStudioEntry(env, {
     aud,
     crm: new URL(request.url).origin,
     tenantToken: creds.token,
     ...(siteToken ? { siteToken } : {}),
+    ...(appBinding?.repo ? { repo: appBinding.repo } : {}),
+    ...(crmToken ? { crmToken } : {}),
   });
   if (!result.ok) return json({ error: result.code, message: result.message }, result.status);
 

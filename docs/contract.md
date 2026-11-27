@@ -19,6 +19,7 @@ Last updated: 2026-11-26
 |---|---|
 | 契约版本 | 终端 API 的版本 = 路径 `/api/app/v1`（只加不改）；`GET /__version` 只回 `crm_version`，不参与协商；`/meta.crm_id` 是实例 UUID（构建期门禁用） |
 | 客户端 | **终端客户端（App + Site）调同一批 `/api/app/v1`**；只用 `Authorization: Bearer`，不用 Cookie |
+| Studio 绑定（App） | `POST /api/studio/app-bind`：只认 `Authorization: Bearer aacc_…`（CRM 入场时签，14 天，标签 `app-access/v1`，只对这个端点有效），验签 + `aud` + **tenant 一致**后写 `settings.app.repo` / `app.bound_at`。契约：[`services/crm/app-studio.md`](https://github.com/clever-vpn/clever-vpn-docs/blob/main/docs/contracts/services/crm/app-studio.md) §3.2；身份基底 `studio-identity.md` §2.1.2 |
 | 终端接口 | `/api/app/v1/*`（✅ 登录/套餐/报价/下单/订阅/邀请/礼包/时间线已实现）；契约见 `clients`（`clients.md`），版本由路径承载 |
 | 用户视角视图 | **全部「CRM 出文案/形式、客户端只渲染」**：`GET /me/timeline`（`title`/`delta_text`/`tone`；`settle`/`hold` 不进）、`GET /orders`（`title`/`amount_text`/`status_text`/`tag`/`tag_tone`/`next_poll_after_ms`）、`GET /me/gifts`（`state`/`status_text`/`rewards_text`/`claimable`/`claim_action`/`empty_text`）、`POST /me/gifts/{id}/claim`（`ok`/`state`/`result_text`）、`GET /subscription`（`status`/`reason`/`status_text`/`tag`/`tag_tone`/`next_reset_at`/`code`） |
 | 站点 / 官网 | Site 与 App 共用同一批端点（Bearer + localStorage）；没有 `GET /support`，客服地址由 `app.json.links.support` 构建期固定 |

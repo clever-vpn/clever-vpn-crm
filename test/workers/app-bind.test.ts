@@ -1,0 +1,115 @@
+/**
+ * `POST /api/studio/app-bind` —— studio 绑定成功后把成果仓写回面板。
+ *
+ * 契约：`services/crm/app-studio.md` §3.2。这里钉住四条：
+ *
+ *   1. **只有 `aacc_…` 能进**（`sacc_` / 没带 / 别的租户的都不行）；
+ *   2. **只写两个键**（`app.repo` / `app.bound_at`），`installation_id` 只作展示；
+ *   3. **repo 必须先过形状**（`owner/name`），否则 400，不落库；
+ *   4. 重复绑定是覆盖（绑定回答"是哪一间"，不是"追加"）。
+ */
+
+import { exports as rawExports } from "cloudflare:workers";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { issueAppAccess } from "../../src/app/access";
+import { issueSiteAccess } from "../../src/site/access";
+import { env } from "./apply-migrations";
+
+const BASE = "https://crm.test/api/studio/app-bind";
+const TENANT = "42";
+const SECRET = "app-bind-test-secret-0123456789abcdef";
+
+const worker = rawExports as unknown as {
+  default: { fetch(request: Request): Promise<Response> };
+};
+
+const testEnv = env as unknown as Record<string, unknown>;
+beforeEach(() => {
+  testEnv.APP_SECRET = SECRET;
+  testEnv.CRM_TENANT_ID = TENANT;
+});
+
+const envOf = () => env as never;
+
+async function bind(
+  body: unknown,
+  token?: string | null,
+  tenant = TENANT,
+): Promise<Response> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (token !== null) {
+    headers.authorization = `Bearer ${token ?? (await issueAppAccess(envOf(), tenant))}`;
+  }
+  return worker.default.fetch(
+    new Request(BASE, { method: "POST", headers, body: JSON.stringify(body) }),
+  );
+}
+
+const setting = async (key: string): Promise<string | null> =>
+  (await env.DB.prepare(`SELECT value FROM settings WHERE key = ?`).bind(key).first<{ value: string }>())
+    ?.value ?? null;
+
+describe("鉴权", () => {
+  it("没带凭据 ⇒ 401 app_access_invalid", async () => {
+    const res = await bind({ repo: "acme/my-vpn" }, null);
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: string }).error).toBe("app_access_invalid");
+  });
+
+  it("site 的 sacc_ 不能用来写 app 绑定（标签隔离）", async () => {
+    const site = await issueSiteAccess(envOf(), TENANT);
+    const res = await bind({ repo: "acme/my-vpn" }, site!);
+    expect(res.status).toBe(401);
+  });
+
+  it("别的租户的 aacc_ ⇒ 401（租户必须与本次请求一致）", async () => {
+    const other = await issueAppAccess(envOf(), "43");
+    const res = await bind({ repo: "acme/my-vpn" }, other!);
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("写入", () => {
+  it("合法请求 ⇒ 写 app.repo / app.bound_at（installation_id 只作展示）", async () => {
+    const before = Date.now();
+    const res = await bind({ repo: "acme/my-vpn", installation_id: 123456 });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; repo: string; bound_at: string };
+    expect(body.ok).toBe(true);
+    expect(body.repo).toBe("acme/my-vpn");
+
+    expect(await setting("app.repo")).toBe("acme/my-vpn");
+    expect(await setting("app.installation_id")).toBe("123456");
+    const boundAt = Date.parse((await setting("app.bound_at")) ?? "");
+    expect(boundAt).toBeGreaterThanOrEqual(before - 1000);
+    expect(body.bound_at).toBe(new Date(boundAt).toISOString());
+  });
+
+  it("重复绑定 ⇒ 覆盖（不是追加，也不会留下两条）", async () => {
+    await bind({ repo: "acme/my-vpn" });
+    await bind({ repo: "acme/other-vpn" });
+    expect(await setting("app.repo")).toBe("acme/other-vpn");
+    const rows = await env.DB.prepare(`SELECT COUNT(*) AS n FROM settings WHERE key = 'app.repo'`)
+      .first<{ n: number }>();
+    expect(rows?.n).toBe(1);
+  });
+
+  it("repo 形状不对 ⇒ 400 且不落库", async () => {
+    await env.DB.prepare(`DELETE FROM settings WHERE key LIKE 'app.%'`).run();
+    for (const repo of ["", "not a repo", "owner/", "/name", "a/b/c", "owner/na me"]) {
+      const res = await bind({ repo });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("invalid_repo");
+    }
+    expect(await setting("app.repo")).toBeNull();
+  });
+
+  it("GET ⇒ 405（只接受 POST）", async () => {
+    const token = (await issueAppAccess(envOf(), TENANT))!;
+    const res = await worker.default.fetch(
+      new Request(BASE, { method: "GET", headers: { authorization: `Bearer ${token}` } }),
+    );
+    expect(res.status).toBe(405);
+  });
+});

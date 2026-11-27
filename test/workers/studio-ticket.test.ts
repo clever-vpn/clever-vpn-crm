@@ -137,6 +137,34 @@ describe("出示给 studio 的东西", () => {
     expect(body.site_token).toBeUndefined();
   });
 
+  it("app-studio 带 crm_token（aacc_，只用于写回绑定）", async () => {
+    await seedToken();
+    const { impl, calls } = studioFetch({ url: `${APP}/#t=tkt_x`, expires_at: null, tenant: "42" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(impl);
+
+    await handleStudioTicket(requestOf({ aud: "app-studio" }), envOf(), "42", { user_id: 1 }, true);
+    const body = JSON.parse(String(calls[0]!.init.body)) as Record<string, unknown>;
+    expect(String(body.crm_token)).toMatch(/^aacc_/);
+    expect(body.repo).toBeUndefined(); // 还没绑定
+  });
+
+  it("app-studio 已绑定时把 app.repo 一起带上（studio 不用反查 CRM）", async () => {
+    await seedToken();
+    await env.DB.prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES ('app.repo', 'acme/my-vpn', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+      .bind(new Date().toISOString())
+      .run();
+    const { impl, calls } = studioFetch({ url: `${APP}/#t=tkt_x`, expires_at: null, tenant: "42" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(impl);
+
+    await handleStudioTicket(requestOf({ aud: "app-studio" }), envOf(), "42", { user_id: 1 }, true);
+    const body = JSON.parse(String(calls[0]!.init.body)) as Record<string, unknown>;
+    expect(body.repo).toBe("acme/my-vpn");
+    expect(String(body.crm_token)).toMatch(/^aacc_/);
+  });
+
   it("回给前端的是 studio 给的 URL + 本次解析出的 tenant（客户端塞的不算数）", async () => {
     await seedToken();
     vi.spyOn(globalThis, "fetch").mockImplementation(studioFetch(okBody()).impl);
