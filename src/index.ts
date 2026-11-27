@@ -21,6 +21,7 @@ import { handleAppApi } from "./app/router";
 import { handleAdminApi, readAdminSession } from "./admin/router";
 import { handlePayRoutes } from "./payments/routes";
 import { verifySiteAccess } from "./site/access";
+import { handleAppBind } from "./app/binding";
 import { siteMeta } from "./site/meta";
 import { buildScope, readSiteSettings, saveSiteSettings } from "./site/settings";
 import { siteSourceOf } from "./site/template-source";
@@ -208,6 +209,16 @@ export default {
           request.headers.get("x-crm-request") === "1",
         );
       }
+      /**
+       * studio 绑定成功后回写成果仓（`app.repo`）。
+       *
+       * 凭据是入场时 CRM 签的 `aacc_…`（只在这个端点被接受，14 天，见 `app/access.ts`）
+       * —— 不是租户的全权 API token，也不是可复用的通用凭据。
+       */
+      if (url.pathname === "/api/studio/app-bind") {
+        return handleAppBind(request, env, scoped.tenantId);
+      }
+
       /**
        * studio 用：读**这个租户的**站点设置 + 渲染作用域（预览直接用它）。
        *

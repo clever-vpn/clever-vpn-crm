@@ -385,6 +385,22 @@ export const api = {
   studioTicket: () =>
     call<{ url: string }>("POST", "/api/studio/ticket", { aud: "site-studio" }, true),
   /**
+   * 打开 App 设计器。
+   *
+   * `repo` 指定"用哪一间仓库"；**不传 = 连接新的仓库**（studio 会显示绑定引导）。
+   * 只有已绑定的仓库能被指名（后端会核对列表，见 `app/binding.ts`）。
+   */
+  studioTicketApp: (repo?: string) =>
+    call<{ url: string }>(
+      "POST",
+      "/api/studio/ticket",
+      { aud: "app-studio", ...(repo ? { repo } : {}) },
+      true,
+    ),
+  /** App 设计器入口页要的仓库列表（只读；绑定与开设计器都不在这里） */
+  appRepos: () =>
+    call<{ repos: { repo: string; bound_at: string; last_used_at: string | null }[] }>("GET", "/app"),
+  /**
    * 数据契约（字段清单 / 配色建议 / 体积上限）。
    *
    * **不在 `/api/admin` 下**：它是公开端点，不带租户数据，所以走 `absolute`。

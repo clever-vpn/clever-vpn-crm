@@ -21,6 +21,7 @@ import {
   InboxOutlined,
   MenuOutlined,
   GlobalOutlined,
+  AppstoreAddOutlined,
   LinkOutlined,
   SettingOutlined,
   TeamOutlined,
@@ -39,6 +40,7 @@ import Plans from "./Plans";
 import Promotions from "./Promotions";
 import Settings from "./Settings";
 import Site from "./Site";
+import AppPage from "./App";
 import Stores from "./Stores";
 
 interface NavLeaf {
@@ -69,6 +71,7 @@ const NAV: NavItem[] = [
   { key: "/orders", href: "/orders", label: "订单", icon: <FileTextOutlined /> },
   { key: "/plans", href: "/plans", label: "套餐", icon: <AppstoreOutlined /> },
   { key: "/site", href: "/site", label: "网站", icon: <GlobalOutlined /> },
+  { key: "/app", href: "/app", label: "应用", icon: <AppstoreAddOutlined /> },
   { key: "/domains", href: "/domains", label: "域名", icon: <LinkOutlined /> },
   {
     key: "/payments",
@@ -212,6 +215,8 @@ export default function Shell({
       <Plans />
     ) : path === "/site" ? (
       <Site />
+    ) : path === "/app" ? (
+      <AppPage />
     ) : path === "/domains" ? (
       <Domains />
     ) : path === GATEWAY_LIST_PATH ? (

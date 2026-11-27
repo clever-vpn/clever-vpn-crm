@@ -21,6 +21,8 @@
  */
 
 import { issueSiteAccess } from "./access";
+import { issueAppAccess } from "../app/access";
+import { isAppRepoBound, markAppRepoUsed } from "../app/binding";
 import { platformCreds } from "../platform/creds";
 
 import type { Env } from "../env";
@@ -67,6 +69,16 @@ export async function requestStudioEntry(
      * 一处可能被记进日志的东西。
      */
     siteToken?: string;
+    /**
+     * app-studio 的**成果仓**（可能为空：第一次进来还没绑定）。
+     * 只是"成果放在哪"，不是身份声明。
+     */
+    repo?: string;
+    /**
+     * app-studio 回写 CRM 用的借据（`app-access`，只作用于 `/api/studio/app-bind`）。
+     * 与 `siteToken` 互斥，各给各的产品。
+     */
+    crmToken?: string;
     fetchImpl?: typeof fetch;
   },
 ): Promise<EntryResult> {
@@ -104,6 +116,8 @@ export async function requestStudioEntry(
         aud: input.aud,
         crm: input.crm.replace(/\/+$/, ""),
         ...(input.siteToken ? { site_token: input.siteToken } : {}),
+        ...(input.repo ? { repo: input.repo } : {}),
+        ...(input.crmToken ? { crm_token: input.crmToken } : {}),
       }),
       signal: AbortSignal.timeout(STUDIO_TIMEOUT_MS),
     });
@@ -184,16 +198,38 @@ export async function handleStudioTicket(
   if (!csrfOk) return json({ error: "csrf_rejected" }, 403);
   if (!session) return json({ error: "unauthorized" }, 401);
 
-  let aud: unknown;
+  let payload: { aud?: unknown; repo?: unknown };
   try {
-    aud = ((await request.json()) as { aud?: unknown })?.aud;
+    payload = (await request.json()) as typeof payload;
   } catch {
     return json(
       { error: "studio_aud_unknown", message: 'body 必须是 JSON：{"aud":"site-studio"}' },
       400,
     );
   }
+  const aud = payload?.aud;
   if (!isAud(aud)) return json({ error: "studio_aud_unknown" }, 400);
+
+  /**
+   * app 侧：用**哪一间仓库**打开设计器。
+   *
+   * 不带 = "连接新的仓库"（studio 引导绑定）；带了必须是已绑定的那一间 ——
+   * 否则面板就能让人用任意 repo 字样去开设计器，列表也就失去意义了。
+   */
+  let repo = "";
+  if (aud === "app-studio") {
+    const wanted = String(payload?.repo ?? "").trim();
+    if (wanted) {
+      if (!(await isAppRepoBound(env, wanted))) {
+        return json(
+          { error: "app_repo_unbound", message: `这间仓库还没绑定：${wanted}` },
+          409,
+        );
+      }
+      repo = wanted;
+      await markAppRepoUsed(env, repo);
+    }
+  }
 
   // 租户自己的 cf-api 凭据：本流程**唯一**的凭据，只在内存里过一遍
   const creds = await platformCreds(env);
@@ -214,11 +250,16 @@ export async function handleStudioTicket(
   // 而不必持有租户的全权 API token（见 `site/access.ts`）
   const siteToken = aud === "site-studio" ? await issueSiteAccess(env, tenantId) : null;
 
+  // app 侧：带上一枚"只能写 app-bind"的借据（repo 已在上面的校验里确定）
+  const crmToken = aud === "app-studio" ? await issueAppAccess(env, tenantId) : null;
+
   const result = await requestStudioEntry(env, {
     aud,
     crm: new URL(request.url).origin,
     tenantToken: creds.token,
     ...(siteToken ? { siteToken } : {}),
+    ...(repo ? { repo } : {}),
+    ...(crmToken ? { crmToken } : {}),
   });
   if (!result.ok) return json({ error: result.code, message: result.message }, result.status);
 
