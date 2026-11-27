@@ -21,6 +21,7 @@ import {
   Card,
   Empty,
   List,
+  Popconfirm,
   Space,
   Typography,
   message,
@@ -92,6 +93,20 @@ export default function AppPage() {
 
   const empty = repos !== null && repos.length === 0;
 
+  /** 只从面板移除：GitHub 项目与设计器草稿都不动（契约里写死了这条） */
+  async function remove(repo: string) {
+    setBusy(`remove:${repo}`);
+    try {
+      await api.removeApp(repo);
+      message.success("已从列表移除");
+      await load();
+    } catch (e) {
+      message.error(e instanceof ApiError ? e.message : "移除失败");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Card title="应用">
@@ -139,6 +154,24 @@ export default function AppPage() {
                         >
                           打开
                         </Button>,
+                        <Popconfirm
+                          key="remove"
+                          title={`从面板移除「${name}」？`}
+                          description={
+                            <span>
+                              设计器里未发布的改动会保留；GitHub 上的项目不会被删除。
+                              之后可以随时重新连接。
+                            </span>
+                          }
+                          okText="移除"
+                          okButtonProps={{ danger: true }}
+                          cancelText="取消"
+                          onConfirm={() => remove(item.repo)}
+                        >
+                          <Button danger type="text" loading={busy === `remove:${item.repo}`}>
+                            移除
+                          </Button>
+                        </Popconfirm>,
                       ]}
                     >
                       <List.Item.Meta
