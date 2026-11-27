@@ -401,6 +401,12 @@ export const api = {
   appRepos: () =>
     call<{ repos: { repo: string; bound_at: string; last_used_at: string | null }[] }>("GET", "/app"),
   /**
+   * 只从面板移除这一条（**不删 GitHub 项目、不删设计器草稿**）。
+   * 移除后随时可以重新连接。
+   */
+  removeApp: (repo: string) =>
+    call<{ ok: true; repo: string }>("DELETE", `/app?repo=${encodeURIComponent(repo)}`),
+  /**
    * 数据契约（字段清单 / 配色建议 / 体积上限）。
    *
    * **不在 `/api/admin` 下**：它是公开端点，不带租户数据，所以走 `absolute`。
